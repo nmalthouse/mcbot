@@ -1,3 +1,26 @@
+const std = @import("std");
+const builtin = std.builtin;
+
+pub fn genEnum(comptime id_strings: []const []const u8) type {
+    var enum_fields: [id_strings.len]builtin.Type.EnumField = undefined;
+
+    for (id_strings) |str, i| {
+        enum_fields[i] = .{ .name = str, .value = i };
+    }
+
+    return @Type(builtin.Type{
+        .Enum = .{
+            .layout = .Auto,
+            .tag_type = usize,
+            .fields = &enum_fields,
+            .is_exhaustive = true,
+            .decls = &.{},
+        },
+    });
+}
+
+pub const packet_enum = genEnum(packet_ids[0..]);
+
 pub const packet_ids = [_][]const u8{
     "Spawn_Entity",
     "Spawn_Experience_Orb",
@@ -106,4 +129,58 @@ pub const packet_ids = [_][]const u8{
     "Entity_Effect",
     "Update_Recipes",
     "Update_Tags",
+};
+
+pub const ServerBoundPlayIds = [_][]const u8{
+    "Confirm_Teleportation",
+    "Query_Block_Entity_Tag",
+    "Change_Difficulty_2",
+    "Message_Acknowledgment",
+    "Chat_Command",
+    "Chat_Message",
+    "Client_Command",
+    "Client_Information",
+    "Command_Suggestions_Request",
+    "Click_Container_Button",
+    "Click_Container",
+    "Close_Container_2",
+    "Plugin_Message_2",
+    "Edit_Book",
+    "Query_Entity_Tag",
+    "Interact",
+    "Jigsaw_Generate",
+    "Keep_Alive_2",
+    "Lock_Difficulty",
+    "Set_Player_Position",
+    "Set_Player_Position_and_Rotation",
+    "Set_Player_Rotation",
+    "Set_Player_On_Ground",
+    "Move_Vehicle_2",
+    "Paddle_Boat",
+    "Pick_Item",
+    "Place_Recipe",
+    "Player_Abilities_2",
+    "Player_Action",
+    "Player_Command",
+    "Player_Input",
+    "Pong",
+    "Player_Session",
+    "Change_Recipe_Book_Settings",
+    "Set_Seen_Recipe",
+    "Rename_Item",
+    "Resource_Pack_2",
+    "Seen_Advancements",
+    "Select_Trade",
+    "Set_Beacon_Effect",
+    "Set_Held_Item_2",
+    "Program_Command_Block",
+    "Program_Command_Block_Minecart",
+    "Set_Creative_Mode_Slot",
+    "Program_Jigsaw_Block",
+    "Program_Structure_Block",
+    "Update_Sign",
+    "Swing_Arm",
+    "Teleport_To_Entity",
+    "Use_Item_On",
+    "Use_Item",
 };

@@ -47,6 +47,21 @@ pub const Packet = struct {
         _ = try wr.write(str);
     }
 
+    pub fn float(self: *Self, f: f32) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(u32, @bitCast(u32, f), .Big);
+    }
+
+    pub fn ubyte(self: *Self, b: u8) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(u8, b, .Big);
+    }
+
+    pub fn double(self: *Self, f: f64) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(u64, @bitCast(u64, f), .Big);
+    }
+
     pub fn short(self: *Self, val: u16) !void {
         const wr = self.buffer.writer();
         _ = try wr.writeInt(u16, val, .Big);
@@ -129,7 +144,7 @@ pub fn toVarInt(input: i32) VarInt {
 
 const reader_type = std.net.Stream.Reader;
 
-pub fn readVarInt(reader: reader_type) i32 {
+pub fn readVarInt(reader: anytype) i32 {
     const CONT: u32 = 0x80;
     const SEG: u32 = 0x7f;
 
@@ -252,6 +267,12 @@ pub const ParsedPacket = struct {
     id: i32,
     len: i32,
     buffer: std.ArrayList(u8),
+    msg_type: MsgType = .server,
+
+    pub const MsgType = enum {
+        server,
+        local,
+    };
 
     pub fn init(alloc: std.mem.Allocator) Self {
         return Self{ .buffer = std.ArrayList(u8).init(alloc), .id = 0, .len = 0 };
@@ -263,6 +284,28 @@ pub const ParsedPacket = struct {
 };
 
 pub const PacketQueueType = Queue(ParsedPacket);
+
+pub fn cmdThread(
+    alloc: std.mem.Allocator,
+    queue: *PacketQueueType,
+    q_cond: *std.Thread.Condition,
+) void {
+    const stdin = std.io.getStdIn();
+    const reader = stdin.reader();
+    var buf: [512]u8 = undefined;
+
+    while (true) {
+        const len = reader.read(&buf) catch unreachable;
+        const read = buf[0..len];
+        const node = alloc.create(PacketQueueType.Node) catch unreachable;
+        var msg = std.ArrayList(u8).init(alloc);
+        msg.appendSlice(read) catch unreachable;
+
+        node.* = .{ .prev = null, .next = null, .data = .{ .id = 0, .len = 0, .buffer = msg, .msg_type = .local } };
+        queue.put(node);
+        q_cond.signal();
+    }
+}
 
 pub const ServerListener = struct {
     pub const PacketStateUncompressed = enum {
@@ -312,4 +355,50 @@ pub const ServerListener = struct {
             }
         }
     }
+};
+
+pub const Chunk = [16]ChunkSection;
+pub const ChunkMapCoord = std.AutoHashMap(i32, Chunk);
+pub const ChunkMap = struct {
+    const Self = @This();
+
+    pub const XTYPE = std.AutoHashMap(i32, ChunkMapCoord);
+    pub const YTYPE = ChunkMapCoord;
+
+    x: XTYPE,
+
+    pub fn init(alloc: std.mem.Allocator) Self {
+        return .{ .x = XTYPE.init(alloc) };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.x.deinit();
+    }
+};
+
+pub const BLOCK_ID_INT = u16;
+pub const ChunkSection = struct {
+    const Self = @This();
+    mapping: std.ArrayList(BLOCK_ID_INT),
+    data: std.ArrayList(u64),
+
+    pub fn init(alloc: std.mem.Allocator) Self {
+        return .{ .mapping = std.ArrayList(BLOCK_ID_INT).init(alloc), .data = std.ArrayList(u64).init(alloc) };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.mapping.deinit();
+        self.data.deinit();
+    }
+};
+
+pub const BlockIdJson = struct {
+    name: []u8,
+    ids: []u16,
+};
+
+pub const PacketAnalysisJson = struct {
+    bound_to: []u8,
+    data: []u8,
+    timestamp: f32,
 };
