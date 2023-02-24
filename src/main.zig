@@ -5,11 +5,6 @@ const id_list = @import("list.zig");
 
 const nbt_zig = @import("nbt.zig");
 
-const c = @cImport({
-    @cInclude("libnbt/libnbt.h");
-    @cInclude("libnbt/nbt_utils.h");
-});
-
 pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: type) !T {
     const cwd = std.fs.cwd();
     const f = cwd.openFile(filename, .{}) catch null;
@@ -115,28 +110,30 @@ pub fn main() !void {
     var py: ?f64 = null;
     var pz: ?f64 = null;
 
-    var dx: f64 = 0;
-    var delt: f64 = 0.2;
+    //var dx: f64 = 0;
+    //var delt: f64 = 0.2;
+
+    var complete_login = false;
 
     while (true) {
         if (px != null and py != null and pz != null) {
-            dx += delt;
-            px.? += delt;
-            if (dx > 4) {
-                delt = -0.1;
-            }
-            if (dx < -4) {
-                delt = 0.1;
-            }
-            try packet.clear();
-            try packet.varInt(0x14);
-            try packet.double(px.?);
-            try packet.double(py.?);
-            try packet.double(pz.?);
-            try packet.float(@floatCast(f32, dx) * 90);
-            try packet.float(@floatCast(f32, dx) * 20);
-            try packet.boolean(true);
-            _ = try server.write(packet.getWritableBuffer());
+            //dx += delt;
+            //px.? += delt;
+            //if (dx > 4) {
+            //    delt = -0.1;
+            //}
+            //if (dx < -4) {
+            //    delt = 0.1;
+            //}
+            //try packet.clear();
+            //try packet.varInt(0x14);
+            //try packet.double(px.?);
+            //try packet.double(py.?);
+            //try packet.double(pz.?);
+            //try packet.float(@floatCast(f32, dx) * 90);
+            //try packet.float(@floatCast(f32, dx) * 20);
+            //try packet.boolean(true);
+            //_ = try server.write(packet.getWritableBuffer());
         }
         std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
         //q_cond.wait(&q_mutex);
@@ -144,6 +141,8 @@ pub fn main() !void {
             //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, item.data.id)]});
             switch (item.data.msg_type) {
                 .server => {
+                    var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
+                    const reader = fbs.reader();
                     switch (@intToEnum(id_list.packet_enum, item.data.id)) {
                         .Keep_Alive => {
                             try packet.clear();
@@ -154,16 +153,48 @@ pub fn main() !void {
                         },
                         .Login => {
                             std.debug.print("Login\n", .{});
-                            var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
-                            const reader = fbs.reader();
                             const p_id = try reader.readInt(u32, .Big);
                             std.debug.print("\tid: {d}\n", .{p_id});
                             player_id = p_id;
                             start_rot = true;
                         },
+                        .Plugin_Message => {
+                            const ident_len = mc.readVarInt(reader);
+                            var identifier = std.ArrayList(u8).init(alloc);
+                            defer identifier.deinit();
+
+                            var i: u32 = 0;
+                            while (i < ident_len) : (i += 1) {
+                                try identifier.append(try reader.readByte());
+                            }
+                            std.debug.print("Plugin Message: {s}\n", .{identifier.items});
+
+                            try packet.clear();
+                            try packet.varInt(0x0C);
+                            try packet.string("tony:brand");
+                            _ = try server.write(packet.getWritableBuffer());
+
+                            try packet.clear();
+                            try packet.varInt(0x07); //client info packet
+                            try packet.string("en_US");
+                            try packet.ubyte(2); //Render dist
+                            try packet.varInt(0); //Chat mode, enabled
+                            try packet.boolean(true);
+                            try packet.ubyte(0); // what parts are shown of skin
+                            try packet.varInt(1); //Dominant Hand
+                            try packet.boolean(false);
+                            try packet.boolean(true);
+                            _ = try server.write(packet.getWritableBuffer());
+                        },
+                        .Change_Difficulty => {
+                            const diff = try reader.readByte();
+                            const locked = try reader.readByte();
+                            std.debug.print("Set difficulty: {d} ,Locked: {d}\n", .{ diff, locked });
+                        },
+                        .Player_Abilities => {
+                            std.debug.print("Player Abilities\n", .{});
+                        },
                         .Spawn_Entity => {
-                            var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
-                            const reader = fbs.reader();
                             const ent_id = mc.readVarInt(reader);
                             const uuid = try reader.readInt(u128, .Big);
 
@@ -174,8 +205,6 @@ pub fn main() !void {
                             std.debug.print("Ent id: {d}, {x}, {d}\n\tx: {d}, y: {d} z: {d}\n", .{ ent_id, uuid, type_id, x, y, z });
                         },
                         .Synchronize_Player_Position => {
-                            var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
-                            const reader = fbs.reader();
                             const x = @bitCast(f64, try reader.readInt(u64, .Big));
                             const y = @bitCast(f64, try reader.readInt(u64, .Big));
                             const z = @bitCast(f64, try reader.readInt(u64, .Big));
@@ -197,11 +226,17 @@ pub fn main() !void {
                             try packet.varInt(0);
                             try packet.varInt(tel_id);
                             _ = try server.write(packet.getWritableBuffer());
+
+                            if (complete_login == false) {
+                                complete_login = true;
+                                try packet.clear();
+                                try packet.varInt(0x06);
+                                try packet.varInt(0);
+                                _ = try server.write(packet.getWritableBuffer());
+                            }
                         },
 
                         .Update_Entity_Position, .Update_Entity_Position_and_Rotation, .Update_Entity_Rotation => {
-                            var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
-                            const reader = fbs.reader();
                             const ent_id = mc.readVarInt(reader);
                             if (player_id) |pid| {
                                 if (ent_id == pid) {
@@ -211,8 +246,6 @@ pub fn main() !void {
                         },
 
                         .Chunk_Data_and_Update_Light => {
-                            var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
-                            const reader = fbs.reader();
                             const cx = try reader.readInt(i32, .Big);
                             const cy = try reader.readInt(i32, .Big);
 
@@ -237,36 +270,31 @@ pub fn main() !void {
                                 defer chunk[chunk_i] = chunk_section;
 
                                 { //BLOCK STATES palated container
-                                    //TODO handle other number of bits aswell not just 4
                                     const bp_entry = try cr.readInt(u8, .Big);
-                                    switch (bp_entry) {
-                                        4 => {
-                                            const num_pal_entry = mc.readVarInt(cr);
+                                    {
+                                        const num_pal_entry = mc.readVarInt(cr);
+                                        chunk_section.bits_per_entry = bp_entry;
 
-                                            var i: u32 = 0;
-                                            while (i < num_pal_entry) : (i += 1) {
-                                                const mapping = mc.readVarInt(cr);
-                                                try chunk_section.mapping.append(@intCast(mc.BLOCK_ID_INT, mapping));
-                                            }
+                                        var i: u32 = 0;
+                                        while (i < num_pal_entry) : (i += 1) {
+                                            const mapping = mc.readVarInt(cr);
+                                            try chunk_section.mapping.append(@intCast(mc.BLOCK_ID_INT, mapping));
+                                        }
 
-                                            const num_longs = mc.readVarInt(cr);
-                                            var j: u32 = 0;
+                                        const num_longs = mc.readVarInt(cr);
+                                        var j: u32 = 0;
 
-                                            while (j < num_longs) : (j += 1) {
-                                                const d = try cr.readInt(u64, .Big);
-                                                try chunk_section.data.append(d);
-                                            }
-                                        },
-                                        else => {
-                                            std.debug.print("NUMBER OF BITS NOT SUPPORTED YET\n", .{});
-                                        },
+                                        while (j < num_longs) : (j += 1) {
+                                            const d = try cr.readInt(u64, .Big);
+                                            try chunk_section.data.append(d);
+                                        }
                                     }
                                 }
                             }
 
                             const ymap = try world.x.getOrPut(cx);
                             if (!ymap.found_existing) {
-                                ymap.value_ptr.* = mc.ChunkMap.YTYPE.init(alloc);
+                                ymap.value_ptr.* = mc.ChunkMap.ZTYPE.init(alloc);
                             }
 
                             const chunk_entry = try ymap.value_ptr.getOrPut(cy);
@@ -276,10 +304,9 @@ pub fn main() !void {
                                 }
                             }
                             chunk_entry.value_ptr.* = chunk;
-                            //ymap.value_ptr.put(chunk);
 
                             const num_block_ent = mc.readVarInt(reader);
-                            std.debug.print("{d} CHUNK {d} {d}, bec: {d}\n", .{ item.data.len, cx, cy, num_block_ent });
+                            _ = num_block_ent;
                         },
                         else => {},
                     }
@@ -288,15 +315,30 @@ pub fn main() !void {
                 .local => {
                     if (std.mem.eql(u8, "move", item.data.buffer.items[0 .. item.data.buffer.items.len - 1])) {
                         if (start_rot and px != null and py != null and pz != null) {
-                            std.debug.print("Moving {d} {d} {d}\n", .{ px.?, py.?, pz.? });
-                            py.? -= 1;
-                            try packet.clear();
-                            try packet.varInt(0x13);
-                            try packet.double(px.?);
-                            try packet.double(py.?);
-                            try packet.double(pz.?);
-                            try packet.boolean(true);
-                            _ = try server.write(packet.getWritableBuffer());
+                            std.debug.print("Dump the chunk!\n", .{});
+                            {
+                                var yy: f64 = 0;
+                                while (yy < 5) : (yy += 1) {
+                                    const block_id = world.getBlockFloat(px.?, py.? - yy, pz.?);
+                                    //const block_id = world.getBlock(0, 120, 0);
+                                    std.debug.print("bLOCK ID {d}\n", .{block_id});
+                                }
+                                var ix: i32 = 0;
+                                var iy: i32 = 0;
+                                var iz: i32 = 0;
+                                while (iy < 16) : (iy += 1) {
+                                    while (iz < 16) : (iz += 1) {
+                                        while (ix < 16) : (ix += 1) {
+                                            const bl = world.getBlock(ix, iy - 64, iz);
+                                            std.debug.print("{d}\t", .{bl});
+                                        }
+                                        ix = 0;
+                                        std.debug.print("\n", .{});
+                                    }
+                                    iz = 0;
+                                    std.debug.print("---------\n", .{});
+                                }
+                            }
                         }
                     }
                     item.data.buffer.deinit();

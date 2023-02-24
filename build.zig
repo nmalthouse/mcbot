@@ -18,12 +18,12 @@ pub fn build(b: *std.build.Builder) void {
     exe.linkLibC();
     exe.addIncludePath("lib");
 
-    exe.addCSourceFiles(&.{
-        "lib/libnbt/nbt_build.c",
-        "lib/libnbt/nbt_find.c",
-        "lib/libnbt/nbt_tok.c",
-        "lib/libnbt/nbt_utils.c",
-    }, &.{"-Wall"});
+    //exe.addCSourceFiles(&.{
+    //    "lib/libnbt/nbt_build.c",
+    //    "lib/libnbt/nbt_find.c",
+    //    "lib/libnbt/nbt_tok.c",
+    //    "lib/libnbt/nbt_utils.c",
+    //}, &.{"-Wall"});
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());

@@ -57,6 +57,11 @@ pub const Packet = struct {
         _ = try wr.writeInt(u8, b, .Big);
     }
 
+    pub fn long(self: *Self, l: i64) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(i64, l, .Big);
+    }
+
     pub fn double(self: *Self, f: f64) !void {
         const wr = self.buffer.writer();
         _ = try wr.writeInt(u64, @bitCast(u64, f), .Big);
@@ -363,12 +368,61 @@ pub const ChunkMap = struct {
     const Self = @This();
 
     pub const XTYPE = std.AutoHashMap(i32, ChunkMapCoord);
-    pub const YTYPE = ChunkMapCoord;
+    pub const ZTYPE = ChunkMapCoord;
 
     x: XTYPE,
 
     pub fn init(alloc: std.mem.Allocator) Self {
         return .{ .x = XTYPE.init(alloc) };
+    }
+
+    pub fn getBlockFloat(self: *Self, x: f64, y: f64, z: f64) BLOCK_ID_INT {
+        return self.getBlock(
+            @floatToInt(i32, x),
+            @floatToInt(i32, y),
+            @floatToInt(i32, z),
+        );
+    }
+
+    pub fn getBlock(self: *Self, x: i32, y: i32, z: i32) BLOCK_ID_INT {
+        const cx = @divTrunc(x, 16);
+        const cz = @divTrunc(z, 16);
+        const cy = @divTrunc(y + 64, 16);
+
+        const rx = @rem(x, 16);
+        const rz = @rem(z, 16);
+        const ry = @rem(y + 64, 16);
+
+        //std.debug.print("Provide pos : {d}\t{d}\t{d}\n", .{ x, y, z });
+        //std.debug.print("chunk pos :   {d}\t{d}\t{d}\n", .{ cx, cy, cz });
+
+        const world_z = self.x.getPtr(cx) orelse unreachable;
+        const column = world_z.getPtr(cz) orelse unreachable;
+        const section = column[@intCast(u32, cy)];
+        switch (section.bits_per_entry) {
+            0 => {
+                return section.mapping.items[0];
+            },
+            1...3 => unreachable,
+            else => {
+                //TODO Ensure this function works for all possible bpe's
+                //TODO Verify our indexing scheme is correct, is the data actually packed x, z, y
+                //Need a mc client to build a chunk that we can query
+                const block_index = rx + (rz * 16) + (ry * 256);
+                const blocks_per_long = @divTrunc(64, section.bits_per_entry);
+                const data_index = @intCast(u32, @divTrunc(block_index, blocks_per_long));
+                const shift_index = @rem(block_index, blocks_per_long);
+                const mapping = (section.data.items[data_index] >> @intCast(u6, (shift_index * section.bits_per_entry))) & section.getBitMask();
+                switch (section.bits_per_entry) {
+                    4...8 => { //Indirect mapping
+                        return section.mapping.items[mapping];
+                    },
+                    else => { //Direct mapping for >= 9 bits_per_entry
+                        return @intCast(BLOCK_ID_INT, mapping);
+                    },
+                }
+            },
+        }
     }
 
     pub fn deinit(self: *Self) void {
@@ -379,11 +433,28 @@ pub const ChunkMap = struct {
 pub const BLOCK_ID_INT = u16;
 pub const ChunkSection = struct {
     const Self = @This();
+
     mapping: std.ArrayList(BLOCK_ID_INT),
     data: std.ArrayList(u64),
+    bits_per_entry: u8,
 
     pub fn init(alloc: std.mem.Allocator) Self {
-        return .{ .mapping = std.ArrayList(BLOCK_ID_INT).init(alloc), .data = std.ArrayList(u64).init(alloc) };
+        return .{ .mapping = std.ArrayList(BLOCK_ID_INT).init(alloc), .data = std.ArrayList(u64).init(alloc), .bits_per_entry = 0 };
+    }
+
+    //pub fn dumpSection(self: *Self)void {
+    //    for(data)
+    //}
+
+    pub fn getBitMask(self: *const Self) u64 {
+        if (self.bits_per_entry < 4 or self.bits_per_entry == 0 or self.bits_per_entry > 8) unreachable;
+        //return @as(u64, 0x1) <<| (self.bits_per_entry - 1);
+        return (~@as(u64, 0x0)) >> @intCast(u6, 64 - self.bits_per_entry);
+
+        //From wiki.vg/chunk_format:
+        //For block states with bits per entry <= 4, 4 bits are used to represent a block.
+        //For block states and bits per entry between 5 and 8, the given value is used.
+        //For biomes the given value is always used, and will be <= 3
     }
 
     pub fn deinit(self: *Self) void {
