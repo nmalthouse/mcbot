@@ -5,12 +5,14 @@ const id_list = @import("list.zig");
 
 const nbt_zig = @import("nbt.zig");
 const astar = @import("astar.zig");
+const Bot = @import("bot.zig").Bot;
 
 const math = std.math;
 
-const c = @cImport({
-    @cInclude("raylib.h");
-});
+const vector = @import("vector.zig");
+const V3f = vector.V3f;
+
+const c = @import("c.zig").c;
 
 pub const V2i = struct {
     x: i32,
@@ -28,14 +30,6 @@ const ADJ = [8]V2i{
     .{ .x = -1, .y = -1 },
     .{ .x = -1, .y = 0 },
 };
-//
-//corner indices:
-//0 2 4 6
-//
-//
-//
-//
-//
 
 const ADJ_COST = [8]u32{
     14,
@@ -46,78 +40,6 @@ const ADJ_COST = [8]u32{
     10,
     14,
     10,
-};
-
-pub const V3f = struct {
-    x: f64,
-    y: f64,
-    z: f64,
-
-    pub fn new(x_: f64, y_: f64, z_: f64) @This() {
-        return .{ .x = x_, .y = y_, .z = z_ };
-    }
-
-    pub fn newi(x_: i64, y_: i64, z_: i64) @This() {
-        return .{
-            .x = @intToFloat(f64, x_),
-            .y = @intToFloat(f64, y_),
-            .z = @intToFloat(f64, z_),
-        };
-    }
-
-    pub fn toRay(a: @This()) c.Vector3 {
-        return .{
-            .x = @floatCast(f32, a.x),
-            .y = @floatCast(f32, a.y),
-            .z = @floatCast(f32, a.z),
-        };
-    }
-
-    pub fn magnitude(s: @This()) f64 {
-        return math.sqrt(math.pow(f64, s.x, 2) +
-            math.pow(f64, s.y, 2) +
-            math.pow(f64, s.z, 2));
-    }
-
-    pub fn eql(a: @This(), b: @This()) bool {
-        return a.x == b.x and a.y == b.y and a.z == b.z;
-    }
-
-    pub fn smul(s: @This(), scalar: f64) @This() {
-        var r = s;
-        r.x *= scalar;
-        r.y *= scalar;
-        r.z *= scalar;
-        return r;
-    }
-
-    pub fn negate(s: @This()) @This() {
-        return s.smul(-1);
-    }
-
-    pub fn subtract(a: @This(), b: @This()) @This() {
-        return a.add(b.negate());
-    }
-
-    pub fn add(a: @This(), b: @This()) @This() {
-        return .{ .x = a.x + b.x, .y = a.y + b.y, .z = a.z + b.z };
-    }
-
-    pub fn getUnitVec(v: @This()) @This() {
-        return v.smul(1.0 / v.magnitude());
-    }
-
-    pub fn dot(v1: @This(), v2: @This()) f64 {
-        return (v1.x * v2.x) + (v1.y * v2.y) + (v1.z * v2.z);
-    }
-
-    pub fn cross(a: @This(), b: @This()) @This() {
-        return .{
-            .x = (a.y * b.z - a.z * b.y),
-            .y = -(a.x * b.z - a.z * b.x),
-            .z = (a.x * b.y - a.y * b.x),
-        };
-    }
 };
 
 pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: type) !T {
@@ -145,7 +67,6 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
     const server = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
-    defer server.close();
 
     const block_ids = readJsonFile("blocks.json", alloc, []mc.BlockIdJson) catch unreachable;
     defer freeJson([]mc.BlockIdJson, alloc, block_ids);
@@ -195,29 +116,22 @@ pub fn main() !void {
         .{ alloc, server.reader(), &queue, &q_cond },
     );
     defer listener_thread.join();
+    defer server.close();
 
-    //var cmd_thread = try std.Thread.spawn(
-    //    .{},
-    //    mc.cmdThread,
-    //    .{ alloc, &queue, &q_cond },
-    //);
-    //defer cmd_thread.join();
+    var bot1 = Bot.init(alloc, "Tony");
+    defer bot1.deinit();
 
+    var cmd_thread = try std.Thread.spawn(
+        .{},
+        mc.cmdThread,
+        .{ alloc, &queue, &q_cond },
+    );
+    defer cmd_thread.join();
+
+    const swr = server.writer();
     var packet = try mc.Packet.init(alloc);
-    try packet.varInt(0);
-    try packet.varInt(761);
-    try packet.string("localhost");
-    try packet.short(25565);
-    try packet.varInt(2);
-
-    _ = try server.write(packet.getWritableBuffer());
-
-    try packet.clear();
-    try packet.varInt(0);
-    try packet.string("rat");
-    try packet.boolean(false);
-
-    _ = try server.write(packet.getWritableBuffer());
+    try mc.handshake(&packet, swr, "localhost", 25565);
+    try mc.loginStart(&packet, swr, bot1.name);
 
     var pathctx = astar.AStarContext.init(alloc);
     defer pathctx.deinit();
@@ -229,8 +143,6 @@ pub fn main() !void {
     var py: ?f64 = null;
     var pz: ?f64 = null;
 
-    var dx: f64 = 0;
-
     var move_vecs = std.ArrayList(V3f).init(alloc);
     defer move_vecs.deinit();
 
@@ -241,11 +153,10 @@ pub fn main() !void {
 
     var goal: ?V3f = null;
     const speed: f64 = 3; //BPS
-    //
     var draw = false;
 
     if (draw) {
-        c.InitWindow(1920, 1080, "Window");
+        c.InitWindow(1800, 1000, "Window");
     }
     //defer c.CloseWindow();
 
@@ -259,7 +170,8 @@ pub fn main() !void {
     c.DisableCursor();
     c.SetCameraMode(camera, c.CAMERA_FREE);
 
-    while (true) {
+    var run = true;
+    while (run) {
         if (draw) {
             //c.BeginDrawing();
             c.ClearBackground(c.RAYWHITE);
@@ -337,15 +249,14 @@ pub fn main() !void {
                     py.? += dv.y;
                     pz.? += dv.z;
 
-                    try packet.clear();
-                    try packet.varInt(0x14);
-                    try packet.double(px.?);
-                    try packet.double(py.?);
-                    try packet.double(pz.?);
-                    try packet.float(@floatCast(f32, dx) * 90);
-                    try packet.float(@floatCast(f32, dx) * 20);
-                    try packet.boolean(true);
-                    _ = try server.write(packet.getWritableBuffer());
+                    try mc.setPlayerPositionRot(
+                        &packet,
+                        swr,
+                        .{ .x = px.?, .y = py.?, .z = pz.? },
+                        0,
+                        0,
+                        true,
+                    );
                 } else {
                     //goal = null;
                     goal = move_vecs.popOrNull();
@@ -355,18 +266,19 @@ pub fn main() !void {
         std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
         //q_cond.wait(&q_mutex);
         while (queue.get()) |item| {
-            //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, item.data.id)]});
+            var arena_allocs = std.heap.ArenaAllocator.init(alloc);
+            defer arena_allocs.deinit();
+            const arena_alloc = arena_allocs.allocator();
+            defer alloc.destroy(item);
+            defer item.data.buffer.deinit();
             switch (item.data.msg_type) {
                 .server => {
                     var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
                     const reader = fbs.reader();
                     switch (@intToEnum(id_list.packet_enum, item.data.id)) {
                         .Keep_Alive => {
-                            try packet.clear();
-                            try packet.varInt(0x11);
-                            try packet.slice(item.data.buffer.items);
-                            _ = try server.write(packet.getWritableBuffer());
-                            std.debug.print("keep alive\n", .{});
+                            const kid = try reader.readInt(i64, .Big);
+                            try mc.keepAlive(&packet, swr, kid);
                         },
                         .Login => {
                             std.debug.print("Login\n", .{});
@@ -386,30 +298,134 @@ pub fn main() !void {
                             }
                             std.debug.print("Plugin Message: {s}\n", .{identifier.items});
 
-                            try packet.clear();
-                            try packet.varInt(0x0C);
-                            try packet.string("tony:brand");
-                            _ = try server.write(packet.getWritableBuffer());
-
-                            try packet.clear();
-                            try packet.varInt(0x07); //client info packet
-                            try packet.string("en_US");
-                            try packet.ubyte(2); //Render dist
-                            try packet.varInt(0); //Chat mode, enabled
-                            try packet.boolean(true);
-                            try packet.ubyte(0); // what parts are shown of skin
-                            try packet.varInt(1); //Dominant Hand
-                            try packet.boolean(false);
-                            try packet.boolean(true);
-                            _ = try server.write(packet.getWritableBuffer());
+                            try mc.pluginMessage(&packet, swr, "tony:brand");
+                            try mc.clientInfo(&packet, swr, "en_US", 2, 1);
                         },
                         .Change_Difficulty => {
                             const diff = try reader.readByte();
                             const locked = try reader.readByte();
-                            std.debug.print("Set difficulty: {d} ,Locked: {d}\n", .{ diff, locked });
+                            std.debug.print("Set difficulty: {d}, Locked: {d}\n", .{ diff, locked });
                         },
                         .Player_Abilities => {
                             std.debug.print("Player Abilities\n", .{});
+                        },
+                        .Feature_Flags => {
+                            const num_feature = mc.readVarInt(reader);
+                            var strbuf = std.ArrayList(u8).init(alloc);
+                            defer strbuf.deinit();
+                            std.debug.print("Feature_Flags: \n", .{});
+
+                            var i: u32 = 0;
+                            while (i < num_feature) : (i += 1) {
+                                const str_len = mc.readVarInt(reader);
+                                try strbuf.resize(@intCast(usize, str_len));
+                                try reader.readNoEof(strbuf.items);
+                                std.debug.print("\t{s}\n", .{strbuf.items});
+                            }
+                        },
+                        .Player_Info_Update => {
+                            const action_mask = try reader.readInt(u8, .Big);
+                            const num_actions = mc.readVarInt(reader);
+                            //std.debug.print("Player info update: \n", .{});
+
+                            var i: u32 = 0;
+                            while (i < num_actions) : (i += 1) {
+                                const uuid = try reader.readInt(u128, .Big);
+                                _ = uuid;
+                                //std.debug.print("\tUUID: {d}\n", .{uuid});
+                                if (action_mask & 0x01 == 1) { //Add player
+                                    var strbuf = std.ArrayList(u8).init(alloc);
+                                    defer strbuf.deinit();
+                                    const str_len = mc.readVarInt(reader);
+                                    try strbuf.resize(@intCast(usize, str_len));
+                                    try reader.readNoEof(strbuf.items);
+                                    //std.debug.print("\tPlayer: {s}\n", .{strbuf.items});
+
+                                    const num_properties = mc.readVarInt(reader);
+                                    var np: u32 = 0;
+                                    while (np < num_properties) : (np += 1) {
+                                        const slen = mc.readVarInt(reader);
+                                        try strbuf.resize(@intCast(usize, slen));
+                                        try reader.readNoEof(strbuf.items);
+                                        //std.debug.print("\t\tProperty: {s}\n", .{strbuf.items});
+                                        const vlen = mc.readVarInt(reader);
+                                        try strbuf.resize(@intCast(usize, vlen));
+                                        try reader.readNoEof(strbuf.items);
+                                        //std.debug.print("\t\tValue: {s}\n", .{strbuf.items});
+                                        const is_signed = try reader.readInt(u8, .Big);
+                                        if (is_signed == 1) {
+                                            const siglen = mc.readVarInt(reader);
+                                            try strbuf.resize(@intCast(usize, siglen));
+                                            try reader.readNoEof(strbuf.items);
+                                        }
+                                    }
+                                }
+                                if (action_mask & 0b10 != 0) {}
+                                break;
+                            }
+                        },
+                        .Game_Event => {
+                            const Events = enum {
+                                no_respawn_block,
+                                end_rain,
+                                begin_rain,
+                                change_gamemode,
+                                win_game,
+                                demo,
+                                arrow_hit_player,
+                                rain_change,
+                                thunder_change,
+                                pufferfish,
+                                elder_guardian,
+                                respawn_screen,
+                            };
+                            const event_id = @intToEnum(Events, try reader.readInt(u8, .Big));
+                            const value = @bitCast(f32, try reader.readInt(u32, .Big));
+                            std.debug.print("Game event :{} {d}\n", .{ event_id, value });
+                        },
+                        .Set_Container_Content => {
+                            const win_id = mc.readVarInt(reader);
+                            const state_id = mc.readVarInt(reader);
+                            const item_count = mc.readVarInt(reader);
+                            _ = win_id;
+                            _ = state_id;
+                            //std.debug.print("Set Container content id: {d}, state: {d}, count: {d}\n", .{ win_id, state_id, item_count });
+                            var i: u32 = 0;
+                            while (i < item_count) : (i += 1) {
+                                const item_present = try reader.readInt(u8, .Big);
+                                if (item_present == 1) {
+                                    const item_id = mc.readVarInt(reader);
+                                    const count = try reader.readInt(u8, .Big);
+
+                                    const nbt = try nbt_zig.parse(arena_alloc, reader);
+                                    _ = item_id;
+                                    _ = count;
+                                    _ = nbt;
+                                    //std.debug.print("\tItem:{d} id: {d}, count: {d}\n{}\n", .{
+                                    //    i,
+                                    //    item_id,
+                                    //    count,
+                                    //    nbt.entry,
+                                    //});
+                                }
+                            }
+                            { //Held item
+                                const item_present = try reader.readInt(u8, .Big);
+                                if (item_present == 1) {
+                                    const item_id = mc.readVarInt(reader);
+                                    const count = try reader.readInt(u8, .Big);
+                                    const nbt = try nbt_zig.parse(arena_alloc, reader);
+                                    _ = nbt;
+                                    _ = count;
+                                    _ = item_id;
+                                    //std.debug.print("\tHeld Item:{d} id: {d}, count: {d}\n{}\n", .{
+                                    //    i,
+                                    //    item_id,
+                                    //    count,
+                                    //    nbt.entry,
+                                    //});
+                                }
+                            }
                         },
                         .Spawn_Entity => {
                             const ent_id = mc.readVarInt(reader);
@@ -440,10 +456,7 @@ pub fn main() !void {
                             pz = z;
                             old_pos = V3f.new(px.?, py.?, pz.?);
 
-                            try packet.clear();
-                            try packet.varInt(0);
-                            try packet.varInt(tel_id);
-                            _ = try server.write(packet.getWritableBuffer());
+                            try mc.confirmTeleport(&packet, swr, tel_id);
 
                             if (complete_login == false) {
                                 complete_login = true;
@@ -453,7 +466,6 @@ pub fn main() !void {
                                 _ = try server.write(packet.getWritableBuffer());
                             }
                         },
-
                         .Update_Entity_Position, .Update_Entity_Position_and_Rotation, .Update_Entity_Rotation => {
                             const ent_id = mc.readVarInt(reader);
                             if (player_id) |pid| {
@@ -462,7 +474,6 @@ pub fn main() !void {
                                 }
                             }
                         },
-
                         .Block_Update => {
                             const pos = try reader.readInt(i64, .Big);
                             const bx = pos >> 38;
@@ -474,11 +485,34 @@ pub fn main() !void {
 
                             std.debug.print("Block update {d} {d} {d} : {d}\n", .{ bx, by, bz, new_id });
                         },
+                        .Set_Health => {
+                            bot1.health = @bitCast(f32, (try reader.readInt(u32, .Big)));
+                            bot1.food = @intCast(u8, mc.readVarInt(reader));
+                            bot1.food_saturation = @bitCast(f32, (try reader.readInt(u32, .Big)));
+                        },
+                        .Set_Entity_Metadata => {
+                            const e_id = mc.readVarInt(reader);
+                            std.debug.print("Set Entity Metadata: {d}\n", .{e_id});
+
+                            var index = try reader.readInt(u8, .Big);
+                            while (index != 0xff) : (index = try reader.readInt(u8, .Big)) {
+                                std.debug.print("\tIndex {d}\n", .{index});
+                                const metatype = @intToEnum(mc.MetaDataType, mc.readVarInt(reader));
+                                std.debug.print("\tMetadata: {}\n", .{metatype});
+                                switch (metatype) {
+                                    else => {
+                                        std.debug.print("\tENTITY METADATA TYPE NOT IMPLEMENTED\n", .{});
+                                        break;
+                                    },
+                                }
+                            }
+                        },
+                        .Update_Time => {},
                         .Chunk_Data_and_Update_Light => {
                             const cx = try reader.readInt(i32, .Big);
                             const cy = try reader.readInt(i32, .Big);
 
-                            var nbt_data = try nbt_zig.parseAsCompoundEntry(alloc, reader);
+                            var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, reader);
                             _ = nbt_data;
                             const data_size = mc.readVarInt(reader);
                             var chunk_data = std.ArrayList(u8).init(alloc);
@@ -570,6 +604,15 @@ pub fn main() !void {
 
                             const num_block_ent = mc.readVarInt(reader);
                             _ = num_block_ent;
+                        },
+                        .System_Chat_Message => {
+                            const chat_len = mc.readVarInt(reader);
+                            var chat_buffer = std.ArrayList(u8).init(alloc);
+                            defer chat_buffer.deinit();
+                            try chat_buffer.resize(@intCast(usize, chat_len));
+                            try reader.readNoEof(chat_buffer.items);
+                            const is_actionbar = try reader.readInt(u8, .Big);
+                            std.debug.print("System msg: {s} {d}\n", .{ chat_buffer.items, is_actionbar });
                         },
                         .Player_Chat_Message => {
                             { //HEADER
@@ -720,11 +763,15 @@ pub fn main() !void {
                                 }
                             }
                         },
-                        else => {},
+                        else => {
+                            //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, item.data.id)]});
+                        },
                     }
-                    item.data.buffer.deinit();
                 },
                 .local => {
+                    if (std.mem.eql(u8, "exit", item.data.buffer.items[0 .. item.data.buffer.items.len - 1])) {
+                        run = false;
+                    }
                     if (std.mem.eql(u8, "move", item.data.buffer.items[0 .. item.data.buffer.items.len - 1])) {
                         if (start_rot and px != null and py != null and pz != null) {
                             std.debug.print("Dump the chunk!\n", .{});
@@ -770,15 +817,14 @@ pub fn main() !void {
                             }
                         }
                     }
-                    item.data.buffer.deinit();
                 },
             }
         }
     }
 
-    const out = try std.fs.cwd().createFile("out.dump", .{});
-    defer out.close();
-    _ = try out.write(packet.getWritableBuffer());
+    //const out = try std.fs.cwd().createFile("out.dump", .{});
+    //defer out.close();
+    //_ = try out.write(packet.getWritableBuffer());
 
-    defer packet.deinit();
+    packet.deinit();
 }

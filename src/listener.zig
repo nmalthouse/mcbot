@@ -2,9 +2,13 @@ const std = @import("std");
 
 const IDS = @import("list.zig");
 
+const vector = @import("vector.zig");
+const V3f = vector.V3f;
+
 const Queue = std.atomic.Queue;
 
-pub fn sendChat(packet: *Packet, server: std.net.Stream.Writer, msg: []const u8) !void {
+const Serv = std.net.Stream.Writer;
+pub fn sendChat(packet: *Packet, server: Serv, msg: []const u8) !void {
     if (msg.len > 255) return error.msgToLong;
     try packet.clear();
     try packet.varInt(0x05);
@@ -14,6 +18,71 @@ pub fn sendChat(packet: *Packet, server: std.net.Stream.Writer, msg: []const u8)
     try packet.boolean(false);
     try packet.int32(0);
     _ = try server.write(packet.getWritableBuffer());
+}
+
+pub fn handshake(packet: *Packet, server: Serv, hostname: []const u8, port: u16) !void {
+    try packet.clear();
+    try packet.varInt(0); //Packet id
+    try packet.varInt(761); //Protocol version
+    try packet.string(hostname);
+    try packet.short(port);
+    try packet.varInt(2); //Next state
+    _ = try server.write(packet.getWritableBuffer());
+}
+
+pub fn loginStart(packet: *Packet, server: Serv, username: []const u8) !void {
+    try packet.clear();
+    try packet.varInt(0); //Packet id
+    try packet.string(username);
+    try packet.boolean(false); //No uuid
+    _ = try server.write(packet.getWritableBuffer());
+}
+
+pub fn keepAlive(packet: *Packet, server: Serv, id: i64) !void {
+    try packet.clear();
+    try packet.varInt(0x11);
+    try packet.long(id);
+    _ = try server.write(packet.getWritableBuffer());
+}
+
+pub fn setPlayerPositionRot(packet: *Packet, server: Serv, pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
+    try packet.clear();
+    try packet.varInt(0x14);
+    try packet.double(pos.x);
+    try packet.double(pos.y);
+    try packet.double(pos.z);
+    try packet.float(yaw);
+    try packet.float(pitch);
+    try packet.boolean(grounded);
+    _ = try server.write(packet.getWritableBuffer());
+}
+
+pub fn confirmTeleport(p: *Packet, server: Serv, id: i32) !void {
+    try p.clear();
+    try p.varInt(0);
+    try p.varInt(id);
+    _ = try server.write(p.getWritableBuffer());
+}
+
+pub fn pluginMessage(p: *Packet, server: Serv, brand: []const u8) !void {
+    try p.clear();
+    try p.varInt(0x0C);
+    try p.string(brand);
+    _ = try server.write(p.getWritableBuffer());
+}
+
+pub fn clientInfo(p: *Packet, server: Serv, locale: []const u8, render_dist: u8, main_hand: u8) !void {
+    try p.clear();
+    try p.varInt(0x07); //client info packet
+    try p.string(locale);
+    try p.ubyte(render_dist);
+    try p.varInt(0); //Chat mode, enabled
+    try p.boolean(true); //Chat colors enabled
+    try p.ubyte(0); // what parts are shown of skin
+    try p.varInt(main_hand);
+    try p.boolean(false); //No text filtering
+    try p.boolean(true); //Allow this bot to be listed
+    _ = try server.write(p.getWritableBuffer());
 }
 
 pub fn numBitsRequired(count: usize) usize {
@@ -35,6 +104,8 @@ pub fn getBitMask(num_bits: usize) u64 {
     //For block states and bits per entry between 5 and 8, the given value is used.
     //For biomes the given value is always used, and will be <= 3
 }
+
+pub const PacketReader = struct {};
 
 pub const Packet = struct {
     const Self = @This();
@@ -205,6 +276,25 @@ pub fn readVarInt(reader: anytype) i32 {
     return @bitCast(i32, value);
 }
 
+pub fn readVarIntWithError(reader: anytype) !i32 {
+    const CONT: u32 = 0x80;
+    const SEG: u32 = 0x7f;
+
+    var value: u32 = 0;
+    var pos: u8 = 0;
+    var current_byte: u8 = 0;
+
+    while (true) {
+        current_byte = try reader.readByte();
+        value |= @intCast(u32, current_byte & SEG) << @intCast(u5, pos);
+        if ((current_byte & CONT) == 0) break;
+        pos += 7;
+        if (pos >= 32) unreachable;
+    }
+
+    return @bitCast(i32, value);
+}
+
 //public int readVarInt() {
 //    int value = 0;
 //    int position = 0;
@@ -346,6 +436,9 @@ pub fn cmdThread(
         node.* = .{ .prev = null, .next = null, .data = .{ .id = 0, .len = 0, .buffer = msg, .msg_type = .local } };
         queue.put(node);
         q_cond.signal();
+        if (std.mem.eql(u8, "exit", msg.items[0 .. msg.items.len - 1])) {
+            return;
+        }
     }
 }
 
@@ -366,6 +459,8 @@ pub const ServerListener = struct {
         invalid,
     };
 
+    //pub fn parserThreadErrorHandler(err: anyerror)
+
     pub fn parserThread(
         alloc: std.mem.Allocator,
         reader: std.net.Stream.Reader,
@@ -375,26 +470,37 @@ pub const ServerListener = struct {
         var parsed = ParsedPacket.init(alloc);
         //defer parsed.deinit();
 
-        while (true) {
-            parsed.len = readVarInt(reader);
-            parsed.id = readVarInt(reader);
-            var data_count: u32 = toVarInt(parsed.id).len;
-            //std.debug.print("Packet with len: {x} id {s}\n", .{
-            //    parsed.len,
-            //    IDS.packet_ids[@intCast(u32, parsed.id)],
-            //});
-            {
-                //std.debug.print("parsing data\n", .{});
-                while (data_count < parsed.len) : (data_count += 1) {
-                    const byte = reader.readByte() catch unreachable;
-                    parsed.buffer.append(byte) catch unreachable;
+        const value = blk: {
+            while (true) {
+                parsed.len = readVarIntWithError(reader) catch |err| break :blk err;
+                parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
+                var data_count: u32 = toVarInt(parsed.id).len;
+                //std.debug.print("Packet with len: {x} id {s}\n", .{
+                //    parsed.len,
+                //    IDS.packet_ids[@intCast(u32, parsed.id)],
+                //});
+                {
+                    //std.debug.print("parsing data\n", .{});
+                    while (data_count < parsed.len) : (data_count += 1) {
+                        const byte = reader.readByte() catch |err| break :blk err;
+                        parsed.buffer.append(byte) catch unreachable;
+                    }
+                    const node = alloc.create(PacketQueueType.Node) catch unreachable;
+                    node.* = .{ .prev = null, .next = null, .data = parsed };
+                    queue.put(node);
+                    parsed = ParsedPacket.init(alloc);
+                    q_cond.signal();
                 }
-                const node = alloc.create(PacketQueueType.Node) catch unreachable;
-                node.* = .{ .prev = null, .next = null, .data = parsed };
-                queue.put(node);
-                parsed = ParsedPacket.init(alloc);
-                q_cond.signal();
             }
+        };
+        std.debug.print("Value {}\n", .{value});
+        switch (value) {
+            error.NotOpenForReading => {
+                return;
+            },
+            else => {
+                unreachable;
+            },
         }
     }
 };
@@ -411,6 +517,21 @@ pub const ChunkMap = struct {
 
     pub fn init(alloc: std.mem.Allocator) Self {
         return .{ .x = XTYPE.init(alloc) };
+    }
+
+    pub fn deinit(self: *Self) void {
+        var it = self.x.iterator();
+        while (it.next()) |kv| {
+            var zit = kv.value_ptr.iterator();
+            while (zit.next()) |kv2| {
+                for (kv2.value_ptr.*) |*section| {
+                    section.deinit();
+                }
+            }
+            kv.value_ptr.deinit();
+        }
+
+        self.x.deinit();
     }
 
     pub fn getBlockFloat(self: *Self, x: f64, y: f64, z: f64) BLOCK_ID_INT {
@@ -485,10 +606,6 @@ pub const ChunkMap = struct {
         const ry = @intCast(i32, @rem(y + 64, 16));
 
         try section.setBlock(rx, ry, rz, id);
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.x.deinit();
     }
 };
 
@@ -664,4 +781,32 @@ pub const PacketAnalysisJson = struct {
     bound_to: []u8,
     data: []u8,
     timestamp: f32,
+};
+
+pub const MetaDataType = enum {
+    Byte, //
+    VarInt, //
+    VarLong, //
+    Float, //
+    String, //
+    Chat, //
+    OptChat, // (Boolean + Optional Chat) 	Chat is present if the Boolean is set to true
+    Slot, //
+    Boolean, //
+    Rotation, // 	3 floats: rotation on x, rotation on y, rotation on z
+    Position, //
+    OptPosition, // (Boolean + Optional Position) 	Position is present if the Boolean is set to true
+    Direction, // (VarInt) 	(Down = 0, Up = 1, North = 2, South = 3, West = 4, East = 5)
+    OptUUID, // (Boolean + Optional UUID) 	UUID is present if the Boolean is set to true
+    OptBlockID, // (VarInt) 	0 for absent (implies air); otherwise, a block state ID as per the global palette
+    NBT, //
+    Particle, //
+    Villager, // Data 	3 VarInts: villager type, villager profession, level
+    OptVarInt, // 	0 for absent; 1 + actual value otherwise. Used for entity IDs.
+    Pose, // 	A VarInt enum: 0: STANDING, 1: FALL_FLYING, 2: SLEEPING, 3: SWIMMING, 4: SPIN_ATTACK, 5: SNEAKING, 6: LONG_JUMPING, 7: DYING, 8: CROAKING, 9: USING_TONGUE, 10: SITTING, 11: ROARING, 12: SNIFFING, 13: EMERGING, 14: DIGGING
+    Cat, // Variant 	A VarInt that points towards the CAT_VARIANT registry.
+    Frog, // Variant 	A VarInt that points towards the FROG_VARIANT registry.
+    GlobalPos, // 	A dimension identifier and Position.
+    Painting, // Variant 	A VarInt that points towards the PAINTING_VARIANT registry.
+
 };
