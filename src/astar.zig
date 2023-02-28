@@ -39,7 +39,6 @@ pub const AStarContext = struct {
     }
 
     pub fn popLowestFOpen(self: *Self) ?*Node {
-        std.debug.print("LEN OF OPEN {d}\n", .{self.open.items.len});
         var lowest: u32 = std.math.maxInt(u32);
         var lowest_index: ?usize = null;
         for (self.open.items) |node, i| {

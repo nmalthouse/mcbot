@@ -242,7 +242,7 @@ pub fn main() !void {
     var goal: ?V3f = null;
     const speed: f64 = 3; //BPS
     //
-    var draw = true;
+    var draw = false;
 
     if (draw) {
         c.InitWindow(1920, 1080, "Window");
@@ -631,7 +631,7 @@ pub fn main() !void {
                                                 );
                                             }
 
-                                            //goal = move_vecs.pop();
+                                            goal = move_vecs.pop();
                                             break;
                                         }
 
