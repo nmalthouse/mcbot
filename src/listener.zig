@@ -4,6 +4,38 @@ const IDS = @import("list.zig");
 
 const Queue = std.atomic.Queue;
 
+pub fn sendChat(packet: *Packet, server: std.net.Stream.Writer, msg: []const u8) !void {
+    if (msg.len > 255) return error.msgToLong;
+    try packet.clear();
+    try packet.varInt(0x05);
+    try packet.string(msg);
+    try packet.long(0);
+    try packet.long(0);
+    try packet.boolean(false);
+    try packet.int32(0);
+    _ = try server.write(packet.getWritableBuffer());
+}
+
+pub fn numBitsRequired(count: usize) usize {
+    return std.math.log2_int_ceil(usize, count);
+}
+
+test "num bits req" {
+    std.debug.print("req {d}\n", .{numBitsRequired(4)});
+    std.debug.print("req {d}\n", .{numBitsRequired(5)});
+    std.debug.print("16 req {d}\n", .{numBitsRequired(16)});
+    std.debug.print("17 req {d}\n", .{numBitsRequired(17)});
+}
+
+pub fn getBitMask(num_bits: usize) u64 {
+    return (~@as(u64, 0x0)) >> @intCast(u6, 64 - num_bits);
+
+    //From wiki.vg/chunk_format:
+    //For block states with bits per entry <= 4, 4 bits are used to represent a block.
+    //For block states and bits per entry between 5 and 8, the given value is used.
+    //For biomes the given value is always used, and will be <= 3
+}
+
 pub const Packet = struct {
     const Self = @This();
     const RESERVED_BYTE_COUNT: usize = 5;
@@ -60,6 +92,11 @@ pub const Packet = struct {
     pub fn long(self: *Self, l: i64) !void {
         const wr = self.buffer.writer();
         _ = try wr.writeInt(i64, l, .Big);
+    }
+
+    pub fn int32(self: *Self, i: u32) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(u32, i, .Big);
     }
 
     pub fn double(self: *Self, f: f64) !void {
@@ -383,18 +420,33 @@ pub const ChunkMap = struct {
             @floatToInt(i32, z),
         );
     }
+    pub fn getChunkCoord(x: i64, y: i64, z: i64) V3i {
+        const cx = @intCast(i32, @divTrunc(x, 16));
+        const cz = @intCast(i32, @divTrunc(z, 16));
+        const cy = @intCast(i32, @divTrunc(y + 64, 16));
+        return .{ .x = cx, .y = cy, .z = cz };
+    }
+
+    pub fn getChunkSectionPtr(self: *Self, x: i64, y: i64, z: i64) ?*ChunkSection {
+        const cx = @intCast(i32, @divTrunc(x, 16));
+        const cz = @intCast(i32, @divTrunc(z, 16));
+        const cy = @intCast(i32, @divTrunc(y + 64, 16));
+
+        const world_z = self.x.getPtr(cx) orelse return null;
+        const column = world_z.getPtr(cz) orelse return null;
+        return &column[@intCast(u32, cy)];
+    }
 
     pub fn getBlock(self: *Self, x: i32, y: i32, z: i32) BLOCK_ID_INT {
         const cx = @divTrunc(x, 16);
         const cz = @divTrunc(z, 16);
         const cy = @divTrunc(y + 64, 16);
 
-        const rx = @rem(x, 16);
-        const rz = @rem(z, 16);
-        const ry = @rem(y + 64, 16);
+        const rx = std.math.absInt(@rem(x, 16)) catch unreachable;
+        const rz = std.math.absInt(@rem(z, 16)) catch unreachable;
+        const ry = std.math.absInt(@rem(y + 64, 16)) catch unreachable;
 
         //std.debug.print("Provide pos : {d}\t{d}\t{d}\n", .{ x, y, z });
-        //std.debug.print("chunk pos :   {d}\t{d}\t{d}\n", .{ cx, cy, cz });
 
         const world_z = self.x.getPtr(cx) orelse unreachable;
         const column = world_z.getPtr(cz) orelse unreachable;
@@ -412,7 +464,7 @@ pub const ChunkMap = struct {
                 const blocks_per_long = @divTrunc(64, section.bits_per_entry);
                 const data_index = @intCast(u32, @divTrunc(block_index, blocks_per_long));
                 const shift_index = @rem(block_index, blocks_per_long);
-                const mapping = (section.data.items[data_index] >> @intCast(u6, (shift_index * section.bits_per_entry))) & section.getBitMask();
+                const mapping = (section.data.items[data_index] >> @intCast(u6, (shift_index * section.bits_per_entry))) & getBitMask(section.bits_per_entry);
                 switch (section.bits_per_entry) {
                     4...8 => { //Indirect mapping
                         return section.mapping.items[mapping];
@@ -425,14 +477,65 @@ pub const ChunkMap = struct {
         }
     }
 
+    pub fn setBlock(self: *Self, x: i64, y: i64, z: i64, id: BLOCK_ID_INT) !void {
+        const section = self.getChunkSectionPtr(x, y, z) orelse unreachable;
+
+        const rx = @intCast(i32, @rem(x, 16));
+        const rz = @intCast(i32, @rem(z, 16));
+        const ry = @intCast(i32, @rem(y + 64, 16));
+
+        try section.setBlock(rx, ry, rz, id);
+    }
+
     pub fn deinit(self: *Self) void {
         self.x.deinit();
     }
 };
 
+pub const V3i = struct {
+    x: i32,
+    y: i32,
+    z: i32,
+};
+
 pub const BLOCK_ID_INT = u16;
 pub const ChunkSection = struct {
     const Self = @This();
+
+    const BLOCKS_PER_SECTION = 16 * 16 * 16;
+
+    pub const BlockIndex = struct {
+        index: usize,
+        offset: usize,
+        bit_count: u6,
+    };
+
+    pub const DataIterator = struct {
+        buffer: []const u64,
+        bits_per_entry: u8,
+        buffer_index: usize = 0,
+        shift_index: usize = 0,
+
+        pub fn next(it: *DataIterator) ?usize {
+            it.shift_index += 1;
+            const entries_per_long = @divTrunc(64, it.bits_per_entry);
+            if (it.shift_index >= entries_per_long) {
+                it.shift_index = 0;
+                it.buffer_index += 1;
+            }
+
+            if (it.buffer_index >= it.buffer.len) return null;
+            return (it.buffer[it.buffer_index] >> @intCast(u6, it.shift_index * it.bits_per_entry)) & getBitMask(it.bits_per_entry);
+        }
+
+        pub fn getCoord(it: *DataIterator) V3i {
+            const i = (it.buffer_index * @divTrunc(64, it.bits_per_entry)) + it.shift_index;
+            const y = @intCast(i32, @divTrunc(i, 256));
+            const z = @intCast(i32, @divTrunc(@rem(i, 256), 16));
+            const x = @intCast(i32, @rem(@rem(i, 256), 16));
+            return .{ .x = x, .y = y, .z = z };
+        }
+    };
 
     mapping: std.ArrayList(BLOCK_ID_INT),
     data: std.ArrayList(u64),
@@ -442,19 +545,97 @@ pub const ChunkSection = struct {
         return .{ .mapping = std.ArrayList(BLOCK_ID_INT).init(alloc), .data = std.ArrayList(u64).init(alloc), .bits_per_entry = 0 };
     }
 
+    pub fn getBlockIndex(self: *Self, rx: i32, ry: i32, rz: i32) BlockIndex {
+        switch (self.bits_per_entry) {
+            0 => {
+                return BlockIndex{ .index = 0, .offset = 0, .bit_count = 0 };
+            },
+            1...3 => unreachable,
+            else => {
+                const block_index = rx + (rz * 16) + (ry * 256);
+                const blocks_per_long = @divTrunc(64, self.bits_per_entry);
+                const data_index = @intCast(u32, @divTrunc(block_index, blocks_per_long));
+                const shift_index = @rem(block_index, blocks_per_long);
+                //const mapping = (self.data.items[data_index] >> @intCast(u6, (shift_index * self.bits_per_entry))) & self.getBitMask();
+                return BlockIndex{ .index = data_index, .offset = @intCast(usize, shift_index), .bit_count = @intCast(u6, self.bits_per_entry) };
+            },
+        }
+    }
+
+    //This function sets the data array to whatever index is mapped to id,
+    //The id MUST exist in the mapping.
+    pub fn setData(self: *Self, rx: i32, ry: i32, rz: i32, id: BLOCK_ID_INT) void {
+        const bi = self.getBlockIndex(rx, ry, rz);
+        const long = &self.data.items[bi.index];
+        const mask = getBitMask(self.bits_per_entry) << @intCast(u6, bi.offset * bi.bit_count);
+        const shifted_id = @intCast(u64, self.getMapping(id) orelse unreachable) << @intCast(u6, bi.offset * bi.bit_count);
+        long.* = (long.* & ~mask) | shifted_id;
+    }
+
+    pub fn setBlock(self: *Self, rx: i32, ry: i32, rz: i32, id: BLOCK_ID_INT) !void {
+        if (self.hasMapping(id)) { //No need to update just set relevent data
+            self.setData(rx, ry, rz, id);
+        } else {
+            const max_mapping = std.math.pow(BLOCK_ID_INT, 2, self.bits_per_entry);
+            if (max_mapping < self.mapping.items.len + 1) {
+                const new_bpe = numBitsRequired(self.mapping.items.len + 1);
+
+                const new_bpl = @divTrunc(64, new_bpe);
+                var new_data = std.ArrayList(u64).init(self.data.allocator);
+                try new_data.resize(@divTrunc(BLOCKS_PER_SECTION, new_bpl) + 1);
+                std.mem.set(u64, new_data.items, 0);
+
+                var new_i: usize = 0;
+                var new_shift_i: usize = 0;
+
+                var old_it = DataIterator{ .buffer = self.data.items, .bits_per_entry = self.bits_per_entry };
+                var old_dat = old_it.next();
+                while (old_dat != null) : (old_dat = old_it.next()) {
+                    const long = &new_data.items[new_i];
+                    const mask = getBitMask(new_bpe) << @intCast(u6, new_shift_i * new_bpe);
+                    const shifted_id = old_dat.? << @intCast(u6, new_shift_i * new_bpe);
+                    long.* = (long.* & ~mask) | shifted_id;
+
+                    new_shift_i += 1;
+                    if (new_shift_i >= new_bpl) {
+                        new_shift_i = 0;
+                        new_i += 1;
+                    }
+                }
+
+                try self.mapping.append(id);
+                self.data.deinit();
+                self.data = new_data;
+                self.bits_per_entry = @intCast(u8, new_bpe);
+                self.setData(rx, ry, rz, id);
+            } else {
+                try self.mapping.append(id);
+                self.setData(rx, ry, rz, id);
+            }
+        }
+    }
+
     //pub fn dumpSection(self: *Self)void {
     //    for(data)
     //}
 
-    pub fn getBitMask(self: *const Self) u64 {
-        if (self.bits_per_entry < 4 or self.bits_per_entry == 0 or self.bits_per_entry > 8) unreachable;
-        //return @as(u64, 0x1) <<| (self.bits_per_entry - 1);
-        return (~@as(u64, 0x0)) >> @intCast(u6, 64 - self.bits_per_entry);
+    //pub fn getBitMask(self: *const Self) u64 {
+    //    if (self.bits_per_entry < 4 or self.bits_per_entry == 0 or self.bits_per_entry > 8) unreachable;
+    //    //return @as(u64, 0x1) <<| (self.bits_per_entry - 1);
+    //    return (~@as(u64, 0x0)) >> @intCast(u6, 64 - self.bits_per_entry);
 
-        //From wiki.vg/chunk_format:
-        //For block states with bits per entry <= 4, 4 bits are used to represent a block.
-        //For block states and bits per entry between 5 and 8, the given value is used.
-        //For biomes the given value is always used, and will be <= 3
+    //    //From wiki.vg/chunk_format:
+    //    //For block states with bits per entry <= 4, 4 bits are used to represent a block.
+    //    //For block states and bits per entry between 5 and 8, the given value is used.
+    //    //For biomes the given value is always used, and will be <= 3
+    //}
+
+    pub fn hasMapping(self: *Self, id: BLOCK_ID_INT) bool {
+        return (std.mem.indexOfScalar(BLOCK_ID_INT, self.mapping.items, id) != null);
+    }
+
+    pub fn getMapping(self: *Self, id: BLOCK_ID_INT) ?usize {
+        return std.mem.indexOfScalar(BLOCK_ID_INT, self.mapping.items, id);
     }
 
     pub fn deinit(self: *Self) void {
@@ -467,6 +648,17 @@ pub const BlockIdJson = struct {
     name: []u8,
     ids: []u16,
 };
+
+pub fn findBlockNameFromId(table: []const BlockIdJson, q_id: u16) []const u8 {
+    for (table) |entry| {
+        for (entry.ids) |id| {
+            if (id == q_id) {
+                return entry.name;
+            }
+        }
+    }
+    return "Block not found";
+}
 
 pub const PacketAnalysisJson = struct {
     bound_to: []u8,

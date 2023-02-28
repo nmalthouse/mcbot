@@ -16,6 +16,7 @@ pub fn build(b: *std.build.Builder) void {
     exe.setBuildMode(mode);
     exe.install();
     exe.linkLibC();
+    exe.linkSystemLibraryName("raylib");
     exe.addIncludePath("lib");
 
     //exe.addCSourceFiles(&.{
