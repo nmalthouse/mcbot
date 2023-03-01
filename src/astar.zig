@@ -23,11 +23,16 @@ pub const AStarContext = struct {
     }
 
     pub fn reset(self: *Self) !void {
+        for (self.closed.items) |cl|
+            self.closed.allocator.destroy(cl);
+        for (self.open.items) |cl|
+            self.closed.allocator.destroy(cl);
         try self.open.resize(0);
         try self.closed.resize(0);
     }
 
     pub fn deinit(self: *Self) void {
+        self.reset() catch unreachable;
         self.open.deinit();
         self.closed.deinit();
     }

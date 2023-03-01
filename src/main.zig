@@ -760,6 +760,15 @@ pub fn main() !void {
                                             pz.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
                                         );
                                     }
+                                } else if (eql(u8, key, "query")) {
+                                    const qbx: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
+                                    const qby: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
+                                    const qbz: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
+
+                                    const bid = world.getBlock(qbx, qby, qbz);
+                                    m_fbs.reset();
+                                    try m_wr.print("Block {s} id: {d}", .{ mc.findBlockNameFromId(block_ids, bid), bid });
+                                    try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
                                 }
                             }
                         },
