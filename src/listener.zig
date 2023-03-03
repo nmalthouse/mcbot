@@ -493,12 +493,12 @@ pub const ServerListener = struct {
                 }
             }
         };
-        std.debug.print("Value {}\n", .{value});
         switch (value) {
             error.NotOpenForReading => {
                 return;
             },
             else => {
+                std.debug.print("Value {}\n", .{value});
                 unreachable;
             },
         }
@@ -766,16 +766,82 @@ pub const BlockIdJson = struct {
     ids: []u16,
 };
 
-pub fn findBlockNameFromId(table: []const BlockIdJson, q_id: u16) []const u8 {
-    for (table) |entry| {
-        for (entry.ids) |id| {
-            if (id == q_id) {
-                return entry.name;
-            }
-        }
+pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: type) !T {
+    const cwd = std.fs.cwd();
+    const f = cwd.openFile(filename, .{}) catch null;
+    if (f) |cont| {
+        var buf: []const u8 = try cont.readToEndAlloc(alloc, 1024 * 1024 * 1024);
+        defer alloc.free(buf);
+
+        var ts = std.json.TokenStream.init(buf);
+        var ret = try std.json.parse(T, &ts, .{ .allocator = alloc });
+        //defer std.json.parseFree(T, ret, .{ .allocator = alloc });
+        return ret;
     }
-    return "Block not found";
+    return error.fileNotFound;
 }
+
+pub fn freeJson(comptime T: type, alloc: std.mem.Allocator, item: T) void {
+    std.json.parseFree(T, item, .{ .allocator = alloc });
+}
+
+pub const BlockRegistry = struct {
+    const Self = @This();
+
+    pub const IdRange = struct {
+        lower: u16,
+        upper: u16,
+
+        fn compare(ctx: u8, key: IdRange, actual: IdRange) std.math.Order {
+            _ = ctx;
+            if (key.lower >= actual.lower and key.lower <= actual.upper) return .eq;
+            if (key.lower > actual.upper) return .gt;
+            if (key.lower < actual.lower) return .lt;
+            return .eq;
+        }
+    };
+
+    pub const BlockInfo = struct {
+        pub const Property = struct {
+            pub const Data = union {
+                pub const Unimplemented = u8;
+                pub const Facing = enum { north, south, west, east };
+            };
+
+            data: Data,
+
+            state_count: u8,
+        };
+
+        name: []const u8,
+        id: u16,
+
+        //properties: []const Property,
+    };
+
+    id_array: []IdRange,
+    block_info_array: []BlockInfo,
+
+    pub fn init(alloc: std.mem.Allocator, array_file: []const u8, block_table_file: []const u8) !Self {
+        return Self{
+            .id_array = try readJsonFile(array_file, alloc, []IdRange),
+            .block_info_array = try readJsonFile(block_table_file, alloc, []BlockInfo),
+        };
+    }
+
+    pub fn findBlockName(self: *const Self, id: BLOCK_ID_INT) []const u8 {
+        const index = std.sort.binarySearch(IdRange, .{ .lower = id, .upper = 0 }, self.id_array, @as(u8, 0), BlockRegistry.IdRange.compare);
+        if (index) |i| {
+            return self.block_info_array[i].name;
+        }
+        return "Block Not Found";
+    }
+
+    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
+        freeJson([]IdRange, alloc, self.id_array);
+        freeJson([]BlockInfo, alloc, self.block_info_array);
+    }
+};
 
 pub const PacketAnalysisJson = struct {
     bound_to: []u8,

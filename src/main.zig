@@ -42,25 +42,6 @@ const ADJ_COST = [8]u32{
     10,
 };
 
-pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: type) !T {
-    const cwd = std.fs.cwd();
-    const f = cwd.openFile(filename, .{}) catch null;
-    if (f) |cont| {
-        var buf: []const u8 = try cont.readToEndAlloc(alloc, 1024 * 1024 * 1024);
-        defer alloc.free(buf);
-
-        var ts = std.json.TokenStream.init(buf);
-        var ret = try std.json.parse(T, &ts, .{ .allocator = alloc });
-        //defer std.json.parseFree(T, ret, .{ .allocator = alloc });
-        return ret;
-    }
-    return error.fileNotFound;
-}
-
-pub fn freeJson(comptime T: type, alloc: std.mem.Allocator, item: T) void {
-    std.json.parseFree(T, item, .{ .allocator = alloc });
-}
-
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.detectLeaks();
@@ -68,8 +49,8 @@ pub fn main() !void {
     const alloc = gpa.allocator();
     const server = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
 
-    const block_ids = readJsonFile("blocks.json", alloc, []mc.BlockIdJson) catch unreachable;
-    defer freeJson([]mc.BlockIdJson, alloc, block_ids);
+    var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
+    defer block_table.deinit(alloc);
 
     var world = mc.ChunkMap.init(alloc);
     defer world.deinit();
@@ -767,7 +748,10 @@ pub fn main() !void {
 
                                     const bid = world.getBlock(qbx, qby, qbz);
                                     m_fbs.reset();
-                                    try m_wr.print("Block {s} id: {d}", .{ mc.findBlockNameFromId(block_ids, bid), bid });
+                                    try m_wr.print("Block {s} id: {d}", .{
+                                        block_table.findBlockName(bid),
+                                        bid,
+                                    });
                                     try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
                                 }
                             }

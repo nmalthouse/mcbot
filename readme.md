@@ -1,5 +1,7 @@
 # Bot
 
+What if we just named properties?
+
 ## Hosting multiple bots:
 bot_list
 connection_list

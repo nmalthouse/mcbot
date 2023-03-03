@@ -1,5 +1,22 @@
 const std = @import("std");
 
+//
+//     4
+//   0 3
+//   i 2  X
+//XXXXX1
+//     0
+//
+//Scan each adjacent block column
+//
+//Test masks in order
+//
+//level-walk-mask
+//jump-up-mask
+//jump-down-mask
+//
+//in order for the corners to be accesible nodes the two adjacent cardinals need to be open, complicated once you add jumping etc
+
 pub const AStarContext = struct {
     const Self = @This();
     pub const Node = struct {
@@ -10,6 +27,10 @@ pub const AStarContext = struct {
         x: i32,
         y: i32,
         z: i32,
+    };
+
+    pub const BlockColumn = struct {
+        col: u8,
     };
 
     open: std.ArrayList(*Node),
