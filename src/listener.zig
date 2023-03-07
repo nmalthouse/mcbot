@@ -542,16 +542,16 @@ pub const ChunkMap = struct {
         );
     }
     pub fn getChunkCoord(x: i64, y: i64, z: i64) V3i {
-        const cx = @intCast(i32, @divTrunc(x, 16));
-        const cz = @intCast(i32, @divTrunc(z, 16));
-        const cy = @intCast(i32, @divTrunc(y + 64, 16));
+        const cx = @intCast(i32, @divFloor(x, 16));
+        const cz = @intCast(i32, @divFloor(z, 16));
+        const cy = @intCast(i32, @divFloor(y + 64, 16));
         return .{ .x = cx, .y = cy, .z = cz };
     }
 
     pub fn getChunkSectionPtr(self: *Self, x: i64, y: i64, z: i64) ?*ChunkSection {
-        const cx = @intCast(i32, @divTrunc(x, 16));
-        const cz = @intCast(i32, @divTrunc(z, 16));
-        const cy = @intCast(i32, @divTrunc(y + 64, 16));
+        const cx = @intCast(i32, @divFloor(x, 16));
+        const cz = @intCast(i32, @divFloor(z, 16));
+        const cy = @intCast(i32, @divFloor(y + 64, 16));
 
         const world_z = self.x.getPtr(cx) orelse return null;
         const column = world_z.getPtr(cz) orelse return null;
@@ -559,15 +559,13 @@ pub const ChunkMap = struct {
     }
 
     pub fn getBlock(self: *Self, x: i32, y: i32, z: i32) BLOCK_ID_INT {
-        const cx = @divTrunc(x, 16);
-        const cz = @divTrunc(z, 16);
-        const cy = @divTrunc(y + 64, 16);
+        const cx = @divFloor(x, 16);
+        const cz = @divFloor(z, 16);
+        const cy = @divFloor(y + 64, 16);
 
-        const rx = std.math.absInt(@rem(x, 16)) catch unreachable;
-        const rz = std.math.absInt(@rem(z, 16)) catch unreachable;
-        const ry = std.math.absInt(@rem(y + 64, 16)) catch unreachable;
-
-        //std.debug.print("Provide pos : {d}\t{d}\t{d}\n", .{ x, y, z });
+        const rx = @mod(x, 16);
+        const rz = @mod(z, 16);
+        const ry = @mod(y + 64, 16);
 
         const world_z = self.x.getPtr(cx) orelse unreachable;
         const column = world_z.getPtr(cz) orelse unreachable;
@@ -578,9 +576,6 @@ pub const ChunkMap = struct {
             },
             1...3 => unreachable,
             else => {
-                //TODO Ensure this function works for all possible bpe's
-                //TODO Verify our indexing scheme is correct, is the data actually packed x, z, y
-                //Need a mc client to build a chunk that we can query
                 const block_index = rx + (rz * 16) + (ry * 256);
                 const blocks_per_long = @divTrunc(64, section.bits_per_entry);
                 const data_index = @intCast(u32, @divTrunc(block_index, blocks_per_long));
@@ -601,13 +596,29 @@ pub const ChunkMap = struct {
     pub fn setBlock(self: *Self, x: i64, y: i64, z: i64, id: BLOCK_ID_INT) !void {
         const section = self.getChunkSectionPtr(x, y, z) orelse unreachable;
 
-        const rx = @intCast(i32, @rem(x, 16));
-        const rz = @intCast(i32, @rem(z, 16));
-        const ry = @intCast(i32, @rem(y + 64, 16));
+        const rx = @intCast(u32, @mod(x, 16));
+        const rz = @intCast(u32, @mod(z, 16));
+        const ry = @intCast(u32, @mod(y + 64, 16));
 
         try section.setBlock(rx, ry, rz, id);
     }
 };
+
+pub fn lookAtBlock(pos: V3f, block: V3f) struct { yaw: f32, pitch: f32 } {
+    const vect = block.subtract((pos.add(V3f.new(0, 1.62, 0)))).add(V3f.new(0.5, 0.5, 0.5));
+
+    return .{
+        //.pitch = 180 - std.math.radiansToDegrees(f32, @floatCast(f32, std.math.acos(V3f.new(0, 1, 0).dot(vect) / vect.magnitude()))),
+        .pitch = -std.math.radiansToDegrees(f32, @floatCast(f32, std.math.asin(vect.y / vect.magnitude()))),
+        //.yaw = 90 + std.math.radiansToDegrees(f32, std.math.acos(@floatCast(f32, vect.z / vect.magnitude()))),
+        .yaw = -std.math.radiansToDegrees(f32, @floatCast(f32, std.math.atan2(f64, vect.x, vect.z))),
+        //            yaw = -atan2(dx,dz)/PI*180
+        //if yaw < 0 then
+        //    yaw = 360 + yaw
+        //pitch = -arcsin(dy/r)/PI*180
+
+    };
+}
 
 pub const V3i = struct {
     x: i32,
@@ -662,7 +673,7 @@ pub const ChunkSection = struct {
         return .{ .mapping = std.ArrayList(BLOCK_ID_INT).init(alloc), .data = std.ArrayList(u64).init(alloc), .bits_per_entry = 0 };
     }
 
-    pub fn getBlockIndex(self: *Self, rx: i32, ry: i32, rz: i32) BlockIndex {
+    pub fn getBlockIndex(self: *Self, rx: u32, ry: u32, rz: u32) BlockIndex {
         switch (self.bits_per_entry) {
             0 => {
                 return BlockIndex{ .index = 0, .offset = 0, .bit_count = 0 };
@@ -681,7 +692,7 @@ pub const ChunkSection = struct {
 
     //This function sets the data array to whatever index is mapped to id,
     //The id MUST exist in the mapping.
-    pub fn setData(self: *Self, rx: i32, ry: i32, rz: i32, id: BLOCK_ID_INT) void {
+    pub fn setData(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) void {
         const bi = self.getBlockIndex(rx, ry, rz);
         const long = &self.data.items[bi.index];
         const mask = getBitMask(self.bits_per_entry) << @intCast(u6, bi.offset * bi.bit_count);
@@ -689,7 +700,7 @@ pub const ChunkSection = struct {
         long.* = (long.* & ~mask) | shifted_id;
     }
 
-    pub fn setBlock(self: *Self, rx: i32, ry: i32, rz: i32, id: BLOCK_ID_INT) !void {
+    pub fn setBlock(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) !void {
         if (self.hasMapping(id)) { //No need to update just set relevent data
             self.setData(rx, ry, rz, id);
         } else {

@@ -69,7 +69,7 @@ pub const AStarContext = struct {
         var lowest_index: ?usize = null;
         for (self.open.items) |node, i| {
             if (node.G + (node.H * 10) < lowest) {
-                lowest = node.G + node.H;
+                lowest = node.G + (node.H * 10);
                 lowest_index = i;
             }
         }

@@ -19,6 +19,12 @@ pub const V2i = struct {
     y: i32,
 };
 
+pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
+    const disc = std.math.pow(f64, b, 2) - (4 * a * C);
+    if (disc < 0) return null;
+    return (-b + @sqrt(disc)) / (2 * a);
+}
+
 const ADJ = [8]V2i{
     .{ .x = -1, .y = 1 },
     .{ .x = 0, .y = 1 },
@@ -40,6 +46,17 @@ const ADJ_COST = [8]u32{
     10,
     14,
     10,
+};
+
+pub const MoveItem = struct {
+    pub const MoveKind = enum {
+        walk,
+        fall,
+        jump,
+    };
+
+    kind: MoveKind = .walk,
+    pos: V3f,
 };
 
 pub fn main() !void {
@@ -124,7 +141,7 @@ pub fn main() !void {
     var py: ?f64 = null;
     var pz: ?f64 = null;
 
-    var move_vecs = std.ArrayList(V3f).init(alloc);
+    var move_vecs = std.ArrayList(MoveItem).init(alloc);
     defer move_vecs.deinit();
 
     var complete_login = false;
@@ -132,9 +149,13 @@ pub fn main() !void {
     var do_move = true;
     var old_pos = V3f.new(0, 0, 0);
 
-    var goal: ?V3f = null;
-    const speed: f64 = 3; //BPS
+    var goal: ?MoveItem = null;
+    const speed: f64 = 4; //BPS
     var draw = false;
+
+    var maj_goal: ?V3f = null;
+    var do_jump = false;
+    var jump_timer: f64 = 0;
 
     if (draw) {
         c.InitWindow(1800, 1000, "Window");
@@ -148,7 +169,7 @@ pub fn main() !void {
     camera.up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }; // Camera up vector (rotation towards target)
     camera.fovy = 90.0; // Camera field-of-view Y
     camera.projection = c.CAMERA_PERSPECTIVE;
-    c.DisableCursor();
+    //c.DisableCursor();
     c.SetCameraMode(camera, c.CAMERA_FREE);
 
     var run = true;
@@ -205,7 +226,12 @@ pub fn main() !void {
                     }
 
                     for (move_vecs.items) |mv| {
-                        c.DrawCube(mv.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, c.BLUE);
+                        const color = switch (mv.kind) {
+                            .walk => c.BLUE,
+                            .jump => c.RED,
+                            .fall => c.GREEN,
+                        };
+                        c.DrawCube(mv.pos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, color);
                     }
                 }
                 c.DrawCube(playerpos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 1.0, 1.0, 1.0, c.RED);
@@ -220,27 +246,93 @@ pub fn main() !void {
 
         if (px != null and py != null and pz != null and do_move) {
             const dt: f64 = 1.0 / 20.0;
+
+            const pow = std.math.pow;
+
+            if (do_jump and false) {
+                var new_y = (-16 * pow(f64, jump_timer - @sqrt(0.1), 2)) + 1.6;
+
+                var grounded = false;
+                if (jump_timer > 0 and new_y <= 0) {
+                    grounded = true;
+                    do_jump = false;
+                    new_y = 0;
+                }
+
+                jump_timer += dt;
+
+                try mc.setPlayerPositionRot(
+                    &packet,
+                    swr,
+                    .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
+                    0,
+                    0,
+                    grounded,
+                );
+            } else {
+                //do_jump = true;
+                //jump_timer = 0;
+            }
             if (goal) |gvec| {
                 //goal = null;
                 const pos = V3f.new(px.?, py.?, pz.?);
-                const move_vec = gvec.subtract(pos);
-                const dv = (move_vec.getUnitVec()).smul(speed * dt);
-                if (move_vec.magnitude() > 0.1) {
-                    px.? += dv.x;
-                    py.? += dv.y;
-                    pz.? += dv.z;
+                const move_vec = gvec.pos.subtract(pos);
+                switch (gvec.kind) {
+                    .jump => {
+                        const jump_speed = 1;
+                        const mv = V3f.new(move_vec.x, 0, move_vec.z);
+                        const dv = mv.getUnitVec().smul(jump_speed * dt);
 
-                    try mc.setPlayerPositionRot(
-                        &packet,
-                        swr,
-                        .{ .x = px.?, .y = py.?, .z = pz.? },
-                        0,
-                        0,
-                        true,
-                    );
-                } else {
-                    //goal = null;
-                    goal = move_vecs.popOrNull();
+                        const max_dt = quadFGreater(-16.0, 32.0 * @sqrt(0.1), -1) orelse unreachable; //Solve for y = 1
+                        std.debug.print("MAX DT{d}\n", .{max_dt});
+                        if (jump_timer + dt > max_dt) {
+                            jump_timer = 0;
+                            goal.?.kind = .walk; //Finish this move with a walk
+                            py.? += 1;
+                        } else {
+                            jump_timer += dt;
+                        }
+                        px.? += dv.x;
+                        pz.? += dv.z;
+
+                        var new_y = (-16 * pow(f64, jump_timer - @sqrt(0.1), 2)) + 1.6;
+                        std.debug.print("NEW {d}\n", .{new_y});
+                        try mc.setPlayerPositionRot(
+                            &packet,
+                            swr,
+                            .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
+                            0,
+                            0,
+                            false,
+                        );
+                    },
+                    .fall => {},
+                    .walk => {
+
+                        //const max_dt = pow(f64, move_vec.magnitude(), 2);
+                        const max_dt = move_vec.magnitude() / speed;
+
+                        var dv = (move_vec.getUnitVec()).smul(speed * dt);
+                        if ((max_dt) < dt) {
+                            dv = (move_vec.getUnitVec()).smul(speed * max_dt);
+                            goal = move_vecs.popOrNull();
+                            jump_timer = 0;
+                        }
+
+                        px.? += dv.x;
+                        py.? += dv.y;
+                        pz.? += dv.z;
+                        const pandw = mc.lookAtBlock(pos, V3f.new(11, 10, 32));
+
+                        try mc.setPlayerPositionRot(
+                            &packet,
+                            swr,
+                            .{ .x = px.?, .y = py.?, .z = pz.? },
+                            pandw.yaw,
+                            pandw.pitch,
+                            true,
+                        );
+                    },
                 }
             }
         }
@@ -634,89 +726,203 @@ pub fn main() !void {
 
                                     m_fbs.reset();
                                     const goal_posx: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
+                                    const goal_posy: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
                                     const goal_posz: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
+
+                                    maj_goal = V3f.newi(
+                                        goal_posx,
+                                        goal_posy,
+                                        goal_posz,
+                                    );
 
                                     while (true) {
                                         const current_n = pathctx.popLowestFOpen() orelse break;
 
-                                        if (current_n.x == goal_posx and current_n.z == goal_posz) {
+                                        if (current_n.x == goal_posx and current_n.z == goal_posz and current_n.y == goal_posy) {
                                             var parent: ?*astar.AStarContext.Node = current_n;
                                             try move_vecs.resize(0);
+                                            var last_y = goal_posy;
                                             while (parent.?.parent != null) : (parent = parent.?.parent) {
-                                                try move_vecs.append(
-                                                    V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(
-                                                        //if (parent.?.x < 0) -0.5 else 0.5,
+                                                //if (last_y != parent.?.y) {
+                                                //    try move_vecs.append(.{
+                                                //    .pos =     V3f.newi(parent.?.x, last_y, parent.?.z).subtract(V3f.new(
+                                                //            -0.5,
+                                                //            0,
+                                                //            -0.5,
+                                                //        )),
+                                                //    }
+                                                //    );
+                                                //}
+
+                                                if (parent.?.y < last_y) {
+                                                    move_vecs.items[move_vecs.items.len - 1].kind = .jump;
+                                                } else if (parent.?.y > last_y) {
+                                                    move_vecs.items[move_vecs.items.len - 1].kind = .fall;
+                                                }
+                                                try move_vecs.append(.{
+                                                    //.kind = if (last_y != parent.?.y) .jump else .walk,
+                                                    .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(
                                                         -0.5,
                                                         0,
                                                         -0.5,
-                                                        //if (parent.?.z < 0) -0.5 else 0.5,
-                                                        //0.5 * if (parent.?.y < 0) -1.0 else 1.0,
                                                     )),
-                                                );
+                                                });
+                                                last_y = parent.?.y;
                                             }
 
-                                            goal = move_vecs.pop();
+                                            if (!draw)
+                                                goal = move_vecs.pop();
+                                            jump_timer = 0;
                                             break;
                                         }
 
-                                        var adj_open: [8]bool = undefined;
+                                        var new_adj: [8][8]bool = undefined;
+
+                                        //var adj_open: [8]bool = undefined;
                                         for (ADJ) |a_vec, adj_i| {
                                             const bx = current_n.x + a_vec.x;
                                             const bz = current_n.z + a_vec.y;
                                             const by = current_n.y;
-                                            const floor_block = world.getBlock(bx, by - 1, bz);
-                                            const column = world.getBlock(bx, by, bz) | world.getBlock(bx, by + 1, bz);
+                                            //const floor_block = world.getBlock(bx, by - 1, bz);
+                                            //const column = world.getBlock(bx, by, bz) | world.getBlock(bx, by + 1, bz);
 
-                                            adj_open[adj_i] = (floor_block != 0 and column == 0);
+                                            //adj_open[adj_i] = (floor_block != 0 and column == 0);
+
+                                            {
+                                                var i: u32 = 0;
+                                                while (i < 8) : (i += 1) {
+                                                    new_adj[adj_i][i] = @bitCast(bool, world.getBlock(bx, by - 2 + @intCast(i32, i), bz) != 0);
+                                                }
+                                            }
                                         }
+                                        //Four types of nodes to check
+                                        //strait
+                                        //diagonal //just fagat
+                                        //jump
+                                        //drop
+                                        //
+                                        //1 3 5 7
+                                        { //This is the strait
+                                            //const indicis = [_]usize{ 1, 3, 5, 7 };
+                                            for (new_adj) |adj, adj_i| {
 
-                                        adj_open[0] = adj_open[0] and adj_open[1] and adj_open[7];
-                                        adj_open[2] = adj_open[2] and adj_open[1] and adj_open[3];
-                                        adj_open[4] = adj_open[4] and adj_open[3] and adj_open[5];
-                                        adj_open[6] = adj_open[6] and adj_open[5] and adj_open[7];
+                                                //if (std.mem.indexOfScalar(usize, &indicis, adj_i) == null)
+                                                //    continue;
 
-                                        for (adj_open) |adj, adj_i| {
-                                            if (adj) {
-                                                const avec = ADJ[adj_i];
-                                                var new_node = astar.AStarContext.Node{
-                                                    .x = current_n.x + avec.x,
-                                                    .z = current_n.z + avec.y,
-                                                    .y = current_n.y,
-                                                    .G = ADJ_COST[adj_i] + current_n.G,
-                                                    .H = @intCast(u32, try std.math.absInt(goal_posx - (current_n.x + avec.x)) +
-                                                        try std.math.absInt(goal_posz - (current_n.z + avec.y))),
-                                                };
+                                                var y_offset: i32 = 0;
+                                                if (adj[1] and !adj[2] and !adj[3]) { //Is it free to walk into
+                                                    //add the node
+                                                    y_offset = 0;
+                                                } else if (adj[2] and !adj[3] and !adj[4]) { //We can jump
+                                                    y_offset = 1;
+                                                } else if (adj[0] and !adj[1] and !adj[2] and !adj[3]) { //We can drop onto this block
+                                                    y_offset = -1;
+                                                } else {
+                                                    continue;
+                                                }
 
-                                                var is_on_closed = false;
-                                                for (pathctx.closed.items) |cl| {
-                                                    if (cl.x == new_node.x and cl.y == new_node.y and cl.z == new_node.z) {
-                                                        is_on_closed = true;
-                                                        //std.debug.print("CLOSED\n", .{});
-                                                        break;
+                                                if (@mod(adj_i, 2) == 0) {
+                                                    const l_i = @intCast(u32, @mod(@intCast(i32, adj_i) - 1, 8));
+                                                    const r_i = @mod(adj_i + 1, 8);
+                                                    if (y_offset == 0) {
+                                                        const l = new_adj[l_i];
+                                                        const r = new_adj[r_i];
+                                                        if ((l[1] and !l[2] and !l[3]) and (r[1] and !r[2] and !r[3])) {
+                                                            //continue;
+                                                        } else {
+                                                            continue;
+                                                        }
+                                                    } else {
+                                                        continue;
                                                     }
                                                 }
-                                                new_node.parent = current_n;
-                                                if (!is_on_closed) {
-                                                    var old_open: ?*astar.AStarContext.Node = null;
-                                                    for (pathctx.open.items) |op| {
-                                                        if (op.x == new_node.x and op.y == new_node.y and op.z == new_node.z) {
-                                                            old_open = op;
-                                                            //std.debug.print("EXISTS BEFORE\n", .{});
+
+                                                {
+                                                    const avec = ADJ[adj_i];
+                                                    var new_node = astar.AStarContext.Node{
+                                                        .x = current_n.x + avec.x,
+                                                        .z = current_n.z + avec.y,
+                                                        .y = current_n.y + y_offset,
+                                                        .G = ADJ_COST[adj_i] + current_n.G + @intCast(u32, (try std.math.absInt(y_offset)) * 1),
+                                                        //TODO fix the hurestic
+                                                        .H = @intCast(u32, try std.math.absInt(goal_posx - (current_n.x + avec.x)) +
+                                                            try std.math.absInt(goal_posz - (current_n.z + avec.y))),
+                                                    };
+
+                                                    var is_on_closed = false;
+                                                    for (pathctx.closed.items) |cl| {
+                                                        if (cl.x == new_node.x and cl.y == new_node.y and cl.z == new_node.z) {
+                                                            is_on_closed = true;
+                                                            //std.debug.print("CLOSED\n", .{});
                                                             break;
                                                         }
                                                     }
-
-                                                    if (old_open) |op| {
-                                                        if (new_node.G < op.G) {
-                                                            op.parent = current_n;
-                                                            op.G = new_node.G;
+                                                    new_node.parent = current_n;
+                                                    if (!is_on_closed) {
+                                                        var old_open: ?*astar.AStarContext.Node = null;
+                                                        for (pathctx.open.items) |op| {
+                                                            if (op.x == new_node.x and op.y == new_node.y and op.z == new_node.z) {
+                                                                old_open = op;
+                                                                //std.debug.print("EXISTS BEFORE\n", .{});
+                                                                break;
+                                                            }
                                                         }
-                                                    } else {
-                                                        try pathctx.addOpen(new_node);
+
+                                                        if (old_open) |op| {
+                                                            if (new_node.G < op.G) {
+                                                                op.parent = current_n;
+                                                                op.G = new_node.G;
+                                                            }
+                                                        } else {
+                                                            try pathctx.addOpen(new_node);
+                                                        }
                                                     }
                                                 }
                                             }
                                         }
+
+                                        //for (adj_open) |adj, adj_i| {
+                                        //    if (adj) {
+                                        //        const avec = ADJ[adj_i];
+                                        //        var new_node = astar.AStarContext.Node{
+                                        //            .x = current_n.x + avec.x,
+                                        //            .z = current_n.z + avec.y,
+                                        //            .y = current_n.y,
+                                        //            .G = ADJ_COST[adj_i] + current_n.G,
+                                        //            .H = @intCast(u32, try std.math.absInt(goal_posx - (current_n.x + avec.x)) +
+                                        //                try std.math.absInt(goal_posz - (current_n.z + avec.y))),
+                                        //        };
+
+                                        //        var is_on_closed = false;
+                                        //        for (pathctx.closed.items) |cl| {
+                                        //            if (cl.x == new_node.x and cl.y == new_node.y and cl.z == new_node.z) {
+                                        //                is_on_closed = true;
+                                        //                //std.debug.print("CLOSED\n", .{});
+                                        //                break;
+                                        //            }
+                                        //        }
+                                        //        new_node.parent = current_n;
+                                        //        if (!is_on_closed) {
+                                        //            var old_open: ?*astar.AStarContext.Node = null;
+                                        //            for (pathctx.open.items) |op| {
+                                        //                if (op.x == new_node.x and op.y == new_node.y and op.z == new_node.z) {
+                                        //                    old_open = op;
+                                        //                    //std.debug.print("EXISTS BEFORE\n", .{});
+                                        //                    break;
+                                        //                }
+                                        //            }
+
+                                        //            if (old_open) |op| {
+                                        //                if (new_node.G < op.G) {
+                                        //                    op.parent = current_n;
+                                        //                    op.G = new_node.G;
+                                        //                }
+                                        //            } else {
+                                        //                try pathctx.addOpen(new_node);
+                                        //            }
+                                        //        }
+                                        //    }
+                                        //}
                                     }
 
                                     //try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
@@ -735,11 +941,25 @@ pub fn main() !void {
                                     try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
                                 } else if (eql(u8, key, "moverel")) {
                                     {
-                                        goal = V3f.new(
+                                        goal = .{ .pos = V3f.new(
                                             px.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
                                             py.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
                                             pz.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                        );
+                                        ) };
+                                    }
+                                } else if (eql(u8, key, "lookat")) {
+                                    const v = V3f.new(
+                                        @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+                                        @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+                                        @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+                                    );
+                                    const pw = mc.lookAtBlock(V3f.new(px.?, py.?, pz.?), v);
+                                    try mc.setPlayerPositionRot(&packet, swr, V3f.new(px.?, py.?, pz.?), pw.yaw, pw.pitch, true);
+                                } else if (eql(u8, key, "jump")) {
+                                    if (do_jump == false) {
+                                        try mc.sendChat(&packet, server.writer(), "jumping");
+                                        do_jump = true;
+                                        jump_timer = 0;
                                     }
                                 } else if (eql(u8, key, "query")) {
                                     const qbx: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
