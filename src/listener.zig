@@ -295,25 +295,6 @@ pub fn readVarIntWithError(reader: anytype) !i32 {
     return @bitCast(i32, value);
 }
 
-//public int readVarInt() {
-//    int value = 0;
-//    int position = 0;
-//    byte currentByte;
-//
-//    while (true) {
-//        currentByte = readByte();
-//        value |= (currentByte & SEGMENT_BITS) << position;
-//
-//        if ((currentByte & CONTINUE_BIT) == 0) break;
-//
-//        position += 7;
-//
-//        if (position >= 32) throw new RuntimeException("VarInt is too big");
-//    }
-//
-//    return value;
-//}
-
 test "toVarLong" {
     const expect = std.testing.expect;
 
@@ -395,7 +376,6 @@ test "toVarInt" {
 pub const ParsedPacket = struct {
     const Self = @This();
 
-    //TODO keep track of the state that this packet was recieved in, login, play
     id: i32,
     len: i32,
     buffer: std.ArrayList(u8),
@@ -433,9 +413,15 @@ pub fn cmdThread(
         var msg = std.ArrayList(u8).init(alloc);
         msg.appendSlice(read) catch unreachable;
 
+        if ((msg.items.len == 1 and msg.items[0] != '\n') or msg.items.len == 0) {
+            msg.resize(0) catch unreachable;
+            msg.appendSlice("exit\n") catch unreachable;
+        }
+
         node.* = .{ .prev = null, .next = null, .data = .{ .id = 0, .len = 0, .buffer = msg, .msg_type = .local } };
         queue.put(node);
         q_cond.signal();
+
         if (std.mem.eql(u8, "exit", msg.items[0 .. msg.items.len - 1])) {
             return;
         }
@@ -459,8 +445,6 @@ pub const ServerListener = struct {
         invalid,
     };
 
-    //pub fn parserThreadErrorHandler(err: anyerror)
-
     pub fn parserThread(
         alloc: std.mem.Allocator,
         reader: std.net.Stream.Reader,
@@ -475,10 +459,6 @@ pub const ServerListener = struct {
                 parsed.len = readVarIntWithError(reader) catch |err| break :blk err;
                 parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
                 var data_count: u32 = toVarInt(parsed.id).len;
-                //std.debug.print("Packet with len: {x} id {s}\n", .{
-                //    parsed.len,
-                //    IDS.packet_ids[@intCast(u32, parsed.id)],
-                //});
                 {
                     //std.debug.print("parsing data\n", .{});
                     while (data_count < parsed.len) : (data_count += 1) {
@@ -700,6 +680,7 @@ pub const ChunkSection = struct {
         long.* = (long.* & ~mask) | shifted_id;
     }
 
+    //TODO Modify all relevent functions to support direct indexing for bits_per_entry > 8
     pub fn setBlock(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) !void {
         if (self.hasMapping(id)) { //No need to update just set relevent data
             self.setData(rx, ry, rz, id);

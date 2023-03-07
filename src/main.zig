@@ -64,7 +64,26 @@ pub fn main() !void {
     defer _ = gpa.detectLeaks();
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
-    const server = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
+
+    const hosts_to_try = [_]struct { hostname: []const u8, port: u16 }{
+        .{ .hostname = "localhost", .port = 25565 },
+        .{ .hostname = "24.148.84.56", .port = 59438 },
+    };
+    const server = blk: {
+        for (hosts_to_try) |h| {
+            const s = std.net.tcpConnectToHost(alloc, h.hostname, h.port) catch |err| switch (err) {
+                error.ConnectionRefused => {
+                    continue;
+                },
+                else => {
+                    return err;
+                },
+            };
+            std.debug.print("Connecting to: {s} : {d}\n", .{ h.hostname, h.port });
+            break :blk s;
+        }
+        unreachable;
+    };
 
     var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
     defer block_table.deinit(alloc);
@@ -569,12 +588,12 @@ pub fn main() !void {
 
                             var index = try reader.readInt(u8, .Big);
                             while (index != 0xff) : (index = try reader.readInt(u8, .Big)) {
-                                std.debug.print("\tIndex {d}\n", .{index});
+                                //std.debug.print("\tIndex {d}\n", .{index});
                                 const metatype = @intToEnum(mc.MetaDataType, mc.readVarInt(reader));
-                                std.debug.print("\tMetadata: {}\n", .{metatype});
+                                //std.debug.print("\tMetadata: {}\n", .{metatype});
                                 switch (metatype) {
                                     else => {
-                                        std.debug.print("\tENTITY METADATA TYPE NOT IMPLEMENTED\n", .{});
+                                        //std.debug.print("\tENTITY METADATA TYPE NOT IMPLEMENTED\n", .{});
                                         break;
                                     },
                                 }
@@ -593,12 +612,12 @@ pub fn main() !void {
                             try chunk_data.resize(@intCast(usize, data_size));
                             try reader.readNoEof(chunk_data.items);
 
-                            //TODO iterate all the chunk sections not just the first
                             var chunk: mc.Chunk = undefined;
                             var chunk_i: u32 = 0;
                             var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = chunk_data.items, .pos = 0 };
                             const cr = chunk_fbs.reader();
-                            while (chunk_i < 16) : (chunk_i += 1) { //TODO determine number of chunk sections some other way
+                            //TODO determine number of chunk sections some other way
+                            while (chunk_i < 16) : (chunk_i += 1) {
 
                                 //std.debug.print(" CHUKN SEC {d}\n", .{chunk_i});
                                 const block_count = try cr.readInt(i16, .Big);
