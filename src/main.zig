@@ -65,11 +65,11 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
-    const hosts_to_try = [_]struct { hostname: []const u8, port: u16 }{
-        .{ .hostname = "localhost", .port = 25565 },
-        .{ .hostname = "24.148.84.56", .port = 59438 },
-    };
     const server = blk: {
+        const hosts_to_try = [_]struct { hostname: []const u8, port: u16 }{
+            .{ .hostname = "localhost", .port = 25565 },
+            .{ .hostname = "24.148.84.56", .port = 59438 },
+        };
         for (hosts_to_try) |h| {
             const s = std.net.tcpConnectToHost(alloc, h.hostname, h.port) catch |err| switch (err) {
                 error.ConnectionRefused => {
@@ -90,38 +90,6 @@ pub fn main() !void {
 
     var world = mc.ChunkMap.init(alloc);
     defer world.deinit();
-
-    if (false) {
-        const cwd = std.fs.cwd();
-        const f = cwd.openFile("an.json", .{}) catch null;
-        if (f) |cont| {
-            var buf: []const u8 = try cont.readToEndAlloc(alloc, 1024 * 1024 * 1024);
-            defer alloc.free(buf);
-
-            var ts = std.json.TokenStream.init(buf);
-            var ret = try std.json.parse([]mc.PacketAnalysisJson, &ts, .{ .allocator = alloc });
-            defer std.json.parseFree([]mc.PacketAnalysisJson, ret, .{ .allocator = alloc });
-
-            for (ret) |s| {
-                var fbs = std.io.FixedBufferStream([]const u8){ .buffer = s.data, .pos = 0 };
-                const r = fbs.reader();
-                const plen = mc.readVarInt(r);
-                _ = plen;
-                const pid = mc.readVarInt(r);
-                if (std.mem.eql(u8, s.bound_to, "s")) {
-                    std.debug.print("{d} S pid {s}\n", .{ s.timestamp, id_list.packet_ids[@intCast(u32, pid)] });
-                } else {
-                    std.debug.print("{d} C pid {s}\n", .{ s.timestamp, id_list.ServerBoundPlayIds[@intCast(u32, pid)] });
-                }
-            }
-        } else {
-            std.debug.print("analysis file not found\n", .{});
-        }
-    }
-
-    //if (true) {
-    //return;
-    //}
 
     var q_cond: std.Thread.Condition = .{};
     var q_mutex: std.Thread.Mutex = .{};
@@ -376,6 +344,7 @@ pub fn main() !void {
                             std.debug.print("Login\n", .{});
                             const p_id = try reader.readInt(u32, .Big);
                             std.debug.print("\tid: {d}\n", .{p_id});
+                            bot1.e_id = p_id;
                             player_id = p_id;
                             start_rot = true;
                         },
@@ -585,6 +554,8 @@ pub fn main() !void {
                         .Set_Entity_Metadata => {
                             const e_id = mc.readVarInt(reader);
                             std.debug.print("Set Entity Metadata: {d}\n", .{e_id});
+                            if (e_id == bot1.e_id)
+                                std.debug.print("\tFOR PLAYER\n", .{});
 
                             var index = try reader.readInt(u8, .Big);
                             while (index != 0xff) : (index = try reader.readInt(u8, .Big)) {

@@ -3,6 +3,9 @@ import json
 
 
 with open("full_blocks.json") as jfile:
+    named_props = json.load(open("name_props.json"))
+
+
     # Dictionary of unique properties with list of blocks that use them
     uprops = []
 
@@ -35,12 +38,24 @@ with open("full_blocks.json") as jfile:
 
         array.append({"lower": starting_id,"upper": starting_id + num_states - 1 })
         info = {}
+        info["properties"] = []
         info["id"] = starting_id
         info["name"] = block
 
 
         if "properties" in jobj[block]:
             for prop in jobj[block]["properties"]:
+                found = False
+                for item in named_props:
+                    for bl in item["blocks"]:
+                        if bl == block:
+                            if "zig_prop_name" in item and (not found):
+                                print(item["zig_prop_name"], block)
+                                info["properties"].append({item["zig_prop_name"]: 0})
+                                found = True
+                #if not found:
+                #    info["properties"].append({"Unimplemented": len(jobj[block]["properties"][prop])})
+
                 index_of_prop = -1
                 index = 0
                 for item in uprops:
@@ -58,45 +73,26 @@ with open("full_blocks.json") as jfile:
 
 
 
+          #  num_with_props += 1
+          #  # info["properties"] = jobj[block]["properties"]
+          #  for prop in jobj[block]["properties"]:
+          #      properties[block]["count"] *= len(jobj[block]["properties"][prop])
+          #      if not (prop in pro):
+          #          pro[prop] = []
+          #          pro2[prop] = {}
+          #          pro2[prop]["prop"] = []
 
+          #      if jobj[block]["properties"][prop] not in pro2[prop]["prop"]:
+          #          pro2[prop]["prop"].append(jobj[block]["properties"][prop])
+          #          pro2[prop]["blocks"] = []
 
+          #      pro2[prop]["blocks"].append(block)
 
-            num_with_props += 1
-            # info["properties"] = jobj[block]["properties"]
-            for prop in jobj[block]["properties"]:
-                properties[block]["count"] *= len(jobj[block]["properties"][prop])
-                if not (prop in pro):
-                    pro[prop] = []
-                    pro2[prop] = {}
-                    pro2[prop]["prop"] = []
-
-                if jobj[block]["properties"][prop] not in pro2[prop]["prop"]:
-                    pro2[prop]["prop"].append(jobj[block]["properties"][prop])
-                    pro2[prop]["blocks"] = []
-
-                pro2[prop]["blocks"].append(block)
-
-                for item in jobj[block]["properties"][prop]:
-                    if item not in pro[prop]:
-                        pro[prop].append(item)
+          #      for item in jobj[block]["properties"][prop]:
+          #          if item not in pro[prop]:
+          #              pro[prop].append(item)
 
         block_info.append(info)
-
-
-    for key in properties:
-        print(key, properties[key])
-
-    total = 0
-    for key in properties:
-        total += properties[key]["count_state"]
-
-    print("numblocks: ", num_blocks, "block_ids: ", total, "avg id per block: ", total / num_blocks)
-
-    #with open("output.json", "w") as outj:
-    #    outj.write(json.dumps(properties))
-
-    #with open("props.json", "w") as outj:
-    #    outj.write(json.dumps(pro))
 
     with open("uprops.json", "w") as outj:
         outj.write(json.dumps(sorted(uprops, key =lambda item: str.lower(item["prop_name"]))))
@@ -107,4 +103,3 @@ with open("full_blocks.json") as jfile:
     with open("block_info_array.json", "w") as outj:
         outj.write(json.dumps(sorted(block_info, key=lambda item: item["id"])))
     
-    print("num with props", num_with_props)

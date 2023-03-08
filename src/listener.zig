@@ -794,21 +794,15 @@ pub const BlockRegistry = struct {
     };
 
     pub const BlockInfo = struct {
-        pub const Property = struct {
-            pub const Data = union {
-                pub const Unimplemented = u8;
-                pub const Facing = enum { north, south, west, east };
-            };
-
-            data: Data,
-
-            state_count: u8,
+        pub const Property = union(enum(u32)) {
+            //pub const Unimplemented = u32;
+            pub const Facing = enum { north, south, west, east };
         };
 
         name: []const u8,
         id: u16,
 
-        //properties: []const Property,
+        properties: []const Property,
     };
 
     id_array: []IdRange,
