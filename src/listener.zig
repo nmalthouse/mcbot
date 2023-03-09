@@ -777,6 +777,64 @@ pub fn freeJson(comptime T: type, alloc: std.mem.Allocator, item: T) void {
     std.json.parseFree(T, item, .{ .allocator = alloc });
 }
 
+pub const TagRegistry = struct {
+    const Self = @This();
+
+    strings: std.ArrayList(std.ArrayList(u8)),
+
+    tags: std.StringHashMap(std.StringHashMap(std.ArrayList(u32))),
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator) Self {
+        return Self{
+            .strings = std.ArrayList(std.ArrayList(u8)).init(alloc),
+            .tags = std.StringHashMap(std.StringHashMap(std.ArrayList(u32))).init(alloc),
+            .alloc = alloc,
+        };
+    }
+
+    pub fn addTag(self: *Self, tag_ident: []const u8, tag_name: []const u8, id_list: []const u32) !void {
+        const r = try self.tags.getOrPut(tag_ident);
+        if (!r.found_existing) {
+            r.value_ptr.* = std.StringHashMap(std.ArrayList(u32)).init(self.alloc);
+            try self.strings.append(std.ArrayList(u8).init(self.alloc));
+            try self.strings.items[self.strings.items.len - 1].appendSlice(tag_ident);
+            r.key_ptr.* = self.strings.items[self.strings.items.len - 1].items;
+        }
+
+        const r2 = try r.value_ptr.getOrPut(tag_name);
+        //const r2 = try (self.tags.getPtr(tag_ident) orelse unreachable).getOrPut(tag_name);
+        if (!r2.found_existing) {
+            r2.value_ptr.* = std.ArrayList(u32).init(self.alloc);
+
+            try self.strings.append(std.ArrayList(u8).init(self.alloc));
+            try self.strings.items[self.strings.items.len - 1].appendSlice(tag_name);
+            r2.key_ptr.* = self.strings.items[self.strings.items.len - 1].items;
+        } else {
+            unreachable;
+        }
+
+        try r2.value_ptr.appendSlice(id_list);
+    }
+
+    pub fn deinit(self: *Self) void {
+        var it = self.tags.iterator();
+        while (it.next()) |kv| {
+            var tit = kv.value_ptr.iterator();
+            while (tit.next()) |kv2| {
+                kv2.value_ptr.deinit();
+            }
+            kv.value_ptr.deinit();
+        }
+        self.tags.deinit();
+
+        for (self.strings.items) |*str| {
+            str.deinit();
+        }
+        self.strings.deinit();
+    }
+};
+
 pub const BlockRegistry = struct {
     const Self = @This();
 
@@ -802,7 +860,7 @@ pub const BlockRegistry = struct {
         name: []const u8,
         id: u16,
 
-        properties: []const Property,
+        //properties: []const Property,
     };
 
     id_array: []IdRange,

@@ -88,6 +88,9 @@ pub fn main() !void {
     var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
     defer block_table.deinit(alloc);
 
+    var tag_table = mc.TagRegistry.init(alloc);
+    defer tag_table.deinit();
+
     var world = mc.ChunkMap.init(alloc);
     defer world.deinit();
 
@@ -571,6 +574,41 @@ pub fn main() !void {
                             }
                         },
                         .Update_Time => {},
+                        .Update_Tags => {
+                            const num_tags = mc.readVarInt(reader);
+
+                            var identifier = std.ArrayList(u8).init(alloc);
+                            defer identifier.deinit();
+
+                            var n: u32 = 0;
+                            while (n < num_tags) : (n += 1) {
+                                const i_len = mc.readVarInt(reader);
+                                try identifier.resize(@intCast(usize, i_len));
+                                try reader.readNoEof(identifier.items);
+                                { //TAG
+                                    const n_tags = mc.readVarInt(reader);
+                                    var nj: u32 = 0;
+
+                                    var ident = std.ArrayList(u8).init(alloc);
+                                    defer ident.deinit();
+
+                                    while (nj < n_tags) : (nj += 1) {
+                                        const l = mc.readVarInt(reader);
+                                        try ident.resize(@intCast(usize, l));
+                                        try reader.readNoEof(ident.items);
+                                        const num_ids = mc.readVarInt(reader);
+
+                                        var ids = std.ArrayList(u32).init(alloc);
+                                        defer ids.deinit();
+                                        try ids.resize(@intCast(usize, num_ids));
+                                        var ni: u32 = 0;
+                                        while (ni < num_ids) : (ni += 1)
+                                            ids.items[ni] = @intCast(u32, mc.readVarInt(reader));
+                                        try tag_table.addTag(identifier.items, ident.items, ids.items);
+                                    }
+                                }
+                            }
+                        },
                         .Chunk_Data_and_Update_Light => {
                             const cx = try reader.readInt(i32, .Big);
                             const cy = try reader.readInt(i32, .Big);
