@@ -54,6 +54,7 @@ pub fn setPlayerPositionRot(packet: *Packet, server: Serv, pos: V3f, yaw: f32, p
     try packet.float(yaw);
     try packet.float(pitch);
     try packet.boolean(grounded);
+    std.debug.print("MOVE PACKET {d} {d} {d} {any}\n", .{ pos.x, pos.y, pos.z, grounded });
     _ = try server.write(packet.getWritableBuffer());
 }
 

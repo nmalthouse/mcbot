@@ -25,6 +25,12 @@ pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
     return (-b + @sqrt(disc)) / (2 * a);
 }
 
+pub fn quadFLess(a: f64, b: f64, C: f64) ?f64 {
+    const disc = std.math.pow(f64, b, 2) - (4 * a * C);
+    if (disc < 0) return null;
+    return (-b - @sqrt(disc)) / (2 * a);
+}
+
 const ADJ = [8]V2i{
     .{ .x = -1, .y = 1 },
     .{ .x = 0, .y = 1 },
@@ -87,6 +93,10 @@ pub fn main() !void {
 
     var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
     defer block_table.deinit(alloc);
+
+    for (block_table.block_info_array) |info, i| {
+        std.debug.print("{d}: {d} {s}\n", .{ i, info.id, info.name });
+    }
 
     var tag_table = mc.TagRegistry.init(alloc);
     defer tag_table.deinit();
@@ -267,62 +277,89 @@ pub fn main() !void {
                 //goal = null;
                 const pos = V3f.new(px.?, py.?, pz.?);
                 const move_vec = gvec.pos.subtract(pos);
-                switch (gvec.kind) {
-                    .jump => {
-                        const jump_speed = 1;
-                        const mv = V3f.new(move_vec.x, 0, move_vec.z);
-                        const dv = mv.getUnitVec().smul(jump_speed * dt);
+                if (move_vec.magnitude() == 0) {
+                    jump_timer = 0;
+                    goal = move_vecs.popOrNull();
+                } else {
+                    switch (gvec.kind) {
+                        .jump => {
+                            const jump_speed = 1;
+                            const mv = V3f.new(move_vec.x, 0, move_vec.z);
+                            const dv = mv.getUnitVec().smul(jump_speed * dt);
 
-                        const max_dt = quadFGreater(-16.0, 32.0 * @sqrt(0.1), -1) orelse unreachable; //Solve for y = 1
-                        std.debug.print("MAX DT{d}\n", .{max_dt});
-                        if (jump_timer + dt > max_dt) {
-                            jump_timer = 0;
-                            goal.?.kind = .walk; //Finish this move with a walk
-                            py.? += 1;
-                        } else {
-                            jump_timer += dt;
-                        }
-                        px.? += dv.x;
-                        pz.? += dv.z;
+                            const max_dt = quadFGreater(-16.0, 32.0 * @sqrt(0.1), -1) orelse unreachable; //Solve for y = 1
+                            var new_y: f64 = 0;
+                            if (jump_timer + dt > max_dt) {
+                                jump_timer = 0;
+                                goal.?.kind = .walk; //Finish this move with a walk
+                                py.? += 1;
+                            } else {
+                                jump_timer += dt;
+                                new_y = (-16 * pow(f64, jump_timer - @sqrt(0.1), 2)) + 1.6;
+                            }
+                            px.? += dv.x;
+                            pz.? += dv.z;
 
-                        var new_y = (-16 * pow(f64, jump_timer - @sqrt(0.1), 2)) + 1.6;
-                        std.debug.print("NEW {d}\n", .{new_y});
-                        try mc.setPlayerPositionRot(
-                            &packet,
-                            swr,
-                            .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
-                            0,
-                            0,
-                            false,
-                        );
-                    },
-                    .fall => {},
-                    .walk => {
+                            try mc.setPlayerPositionRot(
+                                &packet,
+                                swr,
+                                .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
+                                0,
+                                0,
+                                false,
+                            );
+                        },
+                        .fall => {
+                            std.debug.print("Falling\n", .{});
+                            const max_dt = quadFLess(-9.8, 0, 1) orelse unreachable; //Solve for y = 1
+                            var grounded = false;
+                            var new_y: f64 = 0;
+                            if (jump_timer + dt > max_dt) {
+                                jump_timer = 0;
+                                goal = move_vecs.popOrNull();
+                                py.? -= 1;
+                                grounded = true;
+                            } else {
+                                jump_timer += dt;
+                                new_y = (-9.8 * pow(f64, jump_timer, 2));
+                            }
 
-                        //const max_dt = pow(f64, move_vec.magnitude(), 2);
-                        const max_dt = move_vec.magnitude() / speed;
+                            try mc.setPlayerPositionRot(
+                                &packet,
+                                swr,
+                                .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
+                                0,
+                                0,
+                                grounded,
+                            );
+                        },
+                        .walk => {
 
-                        var dv = (move_vec.getUnitVec()).smul(speed * dt);
-                        if ((max_dt) < dt) {
-                            dv = (move_vec.getUnitVec()).smul(speed * max_dt);
-                            goal = move_vecs.popOrNull();
-                            jump_timer = 0;
-                        }
+                            //const max_dt = pow(f64, move_vec.magnitude(), 2);
+                            const max_dt = move_vec.magnitude() / speed;
 
-                        px.? += dv.x;
-                        py.? += dv.y;
-                        pz.? += dv.z;
-                        const pandw = mc.lookAtBlock(pos, V3f.new(11, 10, 32));
+                            var dv = (move_vec.getUnitVec()).smul(speed * dt);
+                            if ((max_dt) < dt) {
+                                dv = (move_vec.getUnitVec()).smul(speed * max_dt);
+                                jump_timer = 0;
+                                goal = move_vecs.popOrNull();
+                            }
 
-                        try mc.setPlayerPositionRot(
-                            &packet,
-                            swr,
-                            .{ .x = px.?, .y = py.?, .z = pz.? },
-                            pandw.yaw,
-                            pandw.pitch,
-                            true,
-                        );
-                    },
+                            px.? += dv.x;
+                            py.? += dv.y;
+                            pz.? += dv.z;
+                            const pandw = mc.lookAtBlock(pos, V3f.new(11, 10, 32));
+
+                            try mc.setPlayerPositionRot(
+                                &packet,
+                                swr,
+                                .{ .x = px.?, .y = py.?, .z = pz.? },
+                                pandw.yaw,
+                                pandw.pitch,
+                                true,
+                            );
+                        },
+                    }
                 }
             }
         }
@@ -363,7 +400,7 @@ pub fn main() !void {
                             std.debug.print("Plugin Message: {s}\n", .{identifier.items});
 
                             try mc.pluginMessage(&packet, swr, "tony:brand");
-                            try mc.clientInfo(&packet, swr, "en_US", 2, 1);
+                            try mc.clientInfo(&packet, swr, "en_US", 6, 1);
                         },
                         .Change_Difficulty => {
                             const diff = try reader.readByte();
@@ -556,7 +593,7 @@ pub fn main() !void {
                         },
                         .Set_Entity_Metadata => {
                             const e_id = mc.readVarInt(reader);
-                            std.debug.print("Set Entity Metadata: {d}\n", .{e_id});
+                            //std.debug.print("Set Entity Metadata: {d}\n", .{e_id});
                             if (e_id == bot1.e_id)
                                 std.debug.print("\tFOR PLAYER\n", .{});
 
@@ -575,6 +612,7 @@ pub fn main() !void {
                         },
                         .Update_Time => {},
                         .Update_Tags => {
+                            //TODO Does this packet replace all the tags or does it append to an existing
                             const num_tags = mc.readVarInt(reader);
 
                             var identifier = std.ArrayList(u8).init(alloc);
@@ -604,13 +642,15 @@ pub fn main() !void {
                                         var ni: u32 = 0;
                                         while (ni < num_ids) : (ni += 1)
                                             ids.items[ni] = @intCast(u32, mc.readVarInt(reader));
-                                        std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
+                                        //std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
                                         try tag_table.addTag(identifier.items, ident.items, ids.items);
                                     }
                                 }
                             }
-                            const blocks = tag_table.tags.getPtr("minecraft:block") orelse unreachable;
-                            std.debug.print("stairs : {any}\n", .{(blocks.getPtr("minecraft:stairs") orelse unreachable).items});
+                            //const blocks = tag_table.tags.getPtr("minecraft:block") orelse unreachable;
+                            //for ((blocks.getPtr("minecraft:stairs") orelse unreachable).items) |it| {
+                            //    std.debug.print("{s}\n", .{block_table.block_info_array[it].name});
+                            //}
                             //var it = (blocks.getPtr("minecraft:stairs") orelse unreachable).iterator();
                             //while (it.next()) |kv| {
                             //std.debug.print("\t{any}\n", .{kv.value_ptr.*});
@@ -778,21 +818,15 @@ pub fn main() !void {
                                             try move_vecs.resize(0);
                                             var last_y = goal_posy;
                                             while (parent.?.parent != null) : (parent = parent.?.parent) {
-                                                //if (last_y != parent.?.y) {
-                                                //    try move_vecs.append(.{
-                                                //    .pos =     V3f.newi(parent.?.x, last_y, parent.?.z).subtract(V3f.new(
-                                                //            -0.5,
-                                                //            0,
-                                                //            -0.5,
-                                                //        )),
-                                                //    }
-                                                //    );
-                                                //}
-
                                                 if (parent.?.y < last_y) {
                                                     move_vecs.items[move_vecs.items.len - 1].kind = .jump;
                                                 } else if (parent.?.y > last_y) {
                                                     move_vecs.items[move_vecs.items.len - 1].kind = .fall;
+                                                    const last = move_vecs.items[move_vecs.items.len - 1];
+                                                    try move_vecs.append(.{
+                                                        .kind = .walk,
+                                                        .pos = last.pos.add(V3f.new(0, 1, 0)),
+                                                    });
                                                 }
                                                 try move_vecs.append(.{
                                                     //.kind = if (last_y != parent.?.y) .jump else .walk,
@@ -803,6 +837,14 @@ pub fn main() !void {
                                                     )),
                                                 });
                                                 last_y = parent.?.y;
+                                            }
+                                            if (@floatToInt(i32, py.?) > last_y) {
+                                                move_vecs.items[move_vecs.items.len - 1].kind = .fall;
+                                                const last = move_vecs.items[move_vecs.items.len - 1];
+                                                try move_vecs.append(.{
+                                                    .kind = .walk,
+                                                    .pos = last.pos.add(V3f.new(0, 1, 0)),
+                                                });
                                             }
 
                                             if (!draw)
