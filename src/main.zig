@@ -604,10 +604,17 @@ pub fn main() !void {
                                         var ni: u32 = 0;
                                         while (ni < num_ids) : (ni += 1)
                                             ids.items[ni] = @intCast(u32, mc.readVarInt(reader));
+                                        std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
                                         try tag_table.addTag(identifier.items, ident.items, ids.items);
                                     }
                                 }
                             }
+                            const blocks = tag_table.tags.getPtr("minecraft:block") orelse unreachable;
+                            std.debug.print("stairs : {any}\n", .{(blocks.getPtr("minecraft:stairs") orelse unreachable).items});
+                            //var it = (blocks.getPtr("minecraft:stairs") orelse unreachable).iterator();
+                            //while (it.next()) |kv| {
+                            //std.debug.print("\t{any}\n", .{kv.value_ptr.*});
+                            //}
                         },
                         .Chunk_Data_and_Update_Light => {
                             const cx = try reader.readInt(i32, .Big);

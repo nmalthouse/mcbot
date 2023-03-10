@@ -38,21 +38,21 @@ with open("full_blocks.json") as jfile:
 
         array.append({"lower": starting_id,"upper": starting_id + num_states - 1 })
         info = {}
-        info["properties"] = []
+        # info["properties"] = []
         info["id"] = starting_id
         info["name"] = block
 
 
         if "properties" in jobj[block]:
             for prop in jobj[block]["properties"]:
-                found = False
-                for item in named_props:
-                    for bl in item["blocks"]:
-                        if bl == block:
-                            if "zig_prop_name" in item and (not found):
-                                print(item["zig_prop_name"], block)
-                                info["properties"].append({item["zig_prop_name"]: 0})
-                                found = True
+            #    found = False
+            #    for item in named_props:
+            #        for bl in item["blocks"]:
+            #            if bl == block:
+            #                if "zig_prop_name" in item and (not found):
+            #                    print(item["zig_prop_name"], block)
+            #                    info["properties"].append({item["zig_prop_name"]: 0})
+            #                    found = True
                 #if not found:
                 #    info["properties"].append({"Unimplemented": len(jobj[block]["properties"][prop])})
 
