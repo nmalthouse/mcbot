@@ -8,83 +8,95 @@ const V3f = vector.V3f;
 const Queue = std.atomic.Queue;
 
 const Serv = std.net.Stream.Writer;
-pub fn sendChat(packet: *Packet, server: Serv, msg: []const u8) !void {
-    if (msg.len > 255) return error.msgToLong;
-    try packet.clear();
-    try packet.varInt(0x05);
-    try packet.string(msg);
-    try packet.long(0);
-    try packet.long(0);
-    try packet.boolean(false);
-    try packet.int32(0);
-    _ = try server.write(packet.getWritableBuffer());
-}
+pub const PacketCtx = struct {
+    packet: Packet,
+    server: Serv,
 
-pub fn handshake(packet: *Packet, server: Serv, hostname: []const u8, port: u16) !void {
-    try packet.clear();
-    try packet.varInt(0); //Packet id
-    try packet.varInt(761); //Protocol version
-    try packet.string(hostname);
-    try packet.short(port);
-    try packet.varInt(2); //Next state
-    _ = try server.write(packet.getWritableBuffer());
-}
+    pub fn sendChat(self: *@This(), msg: []const u8) !void {
+        if (msg.len > 255) return error.msgToLong;
+        try self.packet.clear();
+        try self.packet.varInt(0x05);
+        try self.packet.string(msg);
+        try self.packet.long(0);
+        try self.packet.long(0);
+        try self.packet.boolean(false);
+        try self.packet.int32(0);
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
 
-pub fn loginStart(packet: *Packet, server: Serv, username: []const u8) !void {
-    try packet.clear();
-    try packet.varInt(0); //Packet id
-    try packet.string(username);
-    try packet.boolean(false); //No uuid
-    _ = try server.write(packet.getWritableBuffer());
-}
+    pub fn handshake(self: *@This(), hostname: []const u8, port: u16) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0); //Packet id
+        try self.packet.varInt(761); //Protocol version
+        try self.packet.string(hostname);
+        try self.packet.short(port);
+        try self.packet.varInt(2); //Next state
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
 
-pub fn keepAlive(packet: *Packet, server: Serv, id: i64) !void {
-    try packet.clear();
-    try packet.varInt(0x11);
-    try packet.long(id);
-    _ = try server.write(packet.getWritableBuffer());
-}
+    pub fn completeLogin(self: *@This()) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x06);
+        try self.packet.varInt(0x0);
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
 
-pub fn setPlayerPositionRot(packet: *Packet, server: Serv, pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
-    try packet.clear();
-    try packet.varInt(0x14);
-    try packet.double(pos.x);
-    try packet.double(pos.y);
-    try packet.double(pos.z);
-    try packet.float(yaw);
-    try packet.float(pitch);
-    try packet.boolean(grounded);
-    std.debug.print("MOVE PACKET {d} {d} {d} {any}\n", .{ pos.x, pos.y, pos.z, grounded });
-    _ = try server.write(packet.getWritableBuffer());
-}
+    pub fn loginStart(self: *@This(), username: []const u8) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0); //Packet id
+        try self.packet.string(username);
+        try self.packet.boolean(false); //No uuid
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
 
-pub fn confirmTeleport(p: *Packet, server: Serv, id: i32) !void {
-    try p.clear();
-    try p.varInt(0);
-    try p.varInt(id);
-    _ = try server.write(p.getWritableBuffer());
-}
+    pub fn keepAlive(self: *@This(), id: i64) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x11);
+        try self.packet.long(id);
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
 
-pub fn pluginMessage(p: *Packet, server: Serv, brand: []const u8) !void {
-    try p.clear();
-    try p.varInt(0x0C);
-    try p.string(brand);
-    _ = try server.write(p.getWritableBuffer());
-}
+    pub fn setPlayerPositionRot(self: *@This(), pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x14);
+        try self.packet.double(pos.x);
+        try self.packet.double(pos.y);
+        try self.packet.double(pos.z);
+        try self.packet.float(yaw);
+        try self.packet.float(pitch);
+        try self.packet.boolean(grounded);
+        //std.debug.print("MOVE PACKET {d} {d} {d} {any}\n", .{ pos.x, pos.y, pos.z, grounded });
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
 
-pub fn clientInfo(p: *Packet, server: Serv, locale: []const u8, render_dist: u8, main_hand: u8) !void {
-    try p.clear();
-    try p.varInt(0x07); //client info packet
-    try p.string(locale);
-    try p.ubyte(render_dist);
-    try p.varInt(0); //Chat mode, enabled
-    try p.boolean(true); //Chat colors enabled
-    try p.ubyte(0); // what parts are shown of skin
-    try p.varInt(main_hand);
-    try p.boolean(false); //No text filtering
-    try p.boolean(true); //Allow this bot to be listed
-    _ = try server.write(p.getWritableBuffer());
-}
+    pub fn confirmTeleport(self: *@This(), id: i32) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0);
+        try self.packet.varInt(id);
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
+
+    pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x0C);
+        try self.packet.string(brand);
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
+
+    pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x07); //client info packet
+        try self.packet.string(locale);
+        try self.packet.ubyte(render_dist);
+        try self.packet.varInt(0); //Chat mode, enabled
+        try self.packet.boolean(true); //Chat colors enabled
+        try self.packet.ubyte(0); // what parts are shown of skin
+        try self.packet.varInt(main_hand);
+        try self.packet.boolean(false); //No text filtering
+        try self.packet.boolean(true); //Allow this bot to be listed
+        _ = try self.server.write(self.packet.getWritableBuffer());
+    }
+};
 
 pub fn numBitsRequired(count: usize) usize {
     return std.math.log2_int_ceil(usize, count);
@@ -626,6 +638,7 @@ pub const ChunkSection = struct {
         shift_index: usize = 0,
 
         pub fn next(it: *DataIterator) ?usize {
+            if (it.bits_per_entry == 0) return null;
             it.shift_index += 1;
             const entries_per_long = @divTrunc(64, it.bits_per_entry);
             if (it.shift_index >= entries_per_long) {
@@ -818,6 +831,16 @@ pub const TagRegistry = struct {
         try r2.value_ptr.appendSlice(id_list);
     }
 
+    pub fn hasTag(self: *Self, block_id: usize, tag_type: []const u8, tag: []const u8) bool {
+        const tags = self.tags.getPtr(tag_type) orelse unreachable;
+        for ((tags.getPtr(tag) orelse unreachable).items) |it| {
+            if (it == block_id) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     pub fn deinit(self: *Self) void {
         var it = self.tags.iterator();
         while (it.next()) |kv| {
@@ -872,6 +895,11 @@ pub const BlockRegistry = struct {
             .id_array = try readJsonFile(array_file, alloc, []IdRange),
             .block_info_array = try readJsonFile(block_table_file, alloc, []BlockInfo),
         };
+    }
+
+    pub fn getBlockIndex(self: *Self, id: BLOCK_ID_INT) usize {
+        const index = std.sort.binarySearch(IdRange, .{ .lower = id, .upper = 0 }, self.id_array, @as(u8, 0), BlockRegistry.IdRange.compare);
+        return index.?;
     }
 
     pub fn findBlockName(self: *const Self, id: BLOCK_ID_INT) []const u8 {

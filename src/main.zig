@@ -5,7 +5,8 @@ const id_list = @import("list.zig");
 
 const nbt_zig = @import("nbt.zig");
 const astar = @import("astar.zig");
-const Bot = @import("bot.zig").Bot;
+const bot = @import("bot.zig");
+const Bot = bot.Bot;
 
 const math = std.math;
 
@@ -19,16 +20,12 @@ pub const V2i = struct {
     y: i32,
 };
 
-pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
-    const disc = std.math.pow(f64, b, 2) - (4 * a * C);
-    if (disc < 0) return null;
-    return (-b + @sqrt(disc)) / (2 * a);
-}
-
-pub fn quadFLess(a: f64, b: f64, C: f64) ?f64 {
-    const disc = std.math.pow(f64, b, 2) - (4 * a * C);
-    if (disc < 0) return null;
-    return (-b - @sqrt(disc)) / (2 * a);
+pub fn parseCoord(it: *std.mem.TokenIterator(u8)) !vector.V3f {
+    return .{
+        .x = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+        .y = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+        .z = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+    };
 }
 
 const ADJ = [8]V2i{
@@ -52,17 +49,6 @@ const ADJ_COST = [8]u32{
     10,
     14,
     10,
-};
-
-pub const MoveItem = struct {
-    pub const MoveKind = enum {
-        walk,
-        fall,
-        jump,
-    };
-
-    kind: MoveKind = .walk,
-    pos: V3f,
 };
 
 pub fn main() !void {
@@ -94,10 +80,6 @@ pub fn main() !void {
     var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
     defer block_table.deinit(alloc);
 
-    for (block_table.block_info_array) |info, i| {
-        std.debug.print("{d}: {d} {s}\n", .{ i, info.id, info.name });
-    }
-
     var tag_table = mc.TagRegistry.init(alloc);
     defer tag_table.deinit();
 
@@ -127,35 +109,27 @@ pub fn main() !void {
     defer cmd_thread.join();
 
     const swr = server.writer();
-    var packet = try mc.Packet.init(alloc);
-    try mc.handshake(&packet, swr, "localhost", 25565);
-    try mc.loginStart(&packet, swr, bot1.name);
+    //var packet = try mc.Packet.init(alloc);
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = swr };
+    defer pctx.packet.deinit();
+    try pctx.handshake("localhost", 25565);
+    try pctx.loginStart(bot1.name);
 
-    var pathctx = astar.AStarContext.init(alloc);
+    var pathctx = astar.AStarContext.init(alloc, &world, &tag_table, &block_table);
     defer pathctx.deinit();
 
     var start_rot: bool = false;
-    var player_id: ?u32 = null;
 
-    var px: ?f64 = null;
-    var py: ?f64 = null;
-    var pz: ?f64 = null;
-
-    var move_vecs = std.ArrayList(MoveItem).init(alloc);
+    var move_vecs = std.ArrayList(astar.AStarContext.MoveItem).init(alloc);
     defer move_vecs.deinit();
 
-    var complete_login = false;
-
-    var do_move = true;
-    var old_pos = V3f.new(0, 0, 0);
-
-    var goal: ?MoveItem = null;
-    const speed: f64 = 4; //BPS
+    var goal: ?astar.AStarContext.MoveItem = null;
+    const speed: f64 = 5; //BPS
     var draw = false;
 
     var maj_goal: ?V3f = null;
-    var do_jump = false;
-    var jump_timer: f64 = 0;
+
+    var move_state: bot.MovementState = undefined;
 
     if (draw) {
         c.InitWindow(1800, 1000, "Window");
@@ -181,8 +155,8 @@ pub fn main() !void {
 
             c.UpdateCamera(&camera);
 
-            if (px != null and py != null and pz != null) {
-                const playerpos = V3f.new(px.?, py.?, pz.?);
+            if (bot1.pos != null) {
+                const playerpos = bot1.pos.?;
                 camera.target = playerpos.toRay();
                 {
                     const pix = @floatToInt(i64, playerpos.x);
@@ -227,9 +201,11 @@ pub fn main() !void {
 
                     for (move_vecs.items) |mv| {
                         const color = switch (mv.kind) {
+                            .ladder => c.BLACK,
                             .walk => c.BLUE,
                             .jump => c.RED,
                             .fall => c.GREEN,
+                            else => unreachable,
                         };
                         c.DrawCube(mv.pos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, color);
                     }
@@ -244,124 +220,57 @@ pub fn main() !void {
             c.EndDrawing();
         }
 
-        if (px != null and py != null and pz != null and do_move) {
+        if (bot1.pos != null) {
+            //TODO use actual dt
             const dt: f64 = 1.0 / 20.0;
 
-            const pow = std.math.pow;
+            //const pow = std.math.pow;
+            var adt = dt;
+            var grounded = true;
+            var moved = false;
+            while (true) {
+                if (goal) |gvec| {
+                    var move_vec = blk: {
+                        switch (gvec.kind) {
+                            .walk => {
+                                break :blk move_state.walk(speed, adt);
+                            },
+                            .jump => break :blk move_state.jump(speed, adt),
+                            .fall => break :blk move_state.fall(speed, adt),
+                            .ladder => break :blk move_state.ladder(2.35, adt),
+                            .blocked => unreachable,
 
-            if (do_jump and false) {
-                var new_y = (-16 * pow(f64, jump_timer - @sqrt(0.1), 2)) + 1.6;
+                            //else => {
+                            //    unreachable;
+                            //},
+                        }
+                    };
+                    grounded = move_vec.grounded;
 
-                var grounded = false;
-                if (jump_timer > 0 and new_y <= 0) {
-                    grounded = true;
-                    do_jump = false;
-                    new_y = 0;
-                }
+                    bot1.pos = move_vec.new_pos;
+                    moved = true;
 
-                jump_timer += dt;
-
-                try mc.setPlayerPositionRot(
-                    &packet,
-                    swr,
-                    .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
-                    0,
-                    0,
-                    grounded,
-                );
-            } else {
-                //do_jump = true;
-                //jump_timer = 0;
-            }
-            if (goal) |gvec| {
-                //goal = null;
-                const pos = V3f.new(px.?, py.?, pz.?);
-                const move_vec = gvec.pos.subtract(pos);
-                if (move_vec.magnitude() == 0) {
-                    jump_timer = 0;
-                    goal = move_vecs.popOrNull();
-                } else {
-                    switch (gvec.kind) {
-                        .jump => {
-                            const jump_speed = 1;
-                            const mv = V3f.new(move_vec.x, 0, move_vec.z);
-                            const dv = mv.getUnitVec().smul(jump_speed * dt);
-
-                            const max_dt = quadFGreater(-16.0, 32.0 * @sqrt(0.1), -1) orelse unreachable; //Solve for y = 1
-                            var new_y: f64 = 0;
-                            if (jump_timer + dt > max_dt) {
-                                jump_timer = 0;
-                                goal.?.kind = .walk; //Finish this move with a walk
-                                py.? += 1;
-                            } else {
-                                jump_timer += dt;
-                                new_y = (-16 * pow(f64, jump_timer - @sqrt(0.1), 2)) + 1.6;
-                            }
-                            px.? += dv.x;
-                            pz.? += dv.z;
-
-                            try mc.setPlayerPositionRot(
-                                &packet,
-                                swr,
-                                .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
-                                0,
-                                0,
-                                false,
-                            );
-                        },
-                        .fall => {
-                            std.debug.print("Falling\n", .{});
-                            const max_dt = quadFLess(-9.8, 0, 1) orelse unreachable; //Solve for y = 1
-                            var grounded = false;
-                            var new_y: f64 = 0;
-                            if (jump_timer + dt > max_dt) {
-                                jump_timer = 0;
-                                goal = move_vecs.popOrNull();
-                                py.? -= 1;
-                                grounded = true;
-                            } else {
-                                jump_timer += dt;
-                                new_y = (-9.8 * pow(f64, jump_timer, 2));
-                            }
-
-                            try mc.setPlayerPositionRot(
-                                &packet,
-                                swr,
-                                .{ .x = px.?, .y = py.? + new_y, .z = pz.? },
-                                0,
-                                0,
-                                grounded,
-                            );
-                        },
-                        .walk => {
-
-                            //const max_dt = pow(f64, move_vec.magnitude(), 2);
-                            const max_dt = move_vec.magnitude() / speed;
-
-                            var dv = (move_vec.getUnitVec()).smul(speed * dt);
-                            if ((max_dt) < dt) {
-                                dv = (move_vec.getUnitVec()).smul(speed * max_dt);
-                                jump_timer = 0;
-                                goal = move_vecs.popOrNull();
-                            }
-
-                            px.? += dv.x;
-                            py.? += dv.y;
-                            pz.? += dv.z;
-                            const pandw = mc.lookAtBlock(pos, V3f.new(11, 10, 32));
-
-                            try mc.setPlayerPositionRot(
-                                &packet,
-                                swr,
-                                .{ .x = px.?, .y = py.?, .z = pz.? },
-                                pandw.yaw,
-                                pandw.pitch,
-                                true,
-                            );
-                        },
+                    if (!move_vec.move_complete) {
+                        break;
+                    } else {
+                        goal = move_vecs.popOrNull();
+                        adt = move_vec.remaining_dt;
+                        if (goal) |g| {
+                            move_state.init_pos = move_vec.new_pos;
+                            move_state.final_pos = g.pos;
+                            move_state.time = 0;
+                        } else {
+                            break;
+                        }
                     }
+                    //move_vec = //above switch statement
+
+                } else {
+                    break;
                 }
             }
+            if (moved)
+                try pctx.setPlayerPositionRot(bot1.pos.?, 0, 0, grounded);
         }
         std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
         //q_cond.wait(&q_mutex);
@@ -378,14 +287,13 @@ pub fn main() !void {
                     switch (@intToEnum(id_list.packet_enum, item.data.id)) {
                         .Keep_Alive => {
                             const kid = try reader.readInt(i64, .Big);
-                            try mc.keepAlive(&packet, swr, kid);
+                            try pctx.keepAlive(kid);
                         },
                         .Login => {
                             std.debug.print("Login\n", .{});
                             const p_id = try reader.readInt(u32, .Big);
                             std.debug.print("\tid: {d}\n", .{p_id});
                             bot1.e_id = p_id;
-                            player_id = p_id;
                             start_rot = true;
                         },
                         .Plugin_Message => {
@@ -399,8 +307,8 @@ pub fn main() !void {
                             }
                             std.debug.print("Plugin Message: {s}\n", .{identifier.items});
 
-                            try mc.pluginMessage(&packet, swr, "tony:brand");
-                            try mc.clientInfo(&packet, swr, "en_US", 6, 1);
+                            try pctx.pluginMessage("tony:brand");
+                            try pctx.clientInfo("en_US", 6, 1);
                         },
                         .Change_Difficulty => {
                             const diff = try reader.readByte();
@@ -552,28 +460,18 @@ pub fn main() !void {
                                 "Sync pos: x: {d}, y: {d}, z: {d}, yaw {d}, pitch : {d} flags: {b}, tel_id: {}\n",
                                 .{ x, y, z, yaw, pitch, flags, tel_id },
                             );
-                            px = x;
-                            py = y;
-                            pz = z;
-                            old_pos = V3f.new(px.?, py.?, pz.?);
+                            bot1.pos = .{ .x = x, .y = y, .z = z };
 
-                            try mc.confirmTeleport(&packet, swr, tel_id);
+                            try pctx.confirmTeleport(tel_id);
 
-                            if (complete_login == false) {
-                                complete_login = true;
-                                try packet.clear();
-                                try packet.varInt(0x06);
-                                try packet.varInt(0);
-                                _ = try server.write(packet.getWritableBuffer());
+                            if (bot1.handshake_complete == false) {
+                                bot1.handshake_complete = true;
+                                try pctx.completeLogin();
                             }
                         },
                         .Update_Entity_Position, .Update_Entity_Position_and_Rotation, .Update_Entity_Rotation => {
                             const ent_id = mc.readVarInt(reader);
-                            if (player_id) |pid| {
-                                if (ent_id == pid) {
-                                    std.debug.print("Update ent pos: {d}\n", .{ent_id});
-                                }
-                            }
+                            _ = ent_id;
                         },
                         .Block_Update => {
                             const pos = try reader.readInt(i64, .Big);
@@ -647,14 +545,6 @@ pub fn main() !void {
                                     }
                                 }
                             }
-                            //const blocks = tag_table.tags.getPtr("minecraft:block") orelse unreachable;
-                            //for ((blocks.getPtr("minecraft:stairs") orelse unreachable).items) |it| {
-                            //    std.debug.print("{s}\n", .{block_table.block_info_array[it].name});
-                            //}
-                            //var it = (blocks.getPtr("minecraft:stairs") orelse unreachable).iterator();
-                            //while (it.next()) |kv| {
-                            //std.debug.print("\t{any}\n", .{kv.value_ptr.*});
-                            //}
                         },
                         .Chunk_Data_and_Update_Light => {
                             const cx = try reader.readInt(i32, .Big);
@@ -792,264 +682,30 @@ pub fn main() !void {
 
                                 const key = it.next().?;
                                 if (eql(u8, key, "path")) {
-                                    try pathctx.reset();
-                                    try pathctx.addOpen(.{
-                                        .x = @floatToInt(i32, px.?),
-                                        .y = @floatToInt(i32, py.?),
-                                        .z = @floatToInt(i32, pz.?),
-                                    });
-
-                                    m_fbs.reset();
                                     const goal_posx: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
                                     const goal_posy: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
                                     const goal_posz: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-
-                                    maj_goal = V3f.newi(
-                                        goal_posx,
-                                        goal_posy,
-                                        goal_posz,
-                                    );
-
-                                    while (true) {
-                                        const current_n = pathctx.popLowestFOpen() orelse break;
-
-                                        if (current_n.x == goal_posx and current_n.z == goal_posz and current_n.y == goal_posy) {
-                                            var parent: ?*astar.AStarContext.Node = current_n;
-                                            try move_vecs.resize(0);
-                                            var last_y = goal_posy;
-                                            while (parent.?.parent != null) : (parent = parent.?.parent) {
-                                                if (parent.?.y < last_y) {
-                                                    move_vecs.items[move_vecs.items.len - 1].kind = .jump;
-                                                } else if (parent.?.y > last_y) {
-                                                    move_vecs.items[move_vecs.items.len - 1].kind = .fall;
-                                                    const last = move_vecs.items[move_vecs.items.len - 1];
-                                                    try move_vecs.append(.{
-                                                        .kind = .walk,
-                                                        .pos = last.pos.add(V3f.new(0, 1, 0)),
-                                                    });
-                                                }
-                                                try move_vecs.append(.{
-                                                    //.kind = if (last_y != parent.?.y) .jump else .walk,
-                                                    .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(
-                                                        -0.5,
-                                                        0,
-                                                        -0.5,
-                                                    )),
-                                                });
-                                                last_y = parent.?.y;
-                                            }
-                                            if (@floatToInt(i32, py.?) > last_y) {
-                                                move_vecs.items[move_vecs.items.len - 1].kind = .fall;
-                                                const last = move_vecs.items[move_vecs.items.len - 1];
-                                                try move_vecs.append(.{
-                                                    .kind = .walk,
-                                                    .pos = last.pos.add(V3f.new(0, 1, 0)),
-                                                });
-                                            }
-
-                                            if (!draw)
-                                                goal = move_vecs.pop();
-                                            jump_timer = 0;
-                                            break;
+                                    maj_goal = V3f.newi(goal_posx, goal_posy, goal_posz);
+                                    try pathctx.pathfind(bot1.pos.?, maj_goal.?, &move_vecs);
+                                    if (!draw) {
+                                        goal = move_vecs.pop();
+                                        if (goal) |g| {
+                                            move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = g.pos, .time = 0 };
                                         }
-
-                                        var new_adj: [8][8]bool = undefined;
-
-                                        //var adj_open: [8]bool = undefined;
-                                        for (ADJ) |a_vec, adj_i| {
-                                            const bx = current_n.x + a_vec.x;
-                                            const bz = current_n.z + a_vec.y;
-                                            const by = current_n.y;
-                                            //const floor_block = world.getBlock(bx, by - 1, bz);
-                                            //const column = world.getBlock(bx, by, bz) | world.getBlock(bx, by + 1, bz);
-
-                                            //adj_open[adj_i] = (floor_block != 0 and column == 0);
-
-                                            {
-                                                var i: u32 = 0;
-                                                while (i < 8) : (i += 1) {
-                                                    new_adj[adj_i][i] = @bitCast(bool, world.getBlock(bx, by - 2 + @intCast(i32, i), bz) != 0);
-                                                }
-                                            }
-                                        }
-                                        //Four types of nodes to check
-                                        //strait
-                                        //diagonal //just fagat
-                                        //jump
-                                        //drop
-                                        //
-                                        //1 3 5 7
-                                        { //This is the strait
-                                            //const indicis = [_]usize{ 1, 3, 5, 7 };
-                                            for (new_adj) |adj, adj_i| {
-
-                                                //if (std.mem.indexOfScalar(usize, &indicis, adj_i) == null)
-                                                //    continue;
-
-                                                var y_offset: i32 = 0;
-                                                if (adj[1] and !adj[2] and !adj[3]) { //Is it free to walk into
-                                                    //add the node
-                                                    y_offset = 0;
-                                                } else if (adj[2] and !adj[3] and !adj[4]) { //We can jump
-                                                    y_offset = 1;
-                                                } else if (adj[0] and !adj[1] and !adj[2] and !adj[3]) { //We can drop onto this block
-                                                    y_offset = -1;
-                                                } else {
-                                                    continue;
-                                                }
-
-                                                if (@mod(adj_i, 2) == 0) {
-                                                    const l_i = @intCast(u32, @mod(@intCast(i32, adj_i) - 1, 8));
-                                                    const r_i = @mod(adj_i + 1, 8);
-                                                    if (y_offset == 0) {
-                                                        const l = new_adj[l_i];
-                                                        const r = new_adj[r_i];
-                                                        if ((l[1] and !l[2] and !l[3]) and (r[1] and !r[2] and !r[3])) {
-                                                            //continue;
-                                                        } else {
-                                                            continue;
-                                                        }
-                                                    } else {
-                                                        continue;
-                                                    }
-                                                }
-
-                                                {
-                                                    const avec = ADJ[adj_i];
-                                                    var new_node = astar.AStarContext.Node{
-                                                        .x = current_n.x + avec.x,
-                                                        .z = current_n.z + avec.y,
-                                                        .y = current_n.y + y_offset,
-                                                        .G = ADJ_COST[adj_i] + current_n.G + @intCast(u32, (try std.math.absInt(y_offset)) * 1),
-                                                        //TODO fix the hurestic
-                                                        .H = @intCast(u32, try std.math.absInt(goal_posx - (current_n.x + avec.x)) +
-                                                            try std.math.absInt(goal_posz - (current_n.z + avec.y))),
-                                                    };
-
-                                                    var is_on_closed = false;
-                                                    for (pathctx.closed.items) |cl| {
-                                                        if (cl.x == new_node.x and cl.y == new_node.y and cl.z == new_node.z) {
-                                                            is_on_closed = true;
-                                                            //std.debug.print("CLOSED\n", .{});
-                                                            break;
-                                                        }
-                                                    }
-                                                    new_node.parent = current_n;
-                                                    if (!is_on_closed) {
-                                                        var old_open: ?*astar.AStarContext.Node = null;
-                                                        for (pathctx.open.items) |op| {
-                                                            if (op.x == new_node.x and op.y == new_node.y and op.z == new_node.z) {
-                                                                old_open = op;
-                                                                //std.debug.print("EXISTS BEFORE\n", .{});
-                                                                break;
-                                                            }
-                                                        }
-
-                                                        if (old_open) |op| {
-                                                            if (new_node.G < op.G) {
-                                                                op.parent = current_n;
-                                                                op.G = new_node.G;
-                                                            }
-                                                        } else {
-                                                            try pathctx.addOpen(new_node);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-
-                                        //for (adj_open) |adj, adj_i| {
-                                        //    if (adj) {
-                                        //        const avec = ADJ[adj_i];
-                                        //        var new_node = astar.AStarContext.Node{
-                                        //            .x = current_n.x + avec.x,
-                                        //            .z = current_n.z + avec.y,
-                                        //            .y = current_n.y,
-                                        //            .G = ADJ_COST[adj_i] + current_n.G,
-                                        //            .H = @intCast(u32, try std.math.absInt(goal_posx - (current_n.x + avec.x)) +
-                                        //                try std.math.absInt(goal_posz - (current_n.z + avec.y))),
-                                        //        };
-
-                                        //        var is_on_closed = false;
-                                        //        for (pathctx.closed.items) |cl| {
-                                        //            if (cl.x == new_node.x and cl.y == new_node.y and cl.z == new_node.z) {
-                                        //                is_on_closed = true;
-                                        //                //std.debug.print("CLOSED\n", .{});
-                                        //                break;
-                                        //            }
-                                        //        }
-                                        //        new_node.parent = current_n;
-                                        //        if (!is_on_closed) {
-                                        //            var old_open: ?*astar.AStarContext.Node = null;
-                                        //            for (pathctx.open.items) |op| {
-                                        //                if (op.x == new_node.x and op.y == new_node.y and op.z == new_node.z) {
-                                        //                    old_open = op;
-                                        //                    //std.debug.print("EXISTS BEFORE\n", .{});
-                                        //                    break;
-                                        //                }
-                                        //            }
-
-                                        //            if (old_open) |op| {
-                                        //                if (new_node.G < op.G) {
-                                        //                    op.parent = current_n;
-                                        //                    op.G = new_node.G;
-                                        //                }
-                                        //            } else {
-                                        //                try pathctx.addOpen(new_node);
-                                        //            }
-                                        //        }
-                                        //    }
-                                        //}
                                     }
-
-                                    //try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
-
-                                    //var bi: i32 = -1;
-                                    //while (bi < 2) : (bi += 1) {
-                                    //    m_fbs.reset();
-                                    //    const block_id = world.getBlockFloat(px.?, py.? + @intToFloat(f64, bi), pz.? + 1);
-                                    //    try m_wr.print("Block: {s}", .{mc.findBlockNameFromId(block_ids, block_id)});
-                                    //    try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
-                                    //}
-                                } else if (eql(u8, key, "bpe")) {
-                                    const sec = world.getChunkSectionPtr(@floatToInt(i64, px.?), @floatToInt(i64, py.?), @floatToInt(i64, pz.?)).?;
-                                    m_fbs.reset();
-                                    try m_wr.print("Bits per entry: {d}", .{sec.bits_per_entry});
-                                    try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
-                                } else if (eql(u8, key, "moverel")) {
-                                    {
-                                        goal = .{ .pos = V3f.new(
-                                            px.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                            py.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                            pz.? + @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                        ) };
-                                    }
-                                } else if (eql(u8, key, "lookat")) {
-                                    const v = V3f.new(
-                                        @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                        @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                        @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-                                    );
-                                    const pw = mc.lookAtBlock(V3f.new(px.?, py.?, pz.?), v);
-                                    try mc.setPlayerPositionRot(&packet, swr, V3f.new(px.?, py.?, pz.?), pw.yaw, pw.pitch, true);
-                                } else if (eql(u8, key, "jump")) {
-                                    if (do_jump == false) {
-                                        try mc.sendChat(&packet, server.writer(), "jumping");
-                                        do_jump = true;
-                                        jump_timer = 0;
-                                    }
-                                } else if (eql(u8, key, "query")) {
-                                    const qbx: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-                                    const qby: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-                                    const qbz: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-
-                                    const bid = world.getBlock(qbx, qby, qbz);
+                                } else if (eql(u8, key, "bpe")) {} else if (eql(u8, key, "moverel")) {} else if (eql(u8, key, "lookat")) {
+                                    const v = try parseCoord(&it);
+                                    const pw = mc.lookAtBlock(bot1.pos.?, v);
+                                    try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, true);
+                                } else if (eql(u8, key, "jump")) {} else if (eql(u8, key, "query")) {
+                                    const qb = (try parseCoord(&it)).toI();
+                                    const bid = world.getBlock(qb.x, qb.y, qb.z);
                                     m_fbs.reset();
                                     try m_wr.print("Block {s} id: {d}", .{
                                         block_table.findBlockName(bid),
                                         bid,
                                     });
-                                    try mc.sendChat(&packet, server.writer(), m_fbs.getWritten());
+                                    try pctx.sendChat(m_fbs.getWritten());
                                 }
                             }
                         },
@@ -1062,59 +718,10 @@ pub fn main() !void {
                     if (std.mem.eql(u8, "exit", item.data.buffer.items[0 .. item.data.buffer.items.len - 1])) {
                         run = false;
                     }
-                    if (std.mem.eql(u8, "move", item.data.buffer.items[0 .. item.data.buffer.items.len - 1])) {
-                        if (start_rot and px != null and py != null and pz != null) {
-                            std.debug.print("Dump the chunk!\n", .{});
-                            {
-                                var jp: f64 = 0;
-                                while (jp < 5) : (jp += 1) {
-                                    const block_id = world.getBlockFloat(px.?, py.? - jp, pz.?);
-                                    //const block_id = world.getBlock(0, 120, 0);
-                                    std.debug.print("bLOCK ID {d}\n", .{block_id});
-                                }
-
-                                if (false) {
-                                    const w = world.x.getPtr(0) orelse unreachable;
-                                    const wz = w.getPtr(0) orelse unreachable;
-                                    for (wz) |sec, cxi| {
-                                        std.debug.print("CHUNK SECTION {d}\n", .{cxi});
-                                        for (sec.data.items) |long| {
-                                            var nn: u32 = 0;
-                                            while (nn < 64) : (nn += 4) {
-                                                const lc = long >> @intCast(u6, nn) & 0xf;
-                                                std.debug.print("{d}\t", .{sec.mapping.items[lc]});
-                                            }
-                                            std.debug.print("\n", .{});
-                                        }
-
-                                        //var ix: i32 = 0;
-                                        //var iy: i32 = 0;
-                                        //var iz: i32 = 0;
-                                        //while (iy < 16) : (iy += 1) {
-                                        //    while (iz < 16) : (iz += 1) {
-                                        //        while (ix < 16) : (ix += 1) {
-                                        //            //const bl = world.getBlock(ix, iy, iz);
-                                        //            std.debug.print("{d}\t", .{bl});
-                                        //        }
-                                        //        ix = 0;
-                                        //        std.debug.print("\n", .{});
-                                        //    }
-                                        //    iz = 0;
-                                        //    std.debug.print("---------\n", .{});
-                                        //}
-                                    }
-                                }
-                            }
-                        }
-                    }
                 },
             }
         }
     }
 
-    //const out = try std.fs.cwd().createFile("out.dump", .{});
-    //defer out.close();
-    //_ = try out.write(packet.getWritableBuffer());
-
-    packet.deinit();
+    //pctx.deinit();
 }

@@ -3,10 +3,24 @@ const math = std.math;
 
 const c = @import("c.zig").c;
 
+pub const V3i = struct {
+    x: i32,
+    y: i32,
+    z: i32,
+};
+
 pub const V3f = struct {
     x: f64,
     y: f64,
     z: f64,
+
+    pub fn toI(a: @This()) V3i {
+        return .{
+            .x = @floatToInt(i32, a.x),
+            .y = @floatToInt(i32, a.y),
+            .z = @floatToInt(i32, a.z),
+        };
+    }
 
     pub fn new(x_: f64, y_: f64, z_: f64) @This() {
         return .{ .x = x_, .y = y_, .z = z_ };
