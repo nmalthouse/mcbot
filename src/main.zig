@@ -88,6 +88,74 @@ pub fn main() !void {
     var world = mc.ChunkMap.init(alloc);
     defer world.deinit();
 
+    var bot1 = Bot.init(alloc, "Tony");
+    defer bot1.deinit();
+
+    const swr = server.writer();
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = swr };
+    defer pctx.packet.deinit();
+    {
+        try pctx.handshake("localhost", 25565);
+        try pctx.loginStart(bot1.name);
+        bot1.connection_state = .login;
+        var arena_allocs = std.heap.ArenaAllocator.init(alloc);
+        defer arena_allocs.deinit();
+        const arena_alloc = arena_allocs.allocator();
+        var comp_thresh: i32 = -1;
+
+        while (bot1.connection_state == .login) {
+            const pd = try mc.recvPacket(alloc, server.reader(), comp_thresh);
+            defer alloc.free(pd);
+            var fbs_ = fbsT{ .buffer = pd, .pos = 0 };
+            const parseT = mc.packetParseCtx(fbsT.Reader);
+            var parse = parseT.init(fbs_.reader(), arena_alloc);
+            const pid = parse.varInt();
+            switch (@intToEnum(id_list.login_packet_enum, pid)) {
+                .Disconnect => {
+                    const reason = try parse.string(null);
+                    std.debug.print("Disconnected: {s}\n", .{reason});
+                },
+                .Set_Compression => {
+                    const threshold = parse.varInt();
+                    comp_thresh = threshold;
+                    std.debug.print("Setting Compression threshhold: {d}\n", .{threshold});
+                    if (threshold < 0) {
+                        unreachable;
+                    } else {
+                        bot1.compression_threshold = threshold;
+                        pctx.packet.comp_thresh = threshold;
+                    }
+                },
+                .Encryption_Request => {
+                    const server_id = try parse.string(20);
+                    const public_key = try parse.string(null);
+                    const verify_token = try parse.string(null);
+                    std.debug.print("Encryption_request: {any} {any} {any} EXITING\n", .{ server_id, public_key, verify_token });
+                    unreachable;
+                },
+                .Login_Success => {
+                    const uuid = parse.int(u128);
+                    const username = try parse.string(16);
+                    const n_props = @intCast(u32, parse.varInt());
+                    std.debug.print("Login Success: {d}: {s}\nPropertes:\n", .{ uuid, username });
+                    var n: u32 = 0;
+                    while (n < n_props) : (n += 1) {
+                        const prop_name = try parse.string(null);
+                        const value = try parse.string(null);
+                        if (parse.boolean()) {
+                            const sig = try parse.string(null);
+                            _ = sig;
+                        }
+                        std.debug.print("\t{s}: {s}\n", .{ prop_name, value });
+                    }
+
+                    bot1.connection_state = .play;
+                },
+                else => {},
+            }
+        }
+    }
+
     var q_cond: std.Thread.Condition = .{};
     var q_mutex: std.Thread.Mutex = .{};
     q_mutex.lock();
@@ -95,13 +163,10 @@ pub fn main() !void {
     var listener_thread = try std.Thread.spawn(
         .{},
         mc.ServerListener.parserThread,
-        .{ alloc, server.reader(), &queue, &q_cond },
+        .{ alloc, server.reader(), &queue, &q_cond, bot1.compression_threshold },
     );
     defer listener_thread.join();
     defer server.close();
-
-    var bot1 = Bot.init(alloc, "Tony");
-    defer bot1.deinit();
 
     var cmd_thread = try std.Thread.spawn(
         .{},
@@ -109,14 +174,6 @@ pub fn main() !void {
         .{ alloc, &queue, &q_cond },
     );
     defer cmd_thread.join();
-
-    const swr = server.writer();
-    //var packet = try mc.Packet.init(alloc);
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = swr };
-    defer pctx.packet.deinit();
-    try pctx.handshake("localhost", 25565);
-    try pctx.loginStart(bot1.name);
-    bot1.connection_state = .login;
 
     var pathctx = astar.AStarContext.init(alloc, &world, &tag_table, &block_table);
     defer pathctx.deinit();
@@ -212,6 +269,17 @@ pub fn main() !void {
                         };
                         c.DrawCube(mv.pos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, color);
                     }
+
+                    //for (pathctx.closed.items) |op| {
+                    //    const w = 0.3;
+                    //    c.DrawCube(
+                    //        V3f.newi(op.x, op.y, op.z).toRay(),
+                    //        w,
+                    //        w,
+                    //        w,
+                    //        c.BLUE,
+                    //    );
+                    //}
                 }
                 c.DrawCube(playerpos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 1.0, 1.0, 1.0, c.RED);
             }
@@ -284,91 +352,17 @@ pub fn main() !void {
             defer alloc.destroy(item);
             defer item.data.buffer.deinit();
 
-            var fbs_ = blk: {
-                var in_stream = fbsT{ .buffer = item.data.buffer.items, .pos = 0 };
-                if (bot1.compression_threshold) |thresh| {
-                    if (item.data.len >= thresh) {
-                        const data_len = @intCast(u32, mc.readVarInt(in_stream.reader()));
-                        if (data_len != 0) {
-                            std.debug.print("Parsing Compressed comp_len: {d}, len: {d}: ratio {d} \n", .{
-                                item.data.buffer.items.len,
-                                data_len,
-
-                                @divTrunc(data_len, item.data.buffer.items.len),
-                            });
-
-                            var zlib_stream = try std.compress.zlib.zlibStream(alloc, in_stream.reader());
-                            defer zlib_stream.deinit();
-                            const buf = try zlib_stream.reader().readAllAlloc(alloc, std.math.maxInt(usize));
-                            item.data.buffer.deinit();
-                            item.data.buffer = std.ArrayList(u8).fromOwnedSlice(alloc, buf);
-                            in_stream.buffer = item.data.buffer.items;
-                            in_stream.pos = 0;
-                        }
-                    }
-                    _ = mc.readVarInt(in_stream.reader());
-                }
-                item.data.id = mc.readVarInt(in_stream.reader());
-                break :blk in_stream;
-            };
-
-            //var fbs_ = fbsT{ .buffer = item.data.buffer.items, .pos = 0 };
+            var fbs_ = fbsT{ .buffer = item.data.buffer.items, .pos = 0 };
             const parseT = mc.packetParseCtx(fbsT.Reader);
             var parse = parseT.init(fbs_.reader(), arena_alloc);
 
-            switch (bot1.connection_state) {
-                .none => {},
-                .login => switch (item.data.msg_type) {
-                    .server => {
-                        //var fbs = std.io.FixedBufferStream([]const u8){ .buffer = item.data.buffer.items, .pos = 0 };
-                        //const reader = fbs.reader();
-                        switch (@intToEnum(id_list.login_packet_enum, item.data.id)) {
-                            .Disconnect => {
-                                const reason = try parse.string(null);
-                                std.debug.print("Disconnected: {s}\n", .{reason});
-                            },
-                            .Set_Compression => {
-                                const threshold = parse.varInt();
-                                std.debug.print("Setting Compression threshhold: {d}\n", .{threshold});
-                                if (threshold < 0) {
-                                    unreachable;
-                                } else {
-                                    bot1.compression_threshold = @intCast(u32, threshold);
-                                }
-                            },
-                            .Encryption_Request => {
-                                const server_id = try parse.string(20);
-                                const public_key = try parse.string(null);
-                                const verify_token = try parse.string(null);
-                                std.debug.print("Encryption_request: {any} {any} {any} EXITING\n", .{ server_id, public_key, verify_token });
-                                unreachable;
-                            },
-                            .Login_Success => {
-                                const uuid = parse.int(u128);
-                                const username = try parse.string(16);
-                                const n_props = @intCast(u32, parse.varInt());
-                                std.debug.print("Login Success: {d}: {s}\nPropertes:\n", .{ uuid, username });
-                                var n: u32 = 0;
-                                while (n < n_props) : (n += 1) {
-                                    const prop_name = try parse.string(null);
-                                    const value = try parse.string(null);
-                                    if (parse.boolean()) {
-                                        const sig = try parse.string(null);
-                                        _ = sig;
-                                    }
-                                    std.debug.print("\t{s}: {s}\n", .{ prop_name, value });
-                                }
+            const pid = parse.varInt();
 
-                                bot1.connection_state = .play;
-                            },
-                            else => {},
-                        }
-                    },
-                    else => {},
-                },
+            switch (bot1.connection_state) {
+                else => {},
                 .play => switch (item.data.msg_type) {
                     .server => {
-                        switch (@intToEnum(id_list.packet_enum, item.data.id)) {
+                        switch (@intToEnum(id_list.packet_enum, pid)) {
                             .Keep_Alive => {
                                 const kid = parse.int(i64);
                                 try pctx.keepAlive(kid);
@@ -379,6 +373,12 @@ pub fn main() !void {
                                 std.debug.print("\tid: {d}\n", .{p_id});
                                 bot1.e_id = p_id;
                                 start_rot = true;
+                            },
+                            .Disconnect => {
+                                const reason = try parse.string(null);
+                                run = false;
+
+                                std.debug.print("Disconnect: {s}\n", .{reason});
                             },
                             .Plugin_Message => {
                                 const channel_name = try parse.string(null);
@@ -449,16 +449,16 @@ pub fn main() !void {
                                 //    }
                                 //}
                             },
-                            //.Spawn_Entity => {
-                            //    const ent_id = mc.readVarInt(reader);
-                            //    const uuid = try reader.readInt(u128, .Big);
+                            .Spawn_Entity => {
+                                const ent_id = parse.varInt();
+                                const uuid = parse.int(u128);
 
-                            //    const type_id = mc.readVarInt(reader);
-                            //    const x = @bitCast(f64, try reader.readInt(u64, .Big));
-                            //    const y = @bitCast(f64, try reader.readInt(u64, .Big));
-                            //    const z = @bitCast(f64, try reader.readInt(u64, .Big));
-                            //    std.debug.print("Ent id: {d}, {x}, {d}\n\tx: {d}, y: {d} z: {d}\n", .{ ent_id, uuid, type_id, x, y, z });
-                            //},
+                                const type_id = parse.varInt();
+                                const x = parse.float(f64);
+                                const y = parse.float(f64);
+                                const z = parse.float(f64);
+                                std.debug.print("Ent id: {d}, {x}, {d}\n\tx: {d}, y: {d} z: {d}\n", .{ ent_id, uuid, type_id, x, y, z });
+                            },
                             .Synchronize_Player_Position => {
                                 const pos = parse.v3f();
                                 const yaw = parse.float(f32);
@@ -649,6 +649,10 @@ pub fn main() !void {
                                 const is_actionbar = parse.boolean();
                                 std.debug.print("System msg: {s} {}\n", .{ msg, is_actionbar });
                             },
+                            .Disguised_Chat_Message => {
+                                const msg = try parse.string(null);
+                                std.debug.print("System msg: {s}\n", .{msg});
+                            },
                             .Player_Chat_Message => {
                                 { //HEADER
                                     const uuid = parse.int(u128);
@@ -702,7 +706,7 @@ pub fn main() !void {
                                 }
                             },
                             else => {
-                                std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, item.data.id)]});
+                                //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, pid)]});
                             },
                         }
                     },

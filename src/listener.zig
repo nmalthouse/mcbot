@@ -21,7 +21,7 @@ pub const PacketCtx = struct {
         try self.packet.long(0);
         try self.packet.boolean(false);
         try self.packet.int32(0);
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn handshake(self: *@This(), hostname: []const u8, port: u16) !void {
@@ -31,14 +31,14 @@ pub const PacketCtx = struct {
         try self.packet.string(hostname);
         try self.packet.short(port);
         try self.packet.varInt(2); //Next state
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn completeLogin(self: *@This()) !void {
         try self.packet.clear();
         try self.packet.varInt(0x06);
         try self.packet.varInt(0x0);
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn loginStart(self: *@This(), username: []const u8) !void {
@@ -46,14 +46,14 @@ pub const PacketCtx = struct {
         try self.packet.varInt(0); //Packet id
         try self.packet.string(username);
         try self.packet.boolean(false); //No uuid
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn keepAlive(self: *@This(), id: i64) !void {
         try self.packet.clear();
         try self.packet.varInt(0x11);
         try self.packet.long(id);
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn setPlayerPositionRot(self: *@This(), pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
@@ -66,21 +66,21 @@ pub const PacketCtx = struct {
         try self.packet.float(pitch);
         try self.packet.boolean(grounded);
         //std.debug.print("MOVE PACKET {d} {d} {d} {any}\n", .{ pos.x, pos.y, pos.z, grounded });
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn confirmTeleport(self: *@This(), id: i32) !void {
         try self.packet.clear();
         try self.packet.varInt(0);
         try self.packet.varInt(id);
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
         try self.packet.clear();
         try self.packet.varInt(0x0C);
         try self.packet.string(brand);
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
@@ -94,7 +94,7 @@ pub const PacketCtx = struct {
         try self.packet.varInt(main_hand);
         try self.packet.boolean(false); //No text filtering
         try self.packet.boolean(true); //Allow this bot to be listed
-        _ = try self.server.write(self.packet.getWritableBuffer());
+        try self.packet.writeToServer(self.server);
     }
 };
 
@@ -125,6 +125,7 @@ pub const Packet = struct {
     const RESERVED_BYTE_COUNT: usize = 5;
 
     buffer: std.ArrayList(u8),
+    comp_thresh: i32 = -1,
 
     pub fn init(alloc: std.mem.Allocator) !Self {
         var ret = Self{
@@ -193,11 +194,22 @@ pub const Packet = struct {
         _ = try wr.writeInt(u16, val, .Big);
     }
 
-    pub fn getWritableBuffer(self: *Self) []const u8 {
-        var len = toVarInt(@intCast(i32, self.buffer.items.len - RESERVED_BYTE_COUNT));
-        std.mem.copy(u8, self.buffer.items[RESERVED_BYTE_COUNT - len.len ..], len.getSlice());
-        return self.buffer.items[RESERVED_BYTE_COUNT - len.len ..];
+    pub fn writeToServer(self: *Self, server: std.net.Stream.Writer) !void {
+        const comp_enable = (self.comp_thresh > -1);
+        //_ = try server.writeByte(0);
+        var len = toVarInt(@intCast(i32, self.buffer.items.len - RESERVED_BYTE_COUNT) + @as(i32, if (comp_enable) 1 else 0));
+        _ = try server.write(len.getSlice());
+        if (comp_enable)
+            _ = try server.writeByte(0);
+
+        _ = try server.write(self.buffer.items[RESERVED_BYTE_COUNT..]);
     }
+
+    //pub fn getWritableBuffer(self: *Self) []const u8 {
+    //    var len = toVarInt(@intCast(i32, self.buffer.items.len - RESERVED_BYTE_COUNT));
+    //    std.mem.copy(u8, self.buffer.items[RESERVED_BYTE_COUNT - len.len ..], len.getSlice());
+    //    return self.buffer.items[RESERVED_BYTE_COUNT - len.len ..];
+    //}
 };
 
 pub const VarInt = struct {
@@ -499,6 +511,36 @@ pub fn cmdThread(
     }
 }
 
+pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_threshold: i32) ![]const u8 {
+    const comp_enabled = (comp_threshold > -1);
+    const total_len = @intCast(u32, readVarInt(reader));
+    //const is_compressed = blk: {
+    //    if (comp_enabled)
+    //        break :blk (readVarInt(reader) != 0);
+    //    break :blk false;
+    //};
+
+    const buf = try alloc.alloc(u8, total_len);
+    errdefer alloc.free(buf);
+    var n: u32 = 0;
+    while (n < total_len) : (n += 1) {
+        buf[n] = try reader.readByte();
+    }
+
+    if (comp_enabled) {
+        var in_stream = std.io.FixedBufferStream([]const u8){ .buffer = buf, .pos = 0 };
+        const comp_len = readVarInt(in_stream.reader());
+        if (comp_len == 0)
+            return buf[in_stream.pos..];
+        var zlib_stream = try std.compress.zlib.zlibStream(alloc, in_stream.reader());
+        defer zlib_stream.deinit();
+        const ubuf = try zlib_stream.reader().readAllAlloc(alloc, std.math.maxInt(usize));
+        alloc.free(buf);
+        return ubuf;
+    }
+    return buf;
+}
+
 pub const ServerListener = struct {
     pub const PacketStateUncompressed = enum {
         parsing_length,
@@ -521,29 +563,45 @@ pub const ServerListener = struct {
         reader: std.net.Stream.Reader,
         queue: *PacketQueueType,
         q_cond: *std.Thread.Condition,
+        comp_thresh: i32,
     ) void {
         var parsed = ParsedPacket.init(alloc);
         //defer parsed.deinit();
 
         const value = blk: {
             while (true) {
-                parsed.len = readVarIntWithError(reader) catch |err| break :blk err;
-                //parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
-                var data_count: u32 = 0;
-                {
-                    //std.debug.print("parsing data\n", .{});
-                    while (data_count < parsed.len) : (data_count += 1) {
-                        const byte = reader.readByte() catch |err| break :blk err;
-                        parsed.buffer.append(byte) catch unreachable;
-                    }
-                    const node = alloc.create(PacketQueueType.Node) catch unreachable;
-                    node.* = .{ .prev = null, .next = null, .data = parsed };
-                    queue.put(node);
-                    parsed = ParsedPacket.init(alloc);
-                    q_cond.signal();
-                }
+                const pd = recvPacket(alloc, reader, comp_thresh) catch |err| break :blk err;
+                //parsed.len = @intCast(i32, pd.len);
+                //var in_stream = std.io.FixedBufferStream([]const u8){ .buffer = pd, .pos = 0 };
+                //parsed.id = readVarInt(in_stream.reader());
+                parsed.buffer.appendSlice(pd) catch unreachable;
+                alloc.free(pd);
+                const node = alloc.create(PacketQueueType.Node) catch unreachable;
+                node.* = .{ .prev = null, .next = null, .data = parsed };
+                queue.put(node);
+                parsed = ParsedPacket.init(alloc);
+                q_cond.signal();
             }
         };
+        //const value = blk: {
+        //    while (true) {
+        //        parsed.len = readVarIntWithError(reader) catch |err| break :blk err;
+        //        //parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
+        //        var data_count: u32 = 0;
+        //        {
+        //            //std.debug.print("parsing data\n", .{});
+        //            while (data_count < parsed.len) : (data_count += 1) {
+        //                const byte = reader.readByte() catch |err| break :blk err;
+        //                parsed.buffer.append(byte) catch unreachable;
+        //            }
+        //            const node = alloc.create(PacketQueueType.Node) catch unreachable;
+        //            node.* = .{ .prev = null, .next = null, .data = parsed };
+        //            queue.put(node);
+        //            parsed = ParsedPacket.init(alloc);
+        //            q_cond.signal();
+        //        }
+        //    }
+        //};
         switch (value) {
             error.NotOpenForReading => {
                 return;
@@ -644,6 +702,7 @@ pub const ChunkMap = struct {
         }
     }
 
+    //TODO why does this crash with some block updates
     pub fn setBlock(self: *Self, x: i64, y: i64, z: i64, id: BLOCK_ID_INT) !void {
         const section = self.getChunkSectionPtr(x, y, z) orelse unreachable;
 

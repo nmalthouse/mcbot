@@ -150,7 +150,7 @@ pub const Bot = struct {
     const Self = @This();
 
     handshake_complete: bool = false,
-    compression_threshold: ?u32 = null,
+    compression_threshold: i32 = -1,
     connection_state: enum { play, login, none } = .none,
     name: []const u8,
     health: f32 = 20,

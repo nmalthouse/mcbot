@@ -193,7 +193,7 @@ pub const AStarContext = struct {
 
                 y_offset = -1;
                 while (self.hasBlockTag("minecraft:climbable", current_n.x, current_n.y + y_offset, current_n.z)) : (y_offset -= 1) {
-                    if (self.hasWalkableAdj(current_n.x, current_n.y + y_offset, current_n.z))
+                    if (self.hasWalkableAdj(current_n.x, current_n.y + y_offset - 1, current_n.z))
                         try self.addNode(.{
                             .ntype = .ladder,
                             .x = current_n.x,
@@ -317,8 +317,10 @@ pub const AStarContext = struct {
         } else if (!head_blocked and col.walkable(1) and col.canEnter(2) and col.canEnter(3)) {
             return .{ .cat = .jump, .y_offset = 1 };
         } else {
-            var i: i32 = -1;
-            while (y + i >= 0) : (i -= 1) {
+            if (!col.canEnter(1) or !col.canEnter(2))
+                return .{ .cat = .blocked };
+            var i: i32 = 0;
+            while (y + i >= -64) : (i -= 1) {
                 if (col.walkable(i)) {
                     if (@intCast(u32, (std.math.absInt(i) catch unreachable)) <= max_fall_dist)
                         return .{ .cat = .fall, .y_offset = i };
@@ -331,6 +333,11 @@ pub const AStarContext = struct {
 
     pub fn hasBlockTag(self: *const Self, tag: []const u8, x: i32, y: i32, z: i32) bool {
         return (self.tag_table.hasTag(self.block_table.getBlockIndex(self.world.getBlock(x, y, z)), "minecraft:block", tag));
+    }
+
+    //TODO check if it is transparent block
+    pub fn isWalkable(self: *Self, x: i32, y: i32, z: i32) bool {
+        return @bitCast(bool, self.world.getBlock(x, y, z) != 0);
     }
 
     pub fn hasWalkableAdj(self: *Self, x: i32, y: i32, z: i32) bool {
