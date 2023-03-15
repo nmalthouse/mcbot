@@ -21,6 +21,16 @@ pub fn genEnum(comptime id_strings: []const []const u8) type {
 
 pub const packet_enum = genEnum(packet_ids[0..]);
 
+pub const login_packet_enum = genEnum(Login_ids[0..]);
+
+pub const Login_ids = [_][]const u8{
+    "Disconnect",
+    "Encryption_Request",
+    "Login_Success",
+    "Set_Compression",
+    "Login_Plugin_Request",
+};
+
 pub const packet_ids = [_][]const u8{
     "Spawn_Entity",
     "Spawn_Experience_Orb",

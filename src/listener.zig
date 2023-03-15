@@ -270,6 +270,64 @@ pub fn toVarInt(input: i32) VarInt {
 
 const reader_type = std.net.Stream.Reader;
 
+pub fn packetParseCtx(comptime readerT: type) type {
+    return struct {
+        const Self = @This();
+
+        //This structure makes no attempt to keep track of memory it allocates, as much of what is parsed is
+        //garbage
+        //use an arena allocator and copy over values that you need
+        pub fn init(reader: readerT, alloc: std.mem.Allocator) Self {
+            return .{
+                .alloc = alloc,
+                .reader = reader,
+            };
+        }
+
+        pub fn int(self: *Self, comptime intT: type) intT {
+            return self.reader.readInt(intT, .Big) catch unreachable;
+        }
+
+        pub fn float(self: *Self, comptime fT: type) fT {
+            if (fT == f32) {
+                return @bitCast(f32, self.int(u32));
+            }
+            if (fT == f64) {
+                return @bitCast(f64, self.int(u64));
+            }
+            unreachable;
+        }
+
+        pub fn v3f(self: *Self) V3f {
+            return .{
+                .x = self.float(f64),
+                .y = self.float(f64),
+                .z = self.float(f64),
+            };
+        }
+
+        pub fn varInt(self: *Self) i32 {
+            return readVarInt(self.reader);
+        }
+
+        pub fn boolean(self: *Self) bool {
+            return (self.int(u8) == 1);
+        }
+
+        pub fn string(self: *Self, max_len: ?usize) ![]const u8 {
+            const len = @intCast(u32, readVarInt(self.reader));
+            if (max_len) |l|
+                if (len > l) return error.StringExceedsMaxLen;
+            const slice = try self.alloc.alloc(u8, len);
+            try self.reader.readNoEof(slice);
+            return slice;
+        }
+
+        reader: readerT,
+        alloc: std.mem.Allocator,
+    };
+}
+
 pub fn readVarInt(reader: anytype) i32 {
     const CONT: u32 = 0x80;
     const SEG: u32 = 0x7f;
@@ -470,8 +528,8 @@ pub const ServerListener = struct {
         const value = blk: {
             while (true) {
                 parsed.len = readVarIntWithError(reader) catch |err| break :blk err;
-                parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
-                var data_count: u32 = toVarInt(parsed.id).len;
+                //parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
+                var data_count: u32 = 0;
                 {
                     //std.debug.print("parsing data\n", .{});
                     while (data_count < parsed.len) : (data_count += 1) {
