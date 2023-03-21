@@ -1,16 +1,54 @@
 const std = @import("std");
 
 const IDS = @import("list.zig");
+const nbt_zig = @import("nbt.zig");
 
 const vector = @import("vector.zig");
 const V3f = vector.V3f;
+const V3i = vector.V3i;
 
 const Queue = std.atomic.Queue;
 
+//TODO Edit api to use vector structs for everything
+
 const Serv = std.net.Stream.Writer;
 pub const PacketCtx = struct {
+    pub const PlayerActionStatus = enum(i32) {
+        start_digging,
+        cancel_digging,
+        finish_digging,
+        drop_item_stack,
+        drop_item,
+        shoot_arrowEat,
+        swap_item_in_hand,
+    };
+
     packet: Packet,
     server: Serv,
+
+    pub fn useItemOn(
+        self: *@This(),
+        hand: enum { main, off_hand },
+        block_pos: V3i,
+        face: enum { bottom, top, north, south, west, east },
+        cx: f32,
+        cy: f32,
+        cz: f32,
+        head_in_block: bool,
+        sequence: i32,
+    ) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x31);
+        try self.packet.varInt(@enumToInt(hand));
+        try self.packet.iposition(block_pos);
+        try self.packet.varInt(@enumToInt(face));
+        try self.packet.float(cx);
+        try self.packet.float(cy);
+        try self.packet.float(cz);
+        try self.packet.boolean(head_in_block);
+        try self.packet.varInt(sequence);
+        try self.packet.writeToServer(self.server);
+    }
 
     pub fn sendChat(self: *@This(), msg: []const u8) !void {
         if (msg.len > 255) return error.msgToLong;
@@ -24,6 +62,16 @@ pub const PacketCtx = struct {
         try self.packet.writeToServer(self.server);
     }
 
+    pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x1C); //Packet id
+        try self.packet.varInt(@enumToInt(status));
+        try self.packet.iposition(block_pos);
+        try self.packet.ubyte(0); //Face of block
+        try self.packet.varInt(0);
+        try self.packet.writeToServer(self.server);
+    }
+
     pub fn handshake(self: *@This(), hostname: []const u8, port: u16) !void {
         try self.packet.clear();
         try self.packet.varInt(0); //Packet id
@@ -31,6 +79,13 @@ pub const PacketCtx = struct {
         try self.packet.string(hostname);
         try self.packet.short(port);
         try self.packet.varInt(2); //Next state
+        try self.packet.writeToServer(self.server);
+    }
+
+    pub fn clientCommand(self: *@This(), action: u8) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x06);
+        try self.packet.varInt(action);
         try self.packet.writeToServer(self.server);
     }
 
@@ -53,6 +108,15 @@ pub const PacketCtx = struct {
         try self.packet.clear();
         try self.packet.varInt(0x11);
         try self.packet.long(id);
+        try self.packet.writeToServer(self.server);
+    }
+
+    pub fn setPlayerRot(self: *@This(), yaw: f32, pitch: f32, grounded: bool) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x15);
+        try self.packet.float(yaw);
+        try self.packet.float(pitch);
+        try self.packet.boolean(grounded);
         try self.packet.writeToServer(self.server);
     }
 
@@ -152,6 +216,10 @@ pub const Packet = struct {
         var val = toVarInt(int);
         const wr = self.buffer.writer();
         _ = try wr.write(val.getSlice());
+    }
+
+    pub fn iposition(self: *Self, v: vector.V3i) !void {
+        try self.long((@as(i64, v.x & 0x3FFFFFF) << 38) | ((v.z & 0x3FFFFFF) << 12) | (v.y & 0xFFF));
     }
 
     pub fn slice(self: *Self, sl: []const u8) !void {
@@ -280,6 +348,13 @@ pub fn toVarInt(input: i32) VarInt {
     }
 }
 
+pub const Slot = struct {
+    item_id: u16,
+    count: u8,
+    //TODO nbt
+
+};
+
 const reader_type = std.net.Stream.Reader;
 
 pub fn packetParseCtx(comptime readerT: type) type {
@@ -300,6 +375,32 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return self.reader.readInt(intT, .Big) catch unreachable;
         }
 
+        pub fn blockEntity(self: *Self) u8 {
+            const pxz = self.int(u8);
+            const y = self.int(i16);
+            const btype = self.varInt();
+            const nbt = nbt_zig.parse(self.alloc, self.reader) catch unreachable;
+            _ = nbt;
+            _ = pxz;
+            _ = y;
+            _ = btype;
+            return 0;
+        }
+
+        pub fn slot(self: *Self) ?Slot {
+            if (self.boolean()) { //Is item present
+
+                const s = Slot{
+                    .item_id = @intCast(u16, self.varInt()),
+                    .count = self.int(u8),
+                };
+                const nbt = nbt_zig.parse(self.alloc, self.reader) catch unreachable;
+                _ = nbt;
+                return s;
+            }
+            return null;
+        }
+
         pub fn float(self: *Self, comptime fT: type) fT {
             if (fT == f32) {
                 return @bitCast(f32, self.int(u32));
@@ -318,8 +419,30 @@ pub fn packetParseCtx(comptime readerT: type) type {
             };
         }
 
+        pub fn cposition(self: *Self) vector.V3i {
+            const pos = self.int(i64);
+            return .{
+                .x = @intCast(i32, pos >> 42),
+                .y = @intCast(i32, pos << 44 >> 44),
+                .z = @intCast(i32, pos << 22 >> 42),
+            };
+        }
+
+        pub fn position(self: *Self) vector.V3i {
+            const pos = self.int(i64);
+            return .{
+                .x = @intCast(i32, pos >> 38),
+                .y = @intCast(i32, pos << 52 >> 52),
+                .z = @intCast(i32, pos << 26 >> 38),
+            };
+        }
+
         pub fn varInt(self: *Self) i32 {
             return readVarInt(self.reader);
+        }
+
+        pub fn varLong(self: *Self) i64 {
+            return readVarLong(self.reader);
         }
 
         pub fn boolean(self: *Self) bool {
@@ -338,6 +461,24 @@ pub fn packetParseCtx(comptime readerT: type) type {
         reader: readerT,
         alloc: std.mem.Allocator,
     };
+}
+pub fn readVarLong(reader: anytype) i64 {
+    const CONT: u32 = 0x80;
+    const SEG: u32 = 0x7f;
+
+    var value: u64 = 0;
+    var pos: u8 = 0;
+    var current_byte: u8 = 0;
+
+    while (true) {
+        current_byte = reader.readByte() catch unreachable;
+        value |= @intCast(u64, current_byte & SEG) << @intCast(u5, pos);
+        if ((current_byte & CONT) == 0) break;
+        pos += 7;
+        if (pos >= 64) unreachable;
+    }
+
+    return @bitCast(i64, value);
 }
 
 pub fn readVarInt(reader: anytype) i32 {
@@ -456,6 +597,7 @@ test "toVarInt" {
     }
 }
 
+//TODO remove the id and len field and replace with a slice
 pub const ParsedPacket = struct {
     const Self = @This();
 
@@ -583,25 +725,6 @@ pub const ServerListener = struct {
                 q_cond.signal();
             }
         };
-        //const value = blk: {
-        //    while (true) {
-        //        parsed.len = readVarIntWithError(reader) catch |err| break :blk err;
-        //        //parsed.id = readVarIntWithError(reader) catch |err| break :blk err;
-        //        var data_count: u32 = 0;
-        //        {
-        //            //std.debug.print("parsing data\n", .{});
-        //            while (data_count < parsed.len) : (data_count += 1) {
-        //                const byte = reader.readByte() catch |err| break :blk err;
-        //                parsed.buffer.append(byte) catch unreachable;
-        //            }
-        //            const node = alloc.create(PacketQueueType.Node) catch unreachable;
-        //            node.* = .{ .prev = null, .next = null, .data = parsed };
-        //            queue.put(node);
-        //            parsed = ParsedPacket.init(alloc);
-        //            q_cond.signal();
-        //        }
-        //    }
-        //};
         switch (value) {
             error.NotOpenForReading => {
                 return;
@@ -643,42 +766,51 @@ pub const ChunkMap = struct {
         self.x.deinit();
     }
 
-    pub fn getBlockFloat(self: *Self, x: f64, y: f64, z: f64) BLOCK_ID_INT {
-        return self.getBlock(
-            @floatToInt(i32, x),
-            @floatToInt(i32, y),
-            @floatToInt(i32, z),
-        );
+    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32) void {
+        if (self.x.getPtr(cx)) |zw| {
+            if (zw.getPtr(cz)) |*cc| {
+                for (cc.*) |*section| {
+                    section.deinit();
+                }
+                _ = zw.remove(cz);
+            }
+        }
     }
-    pub fn getChunkCoord(x: i64, y: i64, z: i64) V3i {
-        const cx = @intCast(i32, @divFloor(x, 16));
-        const cz = @intCast(i32, @divFloor(z, 16));
-        const cy = @intCast(i32, @divFloor(y + 64, 16));
+
+    pub fn isLoaded(self: *Self, pos: V3i) bool {
+        return (self.getChunkSectionPtr(pos) != null);
+        //const co = getChunkCoord(pos);
+        //if (self.x.get(co.x)) |z| {
+        //    return z.contains(co.z);
+        //}
+        //return false;
+    }
+
+    pub fn getChunkCoord(pos: V3i) V3i {
+        const cx = @intCast(i32, @divFloor(pos.x, 16));
+        const cz = @intCast(i32, @divFloor(pos.z, 16));
+        const cy = @intCast(i32, @divFloor(pos.y + 64, 16));
         return .{ .x = cx, .y = cy, .z = cz };
     }
 
-    pub fn getChunkSectionPtr(self: *Self, x: i64, y: i64, z: i64) ?*ChunkSection {
-        const cx = @intCast(i32, @divFloor(x, 16));
-        const cz = @intCast(i32, @divFloor(z, 16));
-        const cy = @intCast(i32, @divFloor(y + 64, 16));
+    pub fn getChunkSectionPtr(self: *Self, pos: V3i) ?*ChunkSection {
+        const ch = ChunkMap.getChunkCoord(pos);
 
-        const world_z = self.x.getPtr(cx) orelse return null;
-        const column = world_z.getPtr(cz) orelse return null;
-        return &column[@intCast(u32, cy)];
+        const world_z = self.x.getPtr(ch.x) orelse return null;
+        const column = world_z.getPtr(ch.z) orelse return null;
+        return &column[@intCast(u32, ch.y)];
     }
 
-    pub fn getBlock(self: *Self, x: i32, y: i32, z: i32) BLOCK_ID_INT {
-        const cx = @divFloor(x, 16);
-        const cz = @divFloor(z, 16);
-        const cy = @divFloor(y + 64, 16);
+    pub fn getBlock(self: *Self, pos: V3i) BLOCK_ID_INT {
+        const ch = ChunkMap.getChunkCoord(pos);
 
-        const rx = @mod(x, 16);
-        const rz = @mod(z, 16);
-        const ry = @mod(y + 64, 16);
+        const rx = @mod(pos.x, 16);
+        const rz = @mod(pos.z, 16);
+        const ry = @mod(pos.y + 64, 16);
 
-        const world_z = self.x.getPtr(cx) orelse unreachable;
-        const column = world_z.getPtr(cz) orelse unreachable;
-        const section = column[@intCast(u32, cy)];
+        const world_z = self.x.getPtr(ch.x) orelse unreachable;
+        const column = world_z.getPtr(ch.z) orelse unreachable;
+        const section = column[@intCast(u32, ch.y)];
         switch (section.bits_per_entry) {
             0 => {
                 return section.mapping.items[0];
@@ -702,13 +834,25 @@ pub const ChunkMap = struct {
         }
     }
 
-    //TODO why does this crash with some block updates
-    pub fn setBlock(self: *Self, x: i64, y: i64, z: i64, id: BLOCK_ID_INT) !void {
-        const section = self.getChunkSectionPtr(x, y, z) orelse unreachable;
+    pub fn setBlockChunk(self: *Self, chunk_pos: V3i, rel_pos: V3i, id: BLOCK_ID_INT) !void {
+        const world_z = self.x.getPtr(chunk_pos.x) orelse unreachable;
+        const column = world_z.getPtr(chunk_pos.z) orelse unreachable;
+        const section = &column[@intCast(u32, chunk_pos.y + 4)];
 
-        const rx = @intCast(u32, @mod(x, 16));
-        const rz = @intCast(u32, @mod(z, 16));
-        const ry = @intCast(u32, @mod(y + 64, 16));
+        try section.setBlock(
+            @intCast(u32, rel_pos.x),
+            @intCast(u32, rel_pos.y),
+            @intCast(u32, rel_pos.z),
+            id,
+        );
+    }
+
+    pub fn setBlock(self: *Self, pos: V3i, id: BLOCK_ID_INT) !void {
+        const section = self.getChunkSectionPtr(pos) orelse unreachable;
+
+        const rx = @intCast(u32, @mod(pos.x, 16));
+        const rz = @intCast(u32, @mod(pos.z, 16));
+        const ry = @intCast(u32, @mod(pos.y + 64, 16));
 
         try section.setBlock(rx, ry, rz, id);
     }
@@ -730,17 +874,13 @@ pub fn lookAtBlock(pos: V3f, block: V3f) struct { yaw: f32, pitch: f32 } {
     };
 }
 
-pub const V3i = struct {
-    x: i32,
-    y: i32,
-    z: i32,
-};
-
 pub const BLOCK_ID_INT = u16;
 pub const ChunkSection = struct {
     const Self = @This();
 
     const BLOCKS_PER_SECTION = 16 * 16 * 16;
+    const DIRECT_THRESHOLD = 9;
+    const DIRECT_BIT_COUNT = 15;
 
     pub const BlockIndex = struct {
         index: usize,
@@ -756,15 +896,17 @@ pub const ChunkSection = struct {
 
         pub fn next(it: *DataIterator) ?usize {
             if (it.bits_per_entry == 0) return null;
-            it.shift_index += 1;
             const entries_per_long = @divTrunc(64, it.bits_per_entry);
+            if (((it.buffer_index) * entries_per_long) + it.shift_index >= BLOCKS_PER_SECTION) return null;
+            const id = (it.buffer[it.buffer_index] >> @intCast(u6, it.shift_index * it.bits_per_entry)) & getBitMask(it.bits_per_entry);
+            it.shift_index += 1;
             if (it.shift_index >= entries_per_long) {
                 it.shift_index = 0;
                 it.buffer_index += 1;
             }
 
-            if (it.buffer_index >= it.buffer.len) return null;
-            return (it.buffer[it.buffer_index] >> @intCast(u6, it.shift_index * it.bits_per_entry)) & getBitMask(it.bits_per_entry);
+            //if (it.buffer_index >= it.buffer.len) return null;
+            return id;
         }
 
         pub fn getCoord(it: *DataIterator) V3i {
@@ -818,7 +960,12 @@ pub const ChunkSection = struct {
         } else {
             const max_mapping = std.math.pow(BLOCK_ID_INT, 2, self.bits_per_entry);
             if (max_mapping < self.mapping.items.len + 1) {
-                const new_bpe = numBitsRequired(self.mapping.items.len + 1);
+                const new_bpe = blk: {
+                    const calc = numBitsRequired(self.mapping.items.len + 1);
+                    if (calc < 4)
+                        break :blk 4;
+                    break :blk calc;
+                };
 
                 const new_bpl = @divTrunc(64, new_bpe);
                 var new_data = std.ArrayList(u64).init(self.data.allocator);
@@ -827,15 +974,19 @@ pub const ChunkSection = struct {
 
                 var new_i: usize = 0;
                 var new_shift_i: usize = 0;
+                std.debug.print("New bpe : {d}, {d}\n", .{ new_bpe, self.mapping.items.len });
 
                 var old_it = DataIterator{ .buffer = self.data.items, .bits_per_entry = self.bits_per_entry };
                 var old_dat = old_it.next();
                 while (old_dat != null) : (old_dat = old_it.next()) {
+                    //std.debug.print("{d} {d}: {d}\n", .{ i, new_i, new_shift_i });
                     const long = &new_data.items[new_i];
                     const mask = getBitMask(new_bpe) << @intCast(u6, new_shift_i * new_bpe);
                     const shifted_id = old_dat.? << @intCast(u6, new_shift_i * new_bpe);
                     long.* = (long.* & ~mask) | shifted_id;
 
+                    //TODO is this math correct
+                    //and Is dataIterator correctly iterating
                     new_shift_i += 1;
                     if (new_shift_i >= new_bpl) {
                         new_shift_i = 0;
@@ -855,21 +1006,6 @@ pub const ChunkSection = struct {
         }
     }
 
-    //pub fn dumpSection(self: *Self)void {
-    //    for(data)
-    //}
-
-    //pub fn getBitMask(self: *const Self) u64 {
-    //    if (self.bits_per_entry < 4 or self.bits_per_entry == 0 or self.bits_per_entry > 8) unreachable;
-    //    //return @as(u64, 0x1) <<| (self.bits_per_entry - 1);
-    //    return (~@as(u64, 0x0)) >> @intCast(u6, 64 - self.bits_per_entry);
-
-    //    //From wiki.vg/chunk_format:
-    //    //For block states with bits per entry <= 4, 4 bits are used to represent a block.
-    //    //For block states and bits per entry between 5 and 8, the given value is used.
-    //    //For biomes the given value is always used, and will be <= 3
-    //}
-
     pub fn hasMapping(self: *Self, id: BLOCK_ID_INT) bool {
         return (std.mem.indexOfScalar(BLOCK_ID_INT, self.mapping.items, id) != null);
     }
@@ -884,9 +1020,36 @@ pub const ChunkSection = struct {
     }
 };
 
+test "chunk section" {
+    const alloc = std.testing.allocator;
+    var section = ChunkSection.init(alloc);
+    defer section.deinit();
+
+    try section.mapping.resize(32);
+    section.bits_per_entry = 5;
+    try section.data.resize(@divTrunc(4096, 12) + 1);
+    std.mem.set(BLOCK_ID_INT, section.mapping.items, 0);
+    std.mem.set(u64, section.data.items, 0);
+
+    try section.setBlock(0, 0, 0, 1);
+}
+
 pub const BlockIdJson = struct {
     name: []u8,
     ids: []u16,
+};
+
+pub const ItemJson = struct {
+    name: []u8,
+    id: u16,
+
+    fn compare(ctx: u8, key: ItemJson, actual: ItemJson) std.math.Order {
+        _ = ctx;
+        if (key.id >= actual.id and key.id <= actual.id) return .eq;
+        if (key.id > actual.id) return .gt;
+        if (key.id < actual.id) return .lt;
+        return .eq;
+    }
 };
 
 pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: type) !T {
@@ -907,6 +1070,29 @@ pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: 
 pub fn freeJson(comptime T: type, alloc: std.mem.Allocator, item: T) void {
     std.json.parseFree(T, item, .{ .allocator = alloc });
 }
+
+pub const ItemRegistry = struct {
+    const Self = @This();
+
+    data: []ItemJson,
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator, filename: []const u8) !Self {
+        return Self{
+            .data = try readJsonFile(filename, alloc, []ItemJson),
+            .alloc = alloc,
+        };
+    }
+
+    pub fn getName(self: *const Self, id: u16) []const u8 {
+        const index = std.sort.binarySearch(ItemJson, .{ .id = id, .name = "" }, self.data, @as(u8, 0), ItemJson.compare);
+        return self.data[index.?].name;
+    }
+
+    pub fn deinit(self: *Self) void {
+        freeJson([]ItemJson, self.alloc, self.data);
+    }
+};
 
 pub const TagRegistry = struct {
     const Self = @This();

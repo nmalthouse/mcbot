@@ -1,5 +1,9 @@
 # Bot
 
+## TODO 
+Write a function which determines what block a player is currently looking at.
+When a player sends a chat that the bot interprets as a command, use the info from the chat packet to query the entity table to get players pos and head rotation
+
 What if we just named properties?
 
 ## Hosting multiple bots:

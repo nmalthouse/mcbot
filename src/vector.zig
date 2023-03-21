@@ -3,10 +3,68 @@ const math = std.math;
 
 const c = @import("c.zig").c;
 
-pub const V3i = struct {
+pub fn Ivec(comptime itype: type) type {
+    return struct {
+        const Self = @This();
+        x: itype,
+        y: itype,
+        z: itype,
+
+        pub fn new(x: itype, y: itype, z: itype) Self {
+            return Self{
+                .x = x,
+                .y = y,
+                .z = z,
+            };
+        }
+
+        pub fn add(a: Self, b: Self) Self {
+            return Self.new(a.x + b.x, a.y + b.y, a.z + b.z);
+        }
+
+        pub fn toF(a: Self) V3f {
+            return .{
+                .x = @intToFloat(f64, a.x),
+                .y = @intToFloat(f64, a.y),
+                .z = @intToFloat(f64, a.z),
+            };
+        }
+    };
+}
+pub const V3i = Ivec(i32);
+pub const shortV3i = Ivec(i16);
+
+pub fn deltaPosToV3f(x0: V3f, del: shortV3i) V3f {
+    const d = del.toF();
+    return .{
+        .x = (((d.x / 128) + (32 * x0.x)) / 32),
+        .y = (((d.y / 128) + (32 * x0.y)) / 32),
+        .z = (((d.z / 128) + (32 * x0.z)) / 32),
+    };
+}
+
+//pub const V3i = struct {
+//    const Self = @This();
+//    x: i32,
+//    y: i32,
+//    z: i32,
+//
+//    pub fn new(x: i32, y: i32, z: i32) Self {
+//        return Self{
+//            .x = x,
+//            .y = y,
+//            .z = z,
+//        };
+//    }
+//
+//    pub fn add(a: Self, b: Self) Self {
+//        return Self.new(a.x + b.x, a.y + b.y, a.z + b.z);
+//    }
+//};
+
+pub const V2i = struct {
     x: i32,
     y: i32,
-    z: i32,
 };
 
 pub const V3f = struct {

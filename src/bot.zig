@@ -1,6 +1,7 @@
 const std = @import("std");
 const vector = @import("vector.zig");
 const V3f = vector.V3f;
+const mc = @import("listener.zig");
 
 pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
     const disc = std.math.pow(f64, b, 2) - (4 * a * C);
@@ -149,6 +150,7 @@ pub const MovementState = struct {
 pub const Bot = struct {
     const Self = @This();
 
+    view_dist: u8 = 2,
     handshake_complete: bool = false,
     compression_threshold: i32 = -1,
     connection_state: enum { play, login, none } = .none,
@@ -158,6 +160,8 @@ pub const Bot = struct {
     food_saturation: f32 = 5,
     pos: ?V3f = null,
     e_id: u32,
+
+    inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
 
     pub fn init(alloc: std.mem.Allocator, name_: []const u8) Bot {
         _ = alloc;

@@ -12,15 +12,23 @@ const math = std.math;
 
 const vector = @import("vector.zig");
 const V3f = vector.V3f;
+const V3i = vector.V3i;
+const V2i = vector.V2i;
+
+const Parse = @import("parser.zig");
 
 const c = @import("c.zig").c;
 
 const fbsT = std.io.FixedBufferStream([]const u8);
 
-pub const V2i = struct {
-    x: i32,
-    y: i32,
-};
+pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8)) ?vector.V3f {
+    var ret = V3f{
+        .x = @intToFloat(f64, std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null),
+        .y = @intToFloat(f64, std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null),
+        .z = @intToFloat(f64, std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null),
+    };
+    return ret;
+}
 
 pub fn parseCoord(it: *std.mem.TokenIterator(u8)) !vector.V3f {
     return .{
@@ -29,6 +37,8 @@ pub fn parseCoord(it: *std.mem.TokenIterator(u8)) !vector.V3f {
         .z = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
     };
 }
+
+//TODO deal with entity table
 
 const ADJ = [8]V2i{
     .{ .x = -1, .y = 1 },
@@ -53,10 +63,17 @@ const ADJ_COST = [8]u32{
     10,
 };
 
+pub const Entity = struct {
+    uuid: u128,
+    pos: V3f,
+    yaw: f32,
+    pitch: f32,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.detectLeaks();
-    errdefer _ = gpa.detectLeaks();
+    //errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
     const server = blk: {
@@ -79,6 +96,10 @@ pub fn main() !void {
         unreachable;
     };
 
+    var item_table = try mc.ItemRegistry.init(alloc, "json/items.json");
+    defer item_table.deinit();
+    std.debug.print("{s}\n", .{item_table.getName(1)});
+
     var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
     defer block_table.deinit(alloc);
 
@@ -90,6 +111,9 @@ pub fn main() !void {
 
     var bot1 = Bot.init(alloc, "Tony");
     defer bot1.deinit();
+
+    var entities = std.AutoHashMap(i32, Entity).init(alloc);
+    defer entities.deinit();
 
     const swr = server.writer();
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = swr };
@@ -156,6 +180,10 @@ pub fn main() !void {
         }
     }
 
+    var niklas_id: ?i32 = 0;
+    const max_niklas_cooldown: f64 = 0.2;
+    var niklas_cooldown: f64 = 0;
+
     var q_cond: std.Thread.Condition = .{};
     var q_mutex: std.Thread.Mutex = .{};
     q_mutex.lock();
@@ -165,7 +193,7 @@ pub fn main() !void {
         mc.ServerListener.parserThread,
         .{ alloc, server.reader(), &queue, &q_cond, bot1.compression_threshold },
     );
-    defer listener_thread.join();
+    //defer listener_thread.join();
     defer server.close();
 
     var cmd_thread = try std.Thread.spawn(
@@ -173,23 +201,26 @@ pub fn main() !void {
         mc.cmdThread,
         .{ alloc, &queue, &q_cond },
     );
-    defer cmd_thread.join();
+    _ = cmd_thread;
+    _ = listener_thread;
+    //defer cmd_thread.join();
 
     var pathctx = astar.AStarContext.init(alloc, &world, &tag_table, &block_table);
     defer pathctx.deinit();
 
-    var start_rot: bool = false;
+    var player_actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc);
+    defer player_actions.deinit();
 
-    var move_vecs = std.ArrayList(astar.AStarContext.MoveItem).init(alloc);
-    defer move_vecs.deinit();
+    var current_action: ?astar.AStarContext.PlayerActionItem = null;
 
-    var goal: ?astar.AStarContext.MoveItem = null;
-    const speed: f64 = 5; //BPS
+    const speed: f64 = 7; //BPS
     var draw = false;
 
     var maj_goal: ?V3f = null;
 
     var move_state: bot.MovementState = undefined;
+
+    var block_break_timer: ?f64 = null;
 
     if (draw) {
         c.InitWindow(1800, 1000, "Window");
@@ -219,11 +250,9 @@ pub fn main() !void {
                 const playerpos = bot1.pos.?;
                 camera.target = playerpos.toRay();
                 {
-                    const pix = @floatToInt(i64, playerpos.x);
-                    const piy = @floatToInt(i64, playerpos.y);
-                    const piz = @floatToInt(i64, playerpos.z);
-                    const section = world.getChunkSectionPtr(pix, piy, piz);
-                    const cc = mc.ChunkMap.getChunkCoord(pix, piy, piz);
+                    const pi = playerpos.toI();
+                    const section = world.getChunkSectionPtr(playerpos.toI());
+                    const cc = mc.ChunkMap.getChunkCoord(playerpos.toI());
 
                     if (section) |sec| {
                         var it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
@@ -241,8 +270,9 @@ pub fn main() !void {
                     }
 
                     for (ADJ) |adj| {
-                        const section1 = world.getChunkSectionPtr(pix + adj.x * 16, piy, piz + adj.y * 16);
-                        const cc1 = mc.ChunkMap.getChunkCoord(pix + adj.x * 16, piy, piz + adj.y * 16);
+                        const offset = pi.add(V3i.new(adj.x * 16, 0, adj.y * 16));
+                        const section1 = world.getChunkSectionPtr(offset);
+                        const cc1 = mc.ChunkMap.getChunkCoord(offset);
                         if (section1) |sec| {
                             var it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
                             var block = it.next();
@@ -259,15 +289,20 @@ pub fn main() !void {
                         }
                     }
 
-                    for (move_vecs.items) |mv| {
-                        const color = switch (mv.kind) {
-                            .ladder => c.BLACK,
-                            .walk => c.BLUE,
-                            .jump => c.RED,
-                            .fall => c.GREEN,
-                            else => unreachable,
-                        };
-                        c.DrawCube(mv.pos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, color);
+                    for (player_actions.items) |act| {
+                        switch (act) {
+                            .movement => |mv| {
+                                const color = switch (mv.kind) {
+                                    .ladder => c.BLACK,
+                                    .walk => c.BLUE,
+                                    .jump => c.RED,
+                                    .fall => c.GREEN,
+                                    else => unreachable,
+                                };
+                                c.DrawCube(mv.pos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, color);
+                            },
+                            else => {},
+                        }
                     }
 
                     //for (pathctx.closed.items) |op| {
@@ -291,57 +326,106 @@ pub fn main() !void {
             c.EndDrawing();
         }
 
-        if (bot1.pos != null) {
-            //TODO use actual dt
+        if (bot1.handshake_complete) {
             const dt: f64 = 1.0 / 20.0;
+            if (current_action) |action| {
+                switch (action) {
+                    .movement => |move_| {
+                        var move = move_;
+                        var adt = dt;
+                        var grounded = true;
+                        var moved = false;
+                        var pw = mc.lookAtBlock(bot1.pos.?, move.pos.add(V3f.new(0, 0.6, 0)));
+                        while (true) {
+                            var move_vec = blk: {
+                                switch (move.kind) {
+                                    .walk => {
+                                        break :blk move_state.walk(speed, adt);
+                                    },
+                                    .jump => break :blk move_state.jump(speed, adt),
+                                    .fall => break :blk move_state.fall(speed, adt),
+                                    .ladder => break :blk move_state.ladder(2.35, adt),
+                                    .blocked => unreachable,
 
-            //const pow = std.math.pow;
-            var adt = dt;
-            var grounded = true;
-            var moved = false;
-            while (true) {
-                if (goal) |gvec| {
-                    var move_vec = blk: {
-                        switch (gvec.kind) {
-                            .walk => {
-                                break :blk move_state.walk(speed, adt);
-                            },
-                            .jump => break :blk move_state.jump(speed, adt),
-                            .fall => break :blk move_state.fall(speed, adt),
-                            .ladder => break :blk move_state.ladder(2.35, adt),
-                            .blocked => unreachable,
+                                    //else => {
+                                    //    unreachable;
+                                    //},
+                                }
+                            };
+                            grounded = move_vec.grounded;
 
-                            //else => {
-                            //    unreachable;
-                            //},
+                            bot1.pos = move_vec.new_pos;
+                            moved = true;
+
+                            if (!move_vec.move_complete) {
+                                break;
+                            } else {
+                                if (player_actions.items.len > 0) {
+                                    switch (player_actions.items[player_actions.items.len - 1]) {
+                                        .movement => {
+                                            adt = move_vec.remaining_dt;
+                                            current_action = player_actions.pop();
+                                            move = current_action.?.movement;
+                                            move_state.init_pos = move_vec.new_pos;
+                                            move_state.final_pos = move.pos;
+                                            move_state.time = 0;
+                                        },
+                                        else => {
+                                            current_action = player_actions.pop();
+                                            if (current_action) |acc| {
+                                                switch (acc) {
+                                                    .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
+                                                    .block_break => block_break_timer = null,
+                                                }
+                                            }
+                                            break;
+                                        },
+                                    }
+                                } else {
+                                    current_action = null;
+                                    break;
+                                }
+                            }
+                            //move_vec = //above switch statement
                         }
-                    };
-                    grounded = move_vec.grounded;
-
-                    bot1.pos = move_vec.new_pos;
-                    moved = true;
-
-                    if (!move_vec.move_complete) {
-                        break;
-                    } else {
-                        goal = move_vecs.popOrNull();
-                        adt = move_vec.remaining_dt;
-                        if (goal) |g| {
-                            move_state.init_pos = move_vec.new_pos;
-                            move_state.final_pos = g.pos;
-                            move_state.time = 0;
+                        if (moved) {
+                            try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, grounded);
+                        }
+                    },
+                    .block_break => |bb| {
+                        if (block_break_timer == null) {
+                            const pw = mc.lookAtBlock(bot1.pos.?, bb.pos.toF());
+                            try pctx.setPlayerRot(pw.yaw, pw.pitch, true);
+                            try pctx.playerAction(.start_digging, bb.pos);
+                            block_break_timer = dt;
                         } else {
-                            break;
+                            block_break_timer.? += dt;
+                            if (block_break_timer.? >= bb.break_time) {
+                                block_break_timer = null;
+                                try pctx.playerAction(.finish_digging, bb.pos);
+                                current_action = player_actions.popOrNull();
+                                if (current_action) |acc| {
+                                    switch (acc) {
+                                        .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
+                                        .block_break => block_break_timer = null,
+                                    }
+                                }
+                            }
                         }
+                    },
+                }
+            } else {
+                if (niklas_id) |nid| {
+                    niklas_cooldown += dt;
+                    if (niklas_cooldown > max_niklas_cooldown) {
+                        if (entities.get(nid)) |ne| {
+                            const pw = mc.lookAtBlock(bot1.pos.?, ne.pos.add(V3f.new(-0.3, 1, -0.3)));
+                            try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, true);
+                        }
+                        niklas_cooldown = 0;
                     }
-                    //move_vec = //above switch statement
-
-                } else {
-                    break;
                 }
             }
-            if (moved)
-                try pctx.setPlayerPositionRot(bot1.pos.?, 0, 0, grounded);
         }
         std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
         //q_cond.wait(&q_mutex);
@@ -356,7 +440,13 @@ pub fn main() !void {
             const parseT = mc.packetParseCtx(fbsT.Reader);
             var parse = parseT.init(fbs_.reader(), arena_alloc);
 
+            const parseTr = Parse.packetParseCtx(fbsT.Reader);
+            var parser = parseTr.init(fbs_.reader(), arena_alloc);
+
             const pid = parse.varInt();
+
+            const P = Parse.P;
+            const PT = Parse.parseType;
 
             switch (bot1.connection_state) {
                 else => {},
@@ -364,15 +454,40 @@ pub fn main() !void {
                     .server => {
                         switch (@intToEnum(id_list.packet_enum, pid)) {
                             .Keep_Alive => {
-                                const kid = parse.int(i64);
-                                try pctx.keepAlive(kid);
+                                const data = parser.parse(PT(&.{P(.long, "keep_alive_id")}));
+
+                                try pctx.keepAlive(data.keep_alive_id);
                             },
                             .Login => {
-                                std.debug.print("Login\n", .{});
-                                const p_id = parse.int(u32);
-                                std.debug.print("\tid: {d}\n", .{p_id});
-                                bot1.e_id = p_id;
-                                start_rot = true;
+                                const data = parser.parse(PT(&.{
+                                    P(.int, "ent_id"),
+                                    P(.boolean, "is_hardcore"),
+                                    P(.ubyte, "gamemode"),
+                                    P(.byte, "prev_gamemode"),
+                                    P(.stringList, "dimension_names"),
+                                    P(.nbtTag, "reg"),
+                                    P(.identifier, "dimension_type"),
+                                    P(.identifier, "dimension_name"),
+                                    P(.long, "hashed_seed"),
+                                    P(.varInt, "max_players"),
+                                    P(.varInt, "view_dist"),
+                                    P(.varInt, "sim_dist"),
+                                    P(.boolean, "reduced_debug_info"),
+                                    P(.boolean, "enable_respawn_screen"),
+                                    P(.boolean, "is_debug"),
+                                    P(.boolean, "is_flat"),
+                                    P(.boolean, "has_death_location"),
+                                }));
+                                bot1.view_dist = @intCast(u8, data.sim_dist);
+                                std.debug.print("Login {any}\n", .{data});
+                            },
+                            .Combat_Death => {
+                                const id = parse.varInt();
+                                const killer_id = parse.int(i32);
+                                const msg = try parse.string(null);
+                                std.debug.print("You died lol {d} {d} {s}\n", .{ id, killer_id, msg });
+
+                                try pctx.clientCommand(0);
                             },
                             .Disconnect => {
                                 const reason = try parse.string(null);
@@ -385,7 +500,7 @@ pub fn main() !void {
                                 std.debug.print("Plugin Message: {s}\n", .{channel_name});
 
                                 try pctx.pluginMessage("tony:brand");
-                                try pctx.clientInfo("en_US", 6, 1);
+                                try pctx.clientInfo("en_US", bot1.view_dist, 1);
                             },
                             .Change_Difficulty => {
                                 const diff = parse.int(u8);
@@ -406,118 +521,200 @@ pub fn main() !void {
                                 }
                             },
                             .Set_Container_Content => {
-                                //const win_id = mc.readVarInt(reader);
-                                //const state_id = mc.readVarInt(reader);
-                                //const item_count = mc.readVarInt(reader);
-                                //_ = win_id;
-                                //_ = state_id;
-                                ////std.debug.print("Set Container content id: {d}, state: {d}, count: {d}\n", .{ win_id, state_id, item_count });
-                                //var i: u32 = 0;
-                                //while (i < item_count) : (i += 1) {
-                                //    const item_present = try reader.readInt(u8, .Big);
-                                //    if (item_present == 1) {
-                                //        const item_id = mc.readVarInt(reader);
-                                //        const count = try reader.readInt(u8, .Big);
-
-                                //        const nbt = try nbt_zig.parse(arena_alloc, reader);
-                                //        _ = item_id;
-                                //        _ = count;
-                                //        _ = nbt;
-                                //        //std.debug.print("\tItem:{d} id: {d}, count: {d}\n{}\n", .{
-                                //        //    i,
-                                //        //    item_id,
-                                //        //    count,
-                                //        //    nbt.entry,
-                                //        //});
-                                //    }
-                                //}
-                                //{ //Held item
-                                //    const item_present = try reader.readInt(u8, .Big);
-                                //    if (item_present == 1) {
-                                //        const item_id = mc.readVarInt(reader);
-                                //        const count = try reader.readInt(u8, .Big);
-                                //        const nbt = try nbt_zig.parse(arena_alloc, reader);
-                                //        _ = nbt;
-                                //        _ = count;
-                                //        _ = item_id;
-                                //        //std.debug.print("\tHeld Item:{d} id: {d}, count: {d}\n{}\n", .{
-                                //        //    i,
-                                //        //    item_id,
-                                //        //    count,
-                                //        //    nbt.entry,
-                                //        //});
-                                //    }
-                                //}
+                                const win_id = parse.int(u8);
+                                std.debug.print("SETTING CONTAINER: {d}\n", .{win_id});
+                                const state_id = parse.varInt();
+                                _ = state_id;
+                                const item_count = parse.varInt();
+                                var i: u32 = 0;
+                                while (i < item_count) : (i += 1) {
+                                    const s = parse.slot();
+                                    bot1.inventory[i] = s;
+                                }
+                            },
+                            .Spawn_Player => {
+                                const data = parser.parse(PT(&.{
+                                    P(.varInt, "ent_id"),
+                                    P(.uuid, "ent_uuid"),
+                                    P(.V3f, "pos"),
+                                    P(.angle, "yaw"),
+                                    P(.angle, "pitch"),
+                                }));
+                                niklas_id = data.ent_id;
+                                try entities.put(data.ent_id, .{
+                                    .uuid = data.ent_uuid,
+                                    .pos = data.pos,
+                                    .pitch = data.pitch,
+                                    .yaw = data.yaw,
+                                });
+                                std.debug.print("Spawn player: {d}\n", .{data.ent_uuid});
                             },
                             .Spawn_Entity => {
-                                const ent_id = parse.varInt();
-                                const uuid = parse.int(u128);
-
-                                const type_id = parse.varInt();
-                                const x = parse.float(f64);
-                                const y = parse.float(f64);
-                                const z = parse.float(f64);
-                                std.debug.print("Ent id: {d}, {x}, {d}\n\tx: {d}, y: {d} z: {d}\n", .{ ent_id, uuid, type_id, x, y, z });
+                                const data = parser.parse(PT(&.{
+                                    P(.varInt, "ent_id"),
+                                    P(.uuid, "ent_uuid"),
+                                    P(.varInt, "ent_type"),
+                                    P(.V3f, "pos"),
+                                    P(.angle, "pitch"),
+                                    P(.angle, "yaw"),
+                                    P(.angle, "head_yaw"),
+                                    P(.varInt, "data"),
+                                    P(.shortV3i, "vel"),
+                                }));
+                                try entities.put(data.ent_id, .{
+                                    .uuid = data.ent_uuid,
+                                    .pos = data.pos,
+                                    .pitch = data.pitch,
+                                    .yaw = data.yaw,
+                                });
+                                //std.debug.print("Spawn_Entity: {}\n", .{data});
+                                //   std.debug.print("Spawn: {d} {d} {s}\n", .{
+                                //       data.ent_uuid,
+                                //       data.ent_type,
+                                //       id_list.Entity_Types[@intCast(u32, data.ent_type)],
+                                //   });
+                            },
+                            .Remove_Entities => {
+                                const num_ent = parse.varInt();
+                                var n: u32 = 0;
+                                while (n < num_ent) : (n += 1) {
+                                    const e_id = parse.varInt();
+                                    _ = entities.remove(e_id);
+                                }
                             },
                             .Synchronize_Player_Position => {
-                                const pos = parse.v3f();
-                                const yaw = parse.float(f32);
-                                const pitch = parse.float(f32);
-                                const flags = parse.int(u8);
-                                const tel_id = parse.varInt();
-                                const should_dismount = parse.boolean();
-                                _ = should_dismount;
+                                const FieldMask = enum(u8) {
+                                    X = 0x01,
+                                    Y = 0x02,
+                                    Z = 0x04,
+                                    Y_ROT = 0x08,
+                                    x_ROT = 0x10,
+                                };
+                                const data = parser.parse(PT(&.{
+                                    P(.V3f, "pos"),
+                                    P(.float, "yaw"),
+                                    P(.float, "pitch"),
+                                    P(.byte, "flags"),
+                                    P(.varInt, "tel_id"),
+                                    P(.boolean, "should_dismount"),
+                                }));
+
                                 std.debug.print(
                                     "Sync pos: x: {d}, y: {d}, z: {d}, yaw {d}, pitch : {d} flags: {b}, tel_id: {}\n",
-                                    .{ pos.x, pos.y, pos.z, yaw, pitch, flags, tel_id },
+                                    .{ data.pos.x, data.pos.y, data.pos.z, data.yaw, data.pitch, data.flags, data.tel_id },
                                 );
-                                bot1.pos = pos;
+                                //TODO use if relative flag
+                                bot1.pos = data.pos;
+                                _ = FieldMask;
 
-                                try pctx.confirmTeleport(tel_id);
+                                try pctx.confirmTeleport(data.tel_id);
 
                                 if (bot1.handshake_complete == false) {
                                     bot1.handshake_complete = true;
                                     try pctx.completeLogin();
                                 }
                             },
-                            .Update_Entity_Position, .Update_Entity_Position_and_Rotation, .Update_Entity_Rotation => {
-                                //const ent_id = mc.readVarInt(reader);
-                                //_ = ent_id;
+                            .Update_Entity_Rotation => {
+                                const data = parser.parse(PT(&.{
+                                    P(.varInt, "ent_id"),
+                                    P(.angle, "yaw"),
+                                    P(.angle, "pitch"),
+                                    P(.boolean, "grounded"),
+                                }));
+                                if (entities.getPtr(data.ent_id)) |e| {
+                                    e.pitch = data.pitch;
+                                    e.yaw = data.yaw;
+                                }
+                            },
+                            .Update_Entity_Position_and_Rotation => {
+                                const data = parser.parse(PT(&.{
+                                    P(.varInt, "ent_id"),
+                                    P(.shortV3i, "del"),
+                                    P(.angle, "yaw"),
+                                    P(.angle, "pitch"),
+                                    P(.boolean, "grounded"),
+                                }));
+                                if (entities.getPtr(data.ent_id)) |e| {
+                                    e.pos = vector.deltaPosToV3f(e.pos, data.del);
+                                    e.pitch = data.pitch;
+                                    e.yaw = data.yaw;
+                                }
+                            },
+                            .Update_Entity_Position => {
+                                const data = parser.parse(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
+                                if (entities.getPtr(data.ent_id)) |e| {
+                                    e.pos = vector.deltaPosToV3f(e.pos, data.del);
+                                }
+                            },
+                            .Block_Entity_Data => {
+                                const pos = parse.position();
+                                const btype = parse.varInt();
+                                var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
+                                _ = pos;
+                                _ = btype;
+                                _ = nbt_data;
+                            },
+                            .Acknowledge_Block_Change => {
+
+                                //TODO use this to advance to next break_block item
                             },
                             .Block_Update => {
-                                const pos = parse.int(i64);
-                                const bx = pos >> 38;
-                                const by = pos << 52 >> 52;
-                                const bz = pos << 26 >> 38;
-
+                                const pos = parse.position();
                                 const new_id = parse.varInt();
-                                try world.setBlock(bx, by, bz, @intCast(mc.BLOCK_ID_INT, new_id));
 
-                                std.debug.print("Block update {d} {d} {d} : {d}\n", .{ bx, by, bz, new_id });
+                                try world.setBlock(pos, @intCast(mc.BLOCK_ID_INT, new_id));
+
+                                std.debug.print("Block update {d} {d} {d} : {d}\n", .{ pos.x, pos.y, pos.z, new_id });
                             },
                             .Set_Health => {
                                 bot1.health = parse.float(f32);
                                 bot1.food = @intCast(u8, parse.varInt());
                                 bot1.food_saturation = parse.float(f32);
                             },
+                            .Set_Head_Rotation => {},
+                            .Teleport_Entity => {
+                                const data = parser.parse(PT(&.{
+                                    P(.varInt, "ent_id"),
+                                    P(.V3f, "pos"),
+                                    P(.angle, "yaw"),
+                                    P(.angle, "pitch"),
+                                    P(.boolean, "grounded"),
+                                }));
+                                if (entities.getPtr(data.ent_id)) |e| {
+                                    e.pos = data.pos;
+                                    e.pitch = data.pitch;
+                                    e.yaw = data.yaw;
+                                }
+                            },
                             .Set_Entity_Metadata => {
                                 const e_id = parse.varInt();
-                                //std.debug.print("Set Entity Metadata: {d}\n", .{e_id});
-                                if (e_id == bot1.e_id)
-                                    std.debug.print("\tFOR PLAYER\n", .{});
+                                _ = e_id;
+                                //for (entities.items) |it| {
+                                //    if (it.id == e_id) {
+                                //        std.debug.print("Set Metadata for: {s}\n", .{id_list.Entity_Types[it.type_id]});
+                                //        break;
+                                //    }
+                                //}
+                                //if (e_id == bot1.e_id)
+                                //    std.debug.print("\tFOR PLAYER\n", .{});
 
-                                var index = parse.int(u8);
-                                while (index != 0xff) : (index = parse.int(u8)) {
-                                    //std.debug.print("\tIndex {d}\n", .{index});
-                                    const metatype = @intToEnum(mc.MetaDataType, parse.varInt());
-                                    //std.debug.print("\tMetadata: {}\n", .{metatype});
-                                    switch (metatype) {
-                                        else => {
-                                            //std.debug.print("\tENTITY METADATA TYPE NOT IMPLEMENTED\n", .{});
-                                            break;
-                                        },
-                                    }
-                                }
+                                //var index = parse.int(u8);
+                                //while (index != 0xff) : (index = parse.int(u8)) {
+                                //    //std.debug.print("\tIndex {d}\n", .{index});
+                                //    const metatype = @intToEnum(mc.MetaDataType, parse.varInt());
+                                //    //std.debug.print("\tMetadata: {}\n", .{metatype});
+                                //    switch (metatype) {
+                                //        else => {
+                                //            //std.debug.print("\tENTITY METADATA TYPE NOT IMPLEMENTED\n", .{});
+                                //            break;
+                                //        },
+                                //    }
+                                //}
+                            },
+                            .Game_Event => {
+                                const event = parse.int(u8);
+                                const value = parse.float(f32);
+                                std.debug.print("GAME EVENT: {d} {d}\n", .{ event, value });
                             },
                             .Update_Time => {},
                             .Update_Tags => {
@@ -545,6 +742,26 @@ pub fn main() !void {
                                             try tag_table.addTag(identifier, ident, ids.items);
                                         }
                                     }
+                                }
+                            },
+                            .Unload_Chunk => {
+                                const data = parser.parse(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
+                                world.removeChunkColumn(data.cx, data.cz);
+                            },
+                            .Set_Entity_Velocity => {},
+                            .Update_Section_Blocks => {
+                                const chunk_pos = parse.cposition();
+                                const sup_light = parse.boolean();
+                                _ = sup_light;
+                                const n_blocks = parse.varInt();
+                                var n: u32 = 0;
+                                while (n < n_blocks) : (n += 1) {
+                                    const bd = parse.varLong();
+                                    const bid = @intCast(u16, bd >> 12);
+                                    const lx = @intCast(i32, (bd >> 8) & 15);
+                                    const lz = @intCast(i32, (bd >> 4) & 15);
+                                    const ly = @intCast(i32, bd & 15);
+                                    try world.setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
                                 }
                             },
                             .Chunk_Data_and_Update_Light => {
@@ -642,7 +859,11 @@ pub fn main() !void {
                                 //std.mem.copy(mc.ChunkSection, chunk_entry.value_ptr, &chunk);
 
                                 const num_block_ent = parse.varInt();
-                                _ = num_block_ent;
+                                var ent_i: u32 = 0;
+                                while (ent_i < num_block_ent) : (ent_i += 1) {
+                                    const be = parse.blockEntity();
+                                    _ = be;
+                                }
                             },
                             .System_Chat_Message => {
                                 const msg = try parse.string(null);
@@ -659,13 +880,24 @@ pub fn main() !void {
                                     const index = parse.varInt();
                                     const sig_present_bool = parse.boolean();
                                     _ = index;
-                                    _ = uuid;
                                     //std.debug.print("Chat from UUID: {d} {d}\n", .{ uuid, index });
                                     //std.debug.print("sig_present {any}\n", .{sig_present_bool});
                                     if (sig_present_bool) {
                                         std.debug.print("NOT SUPPORTED \n", .{});
                                         unreachable;
                                     }
+
+                                    var ent_it = entities.iterator();
+                                    var ent = ent_it.next();
+                                    const player_info: ?Entity = blk: {
+                                        while (ent != null) : (ent = ent_it.next()) {
+                                            if (ent.?.value_ptr.uuid == uuid) {
+                                                std.debug.print("found enti\n", .{});
+                                                break :blk ent.?.value_ptr.*;
+                                            }
+                                        }
+                                        break :blk null;
+                                    };
 
                                     const msg = try parse.string(null);
                                     const eql = std.mem.eql;
@@ -678,24 +910,88 @@ pub fn main() !void {
 
                                     const key = it.next().?;
                                     if (eql(u8, key, "path")) {
-                                        const goal_posx: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-                                        const goal_posy: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-                                        const goal_posz: i32 = @intCast(i32, try std.fmt.parseInt(i64, it.next() orelse "0", 0));
-                                        maj_goal = V3f.newi(goal_posx, goal_posy, goal_posz);
-                                        try pathctx.pathfind(bot1.pos.?, maj_goal.?, &move_vecs);
-                                        if (!draw) {
-                                            goal = move_vecs.pop();
-                                            if (goal) |g| {
-                                                move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = g.pos, .time = 0 };
+                                        maj_goal = blk: {
+                                            if (parseCoordOpt(&it)) |coord| {
+                                                break :blk coord.add(V3f.new(0, 1, 0));
+                                            }
+                                            break :blk player_info.?.pos;
+                                        };
+
+                                        const found = try pathctx.pathfind(bot1.pos.?, maj_goal.?);
+                                        if (found) |*actions| {
+                                            player_actions.deinit();
+                                            player_actions = actions.*;
+                                            for (player_actions.items) |pitem| {
+                                                std.debug.print("action: {any}\n", .{pitem});
+                                            }
+                                            if (!draw) {
+                                                current_action = player_actions.popOrNull();
+                                                if (current_action) |acc| {
+                                                    switch (acc) {
+                                                        .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
+                                                        .block_break => block_break_timer = null,
+                                                    }
+                                                }
                                             }
                                         }
+                                    } else if (eql(u8, key, "axe")) {
+                                        for (bot1.inventory) |optslot| {
+                                            if (optslot) |slot| {
+                                                //TODO in mc 19.4 tags have been added for axes etc, for now just do a string search
+                                                const name = item_table.getName(slot.item_id);
+                                                const inde = std.mem.indexOf(u8, name, "axe");
+                                                if (inde) |in| {
+                                                    _ = in;
+                                                    std.debug.print("Found axe :{s}\n", .{name});
+                                                }
+                                                //std.debug.print("item: {s}\n", .{item_table.getName(slot.item_id)});
+                                            }
+                                        }
+                                    } else if (eql(u8, key, "open_chest")) {
+                                        try pctx.sendChat("Trying to open chest");
+                                        const v = try parseCoord(&it);
+                                        try pctx.useItemOn(.main, v.toI(), .bottom, 0, 0, 0, false, 0);
+                                    } else if (eql(u8, key, "tree")) {
+                                        if (try pathctx.findTree(bot1.pos.?)) |*actions| {
+                                            player_actions.deinit();
+                                            player_actions = actions.*;
+                                            for (player_actions.items) |pitem| {
+                                                std.debug.print("action: {any}\n", .{pitem});
+                                            }
+                                            current_action = player_actions.popOrNull();
+                                            if (current_action) |acc| {
+                                                switch (acc) {
+                                                    .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
+                                                    .block_break => block_break_timer = null,
+                                                }
+                                            }
+                                        }
+                                    } else if (eql(u8, key, "has_tag")) {
+                                        const v = try parseCoord(&it);
+                                        const tag = it.next() orelse unreachable;
+                                        if (pathctx.hasBlockTag(tag, v.toI())) {
+                                            try pctx.sendChat("yes has tag");
+                                        } else {
+                                            try pctx.sendChat("no tag");
+                                        }
+                                    } else if (eql(u8, key, "look")) {
+                                        if (parseCoordOpt(&it)) |coord| {
+                                            _ = coord;
+                                            std.debug.print("Has coord\n", .{});
+                                        }
+                                        const pw = mc.lookAtBlock(bot1.pos.?, player_info.?.pos.add(V3f.new(-0.3, 1, -0.3)));
+                                        try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, true);
+                                    } else if (eql(u8, key, "dig")) {
+                                        try pctx.sendChat("digging");
+                                        const v = try parseCoord(&it);
+                                        try pctx.playerAction(.start_digging, v.toI());
                                     } else if (eql(u8, key, "bpe")) {} else if (eql(u8, key, "moverel")) {} else if (eql(u8, key, "lookat")) {
                                         const v = try parseCoord(&it);
                                         const pw = mc.lookAtBlock(bot1.pos.?, v);
                                         try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, true);
                                     } else if (eql(u8, key, "jump")) {} else if (eql(u8, key, "query")) {
                                         const qb = (try parseCoord(&it)).toI();
-                                        const bid = world.getBlock(qb.x, qb.y, qb.z);
+                                        const bid = world.getBlock(qb);
                                         m_fbs.reset();
                                         try m_wr.print("Block {s} id: {d}", .{
                                             block_table.findBlockName(bid),
@@ -711,8 +1007,28 @@ pub fn main() !void {
                         }
                     },
                     .local => {
-                        if (std.mem.eql(u8, "exit", item.data.buffer.items[0 .. item.data.buffer.items.len - 1])) {
+                        var itt = std.mem.tokenize(u8, item.data.buffer.items[0 .. item.data.buffer.items.len - 1], " ");
+                        const key = itt.next() orelse unreachable;
+                        const eql = std.mem.eql;
+                        if (eql(u8, "exit", key)) {
                             run = false;
+                        } else if (eql(u8, "query", key)) {
+                            if (itt.next()) |tag_type| {
+                                const tags = tag_table.tags.getPtr(tag_type) orelse unreachable;
+                                var kit = tags.keyIterator();
+                                var ke = kit.next();
+                                std.debug.print("Possible sub tag: \n", .{});
+                                while (ke != null) : (ke = kit.next()) {
+                                    std.debug.print("\t{s}\n", .{ke.?.*});
+                                }
+                            } else {
+                                var kit = tag_table.tags.keyIterator();
+                                var ke = kit.next();
+                                std.debug.print("Possible tags: \n", .{});
+                                while (ke != null) : (ke = kit.next()) {
+                                    std.debug.print("\t{s}\n", .{ke.?.*});
+                                }
+                            }
                         }
                     },
                 },
