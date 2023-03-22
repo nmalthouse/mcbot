@@ -20,6 +20,81 @@ const Parse = @import("parser.zig");
 const c = @import("c.zig").c;
 
 const fbsT = std.io.FixedBufferStream([]const u8);
+//Mc data registryies
+//
+//Blocks:
+//32 uniq hardness values, including none
+//same for resistance
+//3 unique stackSize: 1 16 64
+//16 unique materials
+//3 filter light
+//12 emit light
+
+//
+
+//pub const Block = struct {
+//    pub const Material = enum {
+//        pickaxe,
+//        axe,
+//        shovel,
+//        default,
+//    };
+//
+//    id: u16,
+//    name: []const u8,
+//    hardness: f32,
+//    resistance: f32,
+//    stack_size: u8,
+//    material: Material,
+//    transparent: bool,
+//    diggable: bool,
+//    defaultState: u16,
+//    minState: u16,
+//    maxState: u16,
+//    drops: []const u16,
+//    harvest_tools: []const u16,
+//};
+
+//This structure should contain all data related to minecraft required for our bot
+pub const DataReg = struct {
+    pub const ItemId = u16;
+    pub const BlockId = u16;
+
+    pub const Material = struct {
+        pub const Tool = struct {
+            item_id: ItemId,
+            multiplier: f32,
+        };
+
+        name: []const u8,
+        tools: []const Tool,
+    };
+
+    pub const Item = struct {
+        id: ItemId,
+        name: []const u8,
+        stack_size: u8,
+    };
+
+    pub const Block = struct {
+        id: BlockId,
+        name: []const u8,
+        hardness: f32,
+        resistance: f32,
+        stack_size: u8,
+        diggable: bool,
+        material_i: u8,
+        transparent: bool,
+        default_state: BlockId,
+        min_state: BlockId,
+        max_state: BlockId,
+        //TODO handle block states
+    };
+
+    blocks: []const Block, //Block information indexed by block id
+    materials: []const Material, //indexed by material id
+    items: []const Item,
+};
 
 pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8)) ?vector.V3f {
     var ret = V3f{
@@ -93,7 +168,8 @@ pub fn main() !void {
             std.debug.print("Connecting to: {s} : {d}\n", .{ h.hostname, h.port });
             break :blk s;
         }
-        unreachable;
+        std.debug.print("Unable to connect to anything\n", .{});
+        return error.noServers;
     };
 
     var item_table = try mc.ItemRegistry.init(alloc, "json/items.json");
