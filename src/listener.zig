@@ -9,6 +9,8 @@ const V3i = vector.V3i;
 
 const Queue = std.atomic.Queue;
 
+const com = @import("common.zig");
+
 //TODO Edit api to use vector structs for everything
 
 const Serv = std.net.Stream.Writer;
@@ -47,6 +49,50 @@ pub const PacketCtx = struct {
         try self.packet.float(cz);
         try self.packet.boolean(head_in_block);
         try self.packet.varInt(sequence);
+        try self.packet.writeToServer(self.server);
+    }
+
+    pub fn pickItem(self: *@This(), sloti: usize) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x19);
+        try self.packet.varInt(@intCast(i32, sloti));
+
+        try self.packet.writeToServer(self.server);
+    }
+
+    pub fn setHeldItem(self: *@This(), index: u8) !void {
+        try self.packet.clear();
+
+        try self.packet.varInt(0x28);
+        try self.packet.short(@intCast(u16, index));
+        try self.packet.writeToServer(self.server);
+    }
+
+    pub fn clickContainer(
+        self: *@This(),
+        win: u8,
+        state_id: i32,
+        slot: i16,
+        button: u8,
+        mode: u8,
+        new_slot_data: []const struct { sloti: i16, slot: Slot },
+    ) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x0A);
+        try self.packet.ubyte(win);
+        try self.packet.varInt(state_id);
+        try self.packet.short(@intCast(u16, slot));
+        try self.packet.ubyte(button);
+        try self.packet.varInt(mode);
+        try self.packet.varInt(@intCast(i32, new_slot_data.len));
+        for (new_slot_data) |item| {
+            _ = item;
+            //try self.packet.short(item.sloti);
+            //try self.packet.boolean(true);
+
+        }
+        try self.packet.boolean(false);
+
         try self.packet.writeToServer(self.server);
     }
 
@@ -462,6 +508,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         alloc: std.mem.Allocator,
     };
 }
+
 pub fn readVarLong(reader: anytype) i64 {
     const CONT: u32 = 0x80;
     const SEG: u32 = 0x7f;
@@ -598,11 +645,9 @@ test "toVarInt" {
 }
 
 //TODO remove the id and len field and replace with a slice
-pub const ParsedPacket = struct {
+pub const PacketData = struct {
     const Self = @This();
 
-    id: i32,
-    len: i32,
     buffer: std.ArrayList(u8),
     msg_type: MsgType = .server,
 
@@ -612,7 +657,7 @@ pub const ParsedPacket = struct {
     };
 
     pub fn init(alloc: std.mem.Allocator) Self {
-        return Self{ .buffer = std.ArrayList(u8).init(alloc), .id = 0, .len = 0 };
+        return Self{ .buffer = std.ArrayList(u8).init(alloc) };
     }
 
     pub fn deinit(self: *Self) void {
@@ -620,7 +665,7 @@ pub const ParsedPacket = struct {
     }
 };
 
-pub const PacketQueueType = Queue(ParsedPacket);
+pub const PacketQueueType = Queue(PacketData);
 
 pub fn cmdThread(
     alloc: std.mem.Allocator,
@@ -643,7 +688,7 @@ pub fn cmdThread(
             msg.appendSlice("exit\n") catch unreachable;
         }
 
-        node.* = .{ .prev = null, .next = null, .data = .{ .id = 0, .len = 0, .buffer = msg, .msg_type = .local } };
+        node.* = .{ .prev = null, .next = null, .data = .{ .buffer = msg, .msg_type = .local } };
         queue.put(node);
         q_cond.signal();
 
@@ -707,21 +752,18 @@ pub const ServerListener = struct {
         q_cond: *std.Thread.Condition,
         comp_thresh: i32,
     ) void {
-        var parsed = ParsedPacket.init(alloc);
+        var parsed = PacketData.init(alloc);
         //defer parsed.deinit();
 
         const value = blk: {
             while (true) {
                 const pd = recvPacket(alloc, reader, comp_thresh) catch |err| break :blk err;
-                //parsed.len = @intCast(i32, pd.len);
-                //var in_stream = std.io.FixedBufferStream([]const u8){ .buffer = pd, .pos = 0 };
-                //parsed.id = readVarInt(in_stream.reader());
                 parsed.buffer.appendSlice(pd) catch unreachable;
                 alloc.free(pd);
                 const node = alloc.create(PacketQueueType.Node) catch unreachable;
                 node.* = .{ .prev = null, .next = null, .data = parsed };
                 queue.put(node);
-                parsed = ParsedPacket.init(alloc);
+                parsed = PacketData.init(alloc);
                 q_cond.signal();
             }
         };
@@ -861,16 +903,12 @@ pub const ChunkMap = struct {
 pub fn lookAtBlock(pos: V3f, block: V3f) struct { yaw: f32, pitch: f32 } {
     const vect = block.subtract((pos.add(V3f.new(0, 1.62, 0)))).add(V3f.new(0.5, 0.5, 0.5));
 
+    const rads = std.math.radiansToDegrees;
+    const asin = std.math.asin;
+    const atan2 = std.math.atan2;
     return .{
-        //.pitch = 180 - std.math.radiansToDegrees(f32, @floatCast(f32, std.math.acos(V3f.new(0, 1, 0).dot(vect) / vect.magnitude()))),
-        .pitch = -std.math.radiansToDegrees(f32, @floatCast(f32, std.math.asin(vect.y / vect.magnitude()))),
-        //.yaw = 90 + std.math.radiansToDegrees(f32, std.math.acos(@floatCast(f32, vect.z / vect.magnitude()))),
-        .yaw = -std.math.radiansToDegrees(f32, @floatCast(f32, std.math.atan2(f64, vect.x, vect.z))),
-        //            yaw = -atan2(dx,dz)/PI*180
-        //if yaw < 0 then
-        //    yaw = 360 + yaw
-        //pitch = -arcsin(dy/r)/PI*180
-
+        .pitch = -rads(f32, @floatCast(f32, asin(vect.y / vect.magnitude()))),
+        .yaw = -rads(f32, @floatCast(f32, atan2(f64, vect.x, vect.z))),
     };
 }
 
@@ -1052,48 +1090,6 @@ pub const ItemJson = struct {
     }
 };
 
-pub fn readJsonFile(filename: []const u8, alloc: std.mem.Allocator, comptime T: type) !T {
-    const cwd = std.fs.cwd();
-    const f = cwd.openFile(filename, .{}) catch null;
-    if (f) |cont| {
-        var buf: []const u8 = try cont.readToEndAlloc(alloc, 1024 * 1024 * 1024);
-        defer alloc.free(buf);
-
-        var ts = std.json.TokenStream.init(buf);
-        var ret = try std.json.parse(T, &ts, .{ .allocator = alloc });
-        //defer std.json.parseFree(T, ret, .{ .allocator = alloc });
-        return ret;
-    }
-    return error.fileNotFound;
-}
-
-pub fn freeJson(comptime T: type, alloc: std.mem.Allocator, item: T) void {
-    std.json.parseFree(T, item, .{ .allocator = alloc });
-}
-
-pub const ItemRegistry = struct {
-    const Self = @This();
-
-    data: []ItemJson,
-    alloc: std.mem.Allocator,
-
-    pub fn init(alloc: std.mem.Allocator, filename: []const u8) !Self {
-        return Self{
-            .data = try readJsonFile(filename, alloc, []ItemJson),
-            .alloc = alloc,
-        };
-    }
-
-    pub fn getName(self: *const Self, id: u16) []const u8 {
-        const index = std.sort.binarySearch(ItemJson, .{ .id = id, .name = "" }, self.data, @as(u8, 0), ItemJson.compare);
-        return self.data[index.?].name;
-    }
-
-    pub fn deinit(self: *Self) void {
-        freeJson([]ItemJson, self.alloc, self.data);
-    }
-};
-
 pub const TagRegistry = struct {
     const Self = @This();
 
@@ -1162,93 +1158,8 @@ pub const TagRegistry = struct {
     }
 };
 
-pub const BlockRegistry = struct {
-    const Self = @This();
-
-    pub const IdRange = struct {
-        lower: u16,
-        upper: u16,
-
-        fn compare(ctx: u8, key: IdRange, actual: IdRange) std.math.Order {
-            _ = ctx;
-            if (key.lower >= actual.lower and key.lower <= actual.upper) return .eq;
-            if (key.lower > actual.upper) return .gt;
-            if (key.lower < actual.lower) return .lt;
-            return .eq;
-        }
-    };
-
-    pub const BlockInfo = struct {
-        pub const Property = union(enum(u32)) {
-            //pub const Unimplemented = u32;
-            pub const Facing = enum { north, south, west, east };
-        };
-
-        name: []const u8,
-        id: u16,
-
-        //properties: []const Property,
-    };
-
-    id_array: []IdRange,
-    block_info_array: []BlockInfo,
-
-    pub fn init(alloc: std.mem.Allocator, array_file: []const u8, block_table_file: []const u8) !Self {
-        return Self{
-            .id_array = try readJsonFile(array_file, alloc, []IdRange),
-            .block_info_array = try readJsonFile(block_table_file, alloc, []BlockInfo),
-        };
-    }
-
-    pub fn getBlockIndex(self: *Self, id: BLOCK_ID_INT) usize {
-        const index = std.sort.binarySearch(IdRange, .{ .lower = id, .upper = 0 }, self.id_array, @as(u8, 0), BlockRegistry.IdRange.compare);
-        return index.?;
-    }
-
-    pub fn findBlockName(self: *const Self, id: BLOCK_ID_INT) []const u8 {
-        const index = std.sort.binarySearch(IdRange, .{ .lower = id, .upper = 0 }, self.id_array, @as(u8, 0), BlockRegistry.IdRange.compare);
-        if (index) |i| {
-            return self.block_info_array[i].name;
-        }
-        return "Block Not Found";
-    }
-
-    pub fn deinit(self: *Self, alloc: std.mem.Allocator) void {
-        freeJson([]IdRange, alloc, self.id_array);
-        freeJson([]BlockInfo, alloc, self.block_info_array);
-    }
-};
-
 pub const PacketAnalysisJson = struct {
     bound_to: []u8,
     data: []u8,
     timestamp: f32,
-};
-
-pub const MetaDataType = enum {
-    Byte, //
-    VarInt, //
-    VarLong, //
-    Float, //
-    String, //
-    Chat, //
-    OptChat, // (Boolean + Optional Chat) 	Chat is present if the Boolean is set to true
-    Slot, //
-    Boolean, //
-    Rotation, // 	3 floats: rotation on x, rotation on y, rotation on z
-    Position, //
-    OptPosition, // (Boolean + Optional Position) 	Position is present if the Boolean is set to true
-    Direction, // (VarInt) 	(Down = 0, Up = 1, North = 2, South = 3, West = 4, East = 5)
-    OptUUID, // (Boolean + Optional UUID) 	UUID is present if the Boolean is set to true
-    OptBlockID, // (VarInt) 	0 for absent (implies air); otherwise, a block state ID as per the global palette
-    NBT, //
-    Particle, //
-    Villager, // Data 	3 VarInts: villager type, villager profession, level
-    OptVarInt, // 	0 for absent; 1 + actual value otherwise. Used for entity IDs.
-    Pose, // 	A VarInt enum: 0: STANDING, 1: FALL_FLYING, 2: SLEEPING, 3: SWIMMING, 4: SPIN_ATTACK, 5: SNEAKING, 6: LONG_JUMPING, 7: DYING, 8: CROAKING, 9: USING_TONGUE, 10: SITTING, 11: ROARING, 12: SNIFFING, 13: EMERGING, 14: DIGGING
-    Cat, // Variant 	A VarInt that points towards the CAT_VARIANT registry.
-    Frog, // Variant 	A VarInt that points towards the FROG_VARIANT registry.
-    GlobalPos, // 	A dimension identifier and Position.
-    Painting, // Variant 	A VarInt that points towards the PAINTING_VARIANT registry.
-
 };

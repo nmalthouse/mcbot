@@ -162,6 +162,8 @@ pub const Bot = struct {
     e_id: u32,
 
     inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
+    selected_slot: u8 = 0,
+    container_state: i32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, name_: []const u8) Bot {
         _ = alloc;

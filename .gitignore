@@ -1,0 +1,6 @@
+massif*
+zig-out
+zig-cache
+std
+lib
+

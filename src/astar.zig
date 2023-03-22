@@ -1,5 +1,6 @@
 const std = @import("std");
 const mc = @import("listener.zig");
+const Reg = @import("data_reg.zig").DataReg;
 
 const Vector = @import("vector.zig");
 const V3f = Vector.V3f;
@@ -77,12 +78,25 @@ pub const AStarContext = struct {
         movement: MoveItem,
         block_break: BreakBlock,
     };
+    //TODO create a struct that contains a list of playeractionitems.
+    //Use this struct to manage all state regarding player actions:
+    //
+    //move_state
+    //block_break_state, we need to wait for the server to acknowledge block change
+    //
+    //This structure could house error stuff aswell
+    //If the bot get continuosly teleported, cancel our move and set an error state
+    //
+    //ideally each bot has a queue of action items that can be added to whenever
+    //grouping these together into units makes sense as we might want to remove entire sections at once
+    //have a queue of action lists
 
     //TODO ensure we use the best tool for the block, Have another PlayerActionItem that switches to correct tool
     //TODO how do we deal with unexpected changes to bot like inventory full etc, getting shot by skelton
     pub const BreakBlock = struct {
         pos: V3i,
         break_time: f64,
+        material_i: u8,
     };
 
     pub const MoveItem = struct {
@@ -108,7 +122,7 @@ pub const AStarContext = struct {
         }
 
         pub fn canEnter(s: *const S, y: i32) bool {
-            const id = s.ctx.block_table.getBlockIndex(s.ctx.world.getBlock(V3i.new(s.x, s.y + y, s.z)));
+            const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + y, s.z))).id;
             const tag_list = [_][]const u8{ "flowers", "rails", "signs", "wool_carpets", "crops", "climbable", "buttons", "banners" };
             const fully_tag = blk: {
                 var list: [tag_list.len][]const u8 = undefined;
@@ -134,20 +148,20 @@ pub const AStarContext = struct {
 
     alloc: std.mem.Allocator,
     world: *mc.ChunkMap,
+    reg: *const Reg,
     tag_table: *mc.TagRegistry,
-    block_table: *mc.BlockRegistry,
 
     open: std.ArrayList(*Node),
     closed: std.ArrayList(*Node),
 
-    pub fn init(alloc: std.mem.Allocator, world: *mc.ChunkMap, tag_table: *mc.TagRegistry, block_table: *mc.BlockRegistry) Self {
+    pub fn init(alloc: std.mem.Allocator, world: *mc.ChunkMap, tag_table: *mc.TagRegistry, reg: *const Reg) Self {
         return Self{
             .open = std.ArrayList(*Node).init(alloc),
             .closed = std.ArrayList(*Node).init(alloc),
             .world = world,
-            .tag_table = tag_table,
-            .block_table = block_table,
             .alloc = alloc,
+            .tag_table = tag_table,
+            .reg = reg,
         };
     }
 
@@ -225,13 +239,18 @@ pub const AStarContext = struct {
                     }
                 }
                 if (is_tree) {
+                    const block_info = self.reg.getBlockFromState(self.world.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))));
                     var parent: ?*AStarContext.Node = current_n;
                     //try move_vecs.resize(0);
                     var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
                     //First add the tree backwards
                     n_logs -= 1;
                     while (n_logs >= 0) : (n_logs -= 1) {
-                        try actions.append(.{ .block_break = .{ .pos = pv.add(V3i.new(avec.x, n_logs, avec.y)), .break_time = 3 } });
+                        try actions.append(.{ .block_break = .{
+                            .pos = pv.add(V3i.new(avec.x, n_logs, avec.y)),
+                            .break_time = block_info.hardness,
+                            .material_i = block_info.material_i,
+                        } });
                         if (n_logs == 2) { //Walk under the tree after breaking the first 2 blocks
                             try actions.append(.{ .movement = .{
                                 .kind = .walk,
@@ -456,7 +475,7 @@ pub const AStarContext = struct {
     }
 
     pub fn hasBlockTag(self: *const Self, tag: []const u8, pos: V3i) bool {
-        return (self.tag_table.hasTag(self.block_table.getBlockIndex(self.world.getBlock(pos)), "minecraft:block", tag));
+        return (self.tag_table.hasTag(self.reg.getBlockFromState(self.world.getBlock(pos)).id, "minecraft:block", tag));
     }
 
     //TODO check if it is transparent block

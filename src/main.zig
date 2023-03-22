@@ -7,6 +7,7 @@ const nbt_zig = @import("nbt.zig");
 const astar = @import("astar.zig");
 const bot = @import("bot.zig");
 const Bot = bot.Bot;
+const Reg = @import("data_reg.zig");
 
 const math = std.math;
 
@@ -54,47 +55,6 @@ const fbsT = std.io.FixedBufferStream([]const u8);
 //    drops: []const u16,
 //    harvest_tools: []const u16,
 //};
-
-//This structure should contain all data related to minecraft required for our bot
-pub const DataReg = struct {
-    pub const ItemId = u16;
-    pub const BlockId = u16;
-
-    pub const Material = struct {
-        pub const Tool = struct {
-            item_id: ItemId,
-            multiplier: f32,
-        };
-
-        name: []const u8,
-        tools: []const Tool,
-    };
-
-    pub const Item = struct {
-        id: ItemId,
-        name: []const u8,
-        stack_size: u8,
-    };
-
-    pub const Block = struct {
-        id: BlockId,
-        name: []const u8,
-        hardness: f32,
-        resistance: f32,
-        stack_size: u8,
-        diggable: bool,
-        material_i: u8,
-        transparent: bool,
-        default_state: BlockId,
-        min_state: BlockId,
-        max_state: BlockId,
-        //TODO handle block states
-    };
-
-    blocks: []const Block, //Block information indexed by block id
-    materials: []const Material, //indexed by material id
-    items: []const Item,
-};
 
 pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8)) ?vector.V3f {
     var ret = V3f{
@@ -151,6 +111,25 @@ pub fn main() !void {
     //errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
+    //fn getStdInHandle() os.fd_t {
+
+    //const epoll_fd = try std.os.epoll_create1(0);
+    //defer std.os.close(epoll_fd);
+
+    //var ev: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = 0 } };
+
+    //try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &ev);
+    //var events: [5]std.os.linux.epoll_event = undefined;
+
+    //while (true) {
+    //    const count = std.os.epoll_wait(epoll_fd, &events, 1000 * 10);
+    //    for(events[0..count])|eve,i|{
+    //        std.debug.print("Event: {d}\n",.{i});
+    //    }
+    //}
+    //if (true)
+    //    return;
+
     const server = blk: {
         const hosts_to_try = [_]struct { hostname: []const u8, port: u16 }{
             .{ .hostname = "localhost", .port = 25565 },
@@ -172,12 +151,8 @@ pub fn main() !void {
         return error.noServers;
     };
 
-    var item_table = try mc.ItemRegistry.init(alloc, "json/items.json");
-    defer item_table.deinit();
-    std.debug.print("{s}\n", .{item_table.getName(1)});
-
-    var block_table = try mc.BlockRegistry.init(alloc, "json/id_array.json", "json/block_info_array.json");
-    defer block_table.deinit(alloc);
+    const reg = try Reg.DataReg.init(alloc, "mcproto/converted/all.json");
+    defer reg.deinit(alloc);
 
     var tag_table = mc.TagRegistry.init(alloc);
     defer tag_table.deinit();
@@ -281,7 +256,7 @@ pub fn main() !void {
     _ = listener_thread;
     //defer cmd_thread.join();
 
-    var pathctx = astar.AStarContext.init(alloc, &world, &tag_table, &block_table);
+    var pathctx = astar.AStarContext.init(alloc, &world, &tag_table, &reg);
     defer pathctx.deinit();
 
     var player_actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc);
@@ -476,7 +451,7 @@ pub fn main() !void {
                             block_break_timer = dt;
                         } else {
                             block_break_timer.? += dt;
-                            if (block_break_timer.? >= bb.break_time) {
+                            if (block_break_timer.? >= 1.5 * bb.break_time) {
                                 block_break_timer = null;
                                 try pctx.playerAction(.finish_digging, bb.pos);
                                 current_action = player_actions.popOrNull();
@@ -596,16 +571,33 @@ pub fn main() !void {
                                     std.debug.print("\t{s}\n", .{feat});
                                 }
                             },
+                            .Set_Held_Item => {
+                                bot1.selected_slot = parse.int(u8);
+                                try pctx.setHeldItem(bot1.selected_slot);
+                            },
+                            .Set_Container_Slot => {
+                                const win_id = parse.int(u8);
+                                const state_id = parse.varInt();
+                                const slot_i = @intCast(u16, parse.int(i16));
+                                const data = parse.slot();
+                                if (win_id == 0) {
+                                    bot1.container_state = state_id;
+                                    bot1.inventory[slot_i] = data;
+                                    std.debug.print("updating slot {any}\n", .{data});
+                                }
+                            },
                             .Set_Container_Content => {
                                 const win_id = parse.int(u8);
                                 std.debug.print("SETTING CONTAINER: {d}\n", .{win_id});
                                 const state_id = parse.varInt();
-                                _ = state_id;
                                 const item_count = parse.varInt();
                                 var i: u32 = 0;
-                                while (i < item_count) : (i += 1) {
-                                    const s = parse.slot();
-                                    bot1.inventory[i] = s;
+                                if (win_id == 0) {
+                                    while (i < item_count) : (i += 1) {
+                                        bot1.container_state = state_id;
+                                        const s = parse.slot();
+                                        bot1.inventory[i] = s;
+                                    }
                                 }
                             },
                             .Spawn_Player => {
@@ -737,10 +729,7 @@ pub fn main() !void {
                             .Block_Update => {
                                 const pos = parse.position();
                                 const new_id = parse.varInt();
-
                                 try world.setBlock(pos, @intCast(mc.BLOCK_ID_INT, new_id));
-
-                                std.debug.print("Block update {d} {d} {d} : {d}\n", .{ pos.x, pos.y, pos.z, new_id });
                             },
                             .Set_Health => {
                                 bot1.health = parse.float(f32);
@@ -968,7 +957,6 @@ pub fn main() !void {
                                     const player_info: ?Entity = blk: {
                                         while (ent != null) : (ent = ent_it.next()) {
                                             if (ent.?.value_ptr.uuid == uuid) {
-                                                std.debug.print("found enti\n", .{});
                                                 break :blk ent.?.value_ptr.*;
                                             }
                                         }
@@ -978,7 +966,7 @@ pub fn main() !void {
                                     const msg = try parse.string(null);
                                     const eql = std.mem.eql;
 
-                                    var msg_buffer: [256]u8 = undefined;
+                                    var msg_buffer: [1024]u8 = undefined;
                                     var m_fbs = std.io.FixedBufferStream([]u8){ .buffer = &msg_buffer, .pos = 0 };
                                     const m_wr = m_fbs.writer();
 
@@ -1010,15 +998,29 @@ pub fn main() !void {
                                                 }
                                             }
                                         }
-                                    } else if (eql(u8, key, "axe")) {
+                                    } else if (eql(u8, key, "inventory")) {
+                                        m_fbs.reset();
+                                        try m_wr.print("Items: ", .{});
                                         for (bot1.inventory) |optslot| {
                                             if (optslot) |slot| {
+                                                const itemd = reg.getItem(slot.item_id);
+                                                try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
+                                            }
+                                        }
+                                        try pctx.sendChat(m_fbs.getWritten());
+                                    } else if (eql(u8, key, "axe")) {
+                                        for (bot1.inventory) |optslot, si| {
+                                            if (optslot) |slot| {
                                                 //TODO in mc 19.4 tags have been added for axes etc, for now just do a string search
-                                                const name = item_table.getName(slot.item_id);
+                                                const name = reg.getItem(slot.item_id).name;
                                                 const inde = std.mem.indexOf(u8, name, "axe");
                                                 if (inde) |in| {
+                                                    std.debug.print("found axe at {d} {any}\n", .{ si, bot1.inventory[si] });
                                                     _ = in;
-                                                    std.debug.print("Found axe :{s}\n", .{name});
+                                                    //try pctx.pickItem(si - 10);
+                                                    try pctx.clickContainer(0, bot1.container_state, @intCast(i16, si), 0, 2, &.{});
+                                                    try pctx.setHeldItem(0);
+                                                    break;
                                                 }
                                                 //std.debug.print("item: {s}\n", .{item_table.getName(slot.item_id)});
                                             }
@@ -1070,10 +1072,13 @@ pub fn main() !void {
                                         const bid = world.getBlock(qb);
                                         m_fbs.reset();
                                         try m_wr.print("Block {s} id: {d}", .{
-                                            block_table.findBlockName(bid),
+                                            reg.getBlockFromState(bid).name,
                                             bid,
                                         });
                                         try pctx.sendChat(m_fbs.getWritten());
+                                        m_fbs.reset();
+                                        std.debug.print("{}", .{reg.getBlockFromState(bid)});
+                                        //try pctx.sendChat(m_fbs.getWritten());
                                     }
                                 }
                             },
