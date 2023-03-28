@@ -180,45 +180,46 @@ pub const AStarContext = struct {
         self.closed.deinit();
     }
 
+    //TODO check the block above the player is open when we want to jump
     // Finding a tree (not a data structure) algorithim
     // Ignore the case where a structure looks like a tree: (villager houses with log columns)
     // dijkstras algorithim, our end condition is a node existing as dirt, log
     //
     // How we define a tree, minecraft:dirt, n minecraft:logs, minecraft:leaves
     //
-    pub fn addAdjNodesNoH(self: *Self, node: *Node) !void {
-        const direct_adj = [_]u32{ 1, 3, 5, 7 };
-        const diag_adj = [_]u32{ 0, 2, 4, 6 };
-        var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
-        for (direct_adj) |di| {
-            const avec = ADJ[di];
-            acat[di] = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
-        }
+    //pub fn addAdjNodesNoH(self: *Self, node: *Node) !void {
+    //    const direct_adj = [_]u32{ 1, 3, 5, 7 };
+    //    const diag_adj = [_]u32{ 0, 2, 4, 6 };
+    //    var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
+    //    for (direct_adj) |di| {
+    //        const avec = ADJ[di];
+    //        acat[di] = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
+    //    }
 
-        for (diag_adj) |di| {
-            const li = @intCast(u32, @mod(@intCast(i32, di) - 1, 8));
-            const ui = @mod(di + 1, 8);
-            if (acat[li].cat == acat[ui].cat and acat[li].cat != .blocked) {
-                const avec = ADJ[di];
-                const cat = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
-                acat[di] = if (cat.cat == acat[ui].cat) cat else .{ .cat = .blocked };
-            }
-        }
+    //    for (diag_adj) |di| {
+    //        const li = @intCast(u32, @mod(@intCast(i32, di) - 1, 8));
+    //        const ui = @mod(di + 1, 8);
+    //        if (acat[li].cat == acat[ui].cat and acat[li].cat != .blocked) {
+    //            const avec = ADJ[di];
+    //            const cat = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
+    //            acat[di] = if (cat.cat == acat[ui].cat) cat else .{ .cat = .blocked };
+    //        }
+    //    }
 
-        for (acat) |cat, i| {
-            const avec = ADJ[i];
-            if (cat.cat == .blocked)
-                continue;
-            try self.addNode(.{
-                .ntype = cat.cat,
-                .x = node.x + avec.x,
-                .z = node.z + avec.y,
-                .y = node.y + cat.y_offset,
-                .G = ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
-                .H = 0,
-            }, node);
-        }
-    }
+    //    for (acat) |cat, i| {
+    //        const avec = ADJ[i];
+    //        if (cat.cat == .blocked)
+    //            continue;
+    //        try self.addNode(.{
+    //            .ntype = cat.cat,
+    //            .x = node.x + avec.x,
+    //            .z = node.z + avec.y,
+    //            .y = node.y + cat.y_offset,
+    //            .G = ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
+    //            .H = 0,
+    //        }, node);
+    //    }
+    //}
 
     pub fn findTree(self: *Self, start: V3f) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
@@ -407,6 +408,7 @@ pub const AStarContext = struct {
     }
 
     pub fn addAdjNodes(self: *Self, node: *Node, goal: V3f, override_h: ?u32) !void {
+        const block_above = self.world.getBlock(V3i.new(node.x, node.y + 2, node.z));
         const direct_adj = [_]u32{ 1, 3, 5, 7 };
         const diag_adj = [_]u32{ 0, 2, 4, 6 };
         var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
@@ -432,6 +434,9 @@ pub const AStarContext = struct {
                 try abs(@floatToInt(i32, goal.z) - (node.z + avec.y)));
             if (cat.cat == .blocked)
                 continue;
+            if (cat.cat == .jump and block_above != 0)
+                continue;
+
             try self.addNode(.{
                 .ntype = cat.cat,
                 .x = node.x + avec.x,

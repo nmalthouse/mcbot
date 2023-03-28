@@ -27,6 +27,11 @@ pub const PacketCtx = struct {
 
     packet: Packet,
     server: Serv,
+    mutex: *std.Thread.Mutex,
+
+    pub fn wr(self: *@This()) !void {
+        try self.packet.writeToServer(self.server, self.mutex);
+    }
 
     pub fn useItemOn(
         self: *@This(),
@@ -49,7 +54,7 @@ pub const PacketCtx = struct {
         try self.packet.float(cz);
         try self.packet.boolean(head_in_block);
         try self.packet.varInt(sequence);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn pickItem(self: *@This(), sloti: usize) !void {
@@ -57,7 +62,8 @@ pub const PacketCtx = struct {
         try self.packet.varInt(0x19);
         try self.packet.varInt(@intCast(i32, sloti));
 
-        try self.packet.writeToServer(self.server);
+        //try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn setHeldItem(self: *@This(), index: u8) !void {
@@ -65,7 +71,7 @@ pub const PacketCtx = struct {
 
         try self.packet.varInt(0x28);
         try self.packet.short(@intCast(u16, index));
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn clickContainer(
@@ -93,19 +99,23 @@ pub const PacketCtx = struct {
         }
         try self.packet.boolean(false);
 
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn sendChat(self: *@This(), msg: []const u8) !void {
-        if (msg.len > 255) return error.msgToLong;
+        const len = if (msg.len > 255) 255 else msg.len;
+        //if (msg.len > 255) return error.msgToLong;
         try self.packet.clear();
         try self.packet.varInt(0x05);
-        try self.packet.string(msg);
+        try self.packet.string(msg[0..len]);
         try self.packet.long(0);
         try self.packet.long(0);
         try self.packet.boolean(false);
         try self.packet.int32(0);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
+
+        if (len < msg.len)
+            try self.sendChat(msg[len..msg.len]);
     }
 
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
@@ -115,7 +125,7 @@ pub const PacketCtx = struct {
         try self.packet.iposition(block_pos);
         try self.packet.ubyte(0); //Face of block
         try self.packet.varInt(0);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn handshake(self: *@This(), hostname: []const u8, port: u16) !void {
@@ -125,21 +135,21 @@ pub const PacketCtx = struct {
         try self.packet.string(hostname);
         try self.packet.short(port);
         try self.packet.varInt(2); //Next state
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn clientCommand(self: *@This(), action: u8) !void {
         try self.packet.clear();
         try self.packet.varInt(0x06);
         try self.packet.varInt(action);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn completeLogin(self: *@This()) !void {
         try self.packet.clear();
         try self.packet.varInt(0x06);
         try self.packet.varInt(0x0);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn loginStart(self: *@This(), username: []const u8) !void {
@@ -147,14 +157,14 @@ pub const PacketCtx = struct {
         try self.packet.varInt(0); //Packet id
         try self.packet.string(username);
         try self.packet.boolean(false); //No uuid
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn keepAlive(self: *@This(), id: i64) !void {
         try self.packet.clear();
         try self.packet.varInt(0x11);
         try self.packet.long(id);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn setPlayerRot(self: *@This(), yaw: f32, pitch: f32, grounded: bool) !void {
@@ -163,7 +173,7 @@ pub const PacketCtx = struct {
         try self.packet.float(yaw);
         try self.packet.float(pitch);
         try self.packet.boolean(grounded);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn setPlayerPositionRot(self: *@This(), pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
@@ -176,21 +186,21 @@ pub const PacketCtx = struct {
         try self.packet.float(pitch);
         try self.packet.boolean(grounded);
         //std.debug.print("MOVE PACKET {d} {d} {d} {any}\n", .{ pos.x, pos.y, pos.z, grounded });
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn confirmTeleport(self: *@This(), id: i32) !void {
         try self.packet.clear();
         try self.packet.varInt(0);
         try self.packet.varInt(id);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
         try self.packet.clear();
         try self.packet.varInt(0x0C);
         try self.packet.string(brand);
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
@@ -204,7 +214,7 @@ pub const PacketCtx = struct {
         try self.packet.varInt(main_hand);
         try self.packet.boolean(false); //No text filtering
         try self.packet.boolean(true); //Allow this bot to be listed
-        try self.packet.writeToServer(self.server);
+        try self.wr();
     }
 };
 
@@ -232,7 +242,7 @@ pub const PacketReader = struct {};
 
 pub const Packet = struct {
     const Self = @This();
-    const RESERVED_BYTE_COUNT: usize = 5;
+    //const RESERVED_BYTE_COUNT: usize = 5;
 
     buffer: std.ArrayList(u8),
     comp_thresh: i32 = -1,
@@ -241,13 +251,14 @@ pub const Packet = struct {
         var ret = Self{
             .buffer = std.ArrayList(u8).init(alloc),
         };
-        try ret.buffer.resize(RESERVED_BYTE_COUNT);
+        //try ret.buffer.resize(RESERVED_BYTE_COUNT);
 
         return ret;
     }
 
     pub fn clear(self: *Self) !void {
-        try self.buffer.resize(RESERVED_BYTE_COUNT);
+        //try self.buffer.resize(RESERVED_BYTE_COUNT);
+        try self.buffer.resize(0);
     }
 
     pub fn deinit(self: *Self) void {
@@ -308,15 +319,18 @@ pub const Packet = struct {
         _ = try wr.writeInt(u16, val, .Big);
     }
 
-    pub fn writeToServer(self: *Self, server: std.net.Stream.Writer) !void {
+    pub fn writeToServer(self: *Self, server: std.net.Stream.Writer, mutex: *std.Thread.Mutex) !void {
+        //TODO if blocking becomes an issue for keep alives and the like, do a try lock and create a queue of packets to send
+        mutex.lock();
+        defer mutex.unlock();
         const comp_enable = (self.comp_thresh > -1);
         //_ = try server.writeByte(0);
-        var len = toVarInt(@intCast(i32, self.buffer.items.len - RESERVED_BYTE_COUNT) + @as(i32, if (comp_enable) 1 else 0));
+        var len = toVarInt(@intCast(i32, self.buffer.items.len) + @as(i32, if (comp_enable) 1 else 0));
         _ = try server.write(len.getSlice());
         if (comp_enable)
             _ = try server.writeByte(0);
 
-        _ = try server.write(self.buffer.items[RESERVED_BYTE_COUNT..]);
+        _ = try server.write(self.buffer.items[0..]);
     }
 
     //pub fn getWritableBuffer(self: *Self) []const u8 {
@@ -422,6 +436,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn blockEntity(self: *Self) u8 {
+            //TODO make this actually return something
             const pxz = self.int(u8);
             const y = self.int(i16);
             const btype = self.varInt();
@@ -788,9 +803,12 @@ pub const ChunkMap = struct {
     pub const ZTYPE = ChunkMapCoord;
 
     x: XTYPE,
+    alloc: std.mem.Allocator,
+
+    rw_lock: std.Thread.RwLock = .{},
 
     pub fn init(alloc: std.mem.Allocator) Self {
-        return .{ .x = XTYPE.init(alloc) };
+        return .{ .x = XTYPE.init(alloc), .alloc = alloc };
     }
 
     pub fn deinit(self: *Self) void {
@@ -809,6 +827,7 @@ pub const ChunkMap = struct {
     }
 
     pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32) void {
+        self.rw_lock.lock();
         if (self.x.getPtr(cx)) |zw| {
             if (zw.getPtr(cz)) |*cc| {
                 for (cc.*) |*section| {
@@ -817,15 +836,13 @@ pub const ChunkMap = struct {
                 _ = zw.remove(cz);
             }
         }
+        self.rw_lock.unlock();
     }
 
     pub fn isLoaded(self: *Self, pos: V3i) bool {
+        self.rw_lock.lockShared();
+        defer self.rw_lock.unlockShared();
         return (self.getChunkSectionPtr(pos) != null);
-        //const co = getChunkCoord(pos);
-        //if (self.x.get(co.x)) |z| {
-        //    return z.contains(co.z);
-        //}
-        //return false;
     }
 
     pub fn getChunkCoord(pos: V3i) V3i {
@@ -835,7 +852,7 @@ pub const ChunkMap = struct {
         return .{ .x = cx, .y = cy, .z = cz };
     }
 
-    pub fn getChunkSectionPtr(self: *Self, pos: V3i) ?*ChunkSection {
+    fn getChunkSectionPtr(self: *Self, pos: V3i) ?*ChunkSection {
         const ch = ChunkMap.getChunkCoord(pos);
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
@@ -844,6 +861,8 @@ pub const ChunkMap = struct {
     }
 
     pub fn getBlock(self: *Self, pos: V3i) BLOCK_ID_INT {
+        self.rw_lock.lockShared();
+        defer self.rw_lock.unlockShared();
         const ch = ChunkMap.getChunkCoord(pos);
 
         const rx = @mod(pos.x, 16);
@@ -877,6 +896,8 @@ pub const ChunkMap = struct {
     }
 
     pub fn setBlockChunk(self: *Self, chunk_pos: V3i, rel_pos: V3i, id: BLOCK_ID_INT) !void {
+        self.rw_lock.lock();
+        defer self.rw_lock.unlock();
         const world_z = self.x.getPtr(chunk_pos.x) orelse unreachable;
         const column = world_z.getPtr(chunk_pos.z) orelse unreachable;
         const section = &column[@intCast(u32, chunk_pos.y + 4)];
@@ -890,6 +911,8 @@ pub const ChunkMap = struct {
     }
 
     pub fn setBlock(self: *Self, pos: V3i, id: BLOCK_ID_INT) !void {
+        self.rw_lock.lock();
+        defer self.rw_lock.unlock();
         const section = self.getChunkSectionPtr(pos) orelse unreachable;
 
         const rx = @intCast(u32, @mod(pos.x, 16));
@@ -897,6 +920,24 @@ pub const ChunkMap = struct {
         const ry = @intCast(u32, @mod(pos.y + 64, 16));
 
         try section.setBlock(rx, ry, rz, id);
+    }
+
+    pub fn insertChunkColumn(self: *Self, cx: i32, cz: i32, chunk: Chunk) !void {
+        self.rw_lock.lock();
+        defer self.rw_lock.unlock();
+
+        const zmap = try self.x.getOrPut(cx);
+        if (!zmap.found_existing) {
+            zmap.value_ptr.* = ChunkMap.ZTYPE.init(self.alloc);
+        }
+
+        const chunk_entry = try zmap.value_ptr.getOrPut(cz);
+        if (chunk_entry.found_existing) {
+            for (chunk_entry.value_ptr.*) |*cs| {
+                cs.deinit();
+            }
+        }
+        chunk_entry.value_ptr.* = chunk;
     }
 };
 

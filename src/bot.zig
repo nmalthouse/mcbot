@@ -161,6 +161,10 @@ pub const Bot = struct {
     pos: ?V3f = null,
     e_id: u32,
 
+    fd: i32 = 0,
+
+    write_mutex: std.Thread.Mutex = .{},
+
     inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
     selected_slot: u8 = 0,
     container_state: i32 = 0,

@@ -17,7 +17,9 @@ pub fn build(b: *std.build.Builder) void {
     exe.install();
     exe.linkLibC();
     exe.linkSystemLibraryName("raylib");
+    exe.linkSystemLibraryName("event");
     exe.addIncludePath("lib");
+    //exe.addIncludePath("/usr/include");
 
     //exe.addCSourceFiles(&.{
     //    "lib/libnbt/nbt_build.c",
