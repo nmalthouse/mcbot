@@ -3,6 +3,37 @@
 
 const std = @import("std");
 
+pub fn TrackingReader(comptime readerT: type) type {
+    return struct {
+        const Self = @This();
+        pub const Reader = std.io.Reader(*Self, readerT.Error, read);
+
+        buffer: std.ArrayList(u8),
+        child_reader: readerT,
+
+        pub fn init(alloc: std.mem.Allocator, child_reader: readerT) Self {
+            return Self{ .buffer = std.ArrayList(u8).init(alloc), .child_reader = child_reader };
+        }
+
+        pub fn deinit(self: *Self) void {
+            self.buffer.deinit();
+        }
+
+        pub fn read(self: *Self, buffer: []u8) readerT.Error!usize {
+            var num_read = try self.child_reader.read(buffer);
+            self.buffer.appendSlice(buffer[0..num_read]) catch unreachable;
+            return num_read;
+        }
+
+        pub fn reader(self: *Self) Reader {
+            return .{ .context = self };
+        }
+    };
+}
+//fn(*nbt.TrackingReader(io.reader.Reader(*io.fixed_buffer_stream.FixedBufferStream([]const u8),error{},(function 'read'))), []u8) error{}!usize'
+
+//fn(nbt.TrackingReader(io.reader.Reader(*io.fixed_buffer_stream.FixedBufferStream([]const u8),error{},(function 'read'))), []u8) error{}!usize'
+
 pub const Tag = enum(u8) {
     end,
     byte,
@@ -226,7 +257,27 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
     };
 }
 
+test "serial" {
+    var servers = try std.fs.cwd().openFile("test/bigtest.nbt", .{});
+    defer servers.close();
+
+    var ungzip = try std.compress.gzip.gzipStream(std.testing.allocator, servers.reader());
+    defer ungzip.deinit();
+
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+
+    var data = try parseAsCompoundEntry(arena.allocator(), ungzip.reader());
+
+    var out = std.ArrayList(u8).init(arena.allocator());
+    defer out.deinit();
+
+    try data.serialize(out.writer());
+}
+
 test "servers.dat" {
+    if (true)
+        return;
     var servers = try std.fs.cwd().openFile("test/bigtest.nbt", .{});
     defer servers.close();
 

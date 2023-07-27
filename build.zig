@@ -1,4 +1,5 @@
 const std = @import("std");
+const ziglib = @import("ziglib/build.zig");
 
 pub fn build(b: *std.build.Builder) void {
     // Standard target options allows the person running `zig build` to choose
@@ -20,6 +21,9 @@ pub fn build(b: *std.build.Builder) void {
     exe.linkSystemLibraryName("event");
     exe.addIncludePath("lib");
     //exe.addIncludePath("/usr/include");
+
+    ziglib.linkLibrary(exe);
+    ziglib.addPackage(exe, "graph");
 
     //exe.addCSourceFiles(&.{
     //    "lib/libnbt/nbt_build.c",

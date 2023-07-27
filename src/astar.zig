@@ -61,6 +61,7 @@ pub const AStarContext = struct {
             walk,
             jump,
             fall,
+            gap,
         };
 
         parent: ?*Node = null,
@@ -104,12 +105,25 @@ pub const AStarContext = struct {
         pos: V3f,
     };
 
+    pub const Direction = enum {
+        north,
+        south,
+        east,
+        west,
+    };
+
     pub const ColumnHelper = struct {
         const S = @This();
+
+        pub const Query = enum {
+            walk_on,
+            walk_through,
+        };
 
         pub const Category = struct {
             cat: Node.Ntype,
             y_offset: i32 = 0,
+            gap: i32 = 0,
         };
 
         ctx: *const Self,
@@ -117,13 +131,22 @@ pub const AStarContext = struct {
         z: i32,
         y: i32,
 
+        pub fn queryList(s: *const S, list: []const Query) bool {
+            for (list) |item, index| {
+                const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + index, s.z)) orelse return false).id;
+                switch (item) {
+                    .walk_on => return id != 0,
+                }
+            }
+        }
+
         pub fn walkable(s: *const S, y: i32) bool {
-            return @bitCast(bool, s.ctx.world.getBlock(V3i.new(s.x, y + s.y, s.z)) != 0);
+            return @bitCast(bool, (s.ctx.world.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false) != 0);
         }
 
         pub fn canEnter(s: *const S, y: i32) bool {
-            const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + y, s.z))).id;
-            const tag_list = [_][]const u8{ "flowers", "rails", "signs", "wool_carpets", "crops", "climbable", "buttons", "banners" };
+            const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
+            const tag_list = [_][]const u8{ "flowers", "rails", "signs", "crops", "climbable", "buttons", "banners" };
             const fully_tag = blk: {
                 var list: [tag_list.len][]const u8 = undefined;
                 inline for (tag_list) |li, i| {
@@ -287,18 +310,24 @@ pub const AStarContext = struct {
         }
 
         try self.reset();
-        try self.addOpen(.{ .x = @floatToInt(i32, start.x), .y = @floatToInt(i32, start.y), .z = @floatToInt(i32, start.z) });
+        try self.addOpen(.{
+            .x = @floatToInt(i32, @floor(start.x)),
+            .y = @floatToInt(i32, @floor(start.y)),
+            .z = @floatToInt(i32, @floor(start.z)),
+        });
         const gpx = @floatToInt(i32, @round(goal.x));
         const gpy = @floatToInt(i32, @round(goal.y));
         const gpz = @floatToInt(i32, @round(goal.z));
 
-        while (true) {
+        var i: u32 = 0;
+        const ITERATION_LIMIT = 1000;
+        while (i < ITERATION_LIMIT) : (i += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
 
             if (current_n.x == gpx and current_n.z == gpz and current_n.y == gpy) {
                 var parent: ?*AStarContext.Node = current_n;
-                while (parent.?.parent != null) : (parent = parent.?.parent) {
+                while (parent != null) : (parent = parent.?.parent) {
                     try actions.append(.{ .movement = .{
                         .kind = parent.?.ntype,
                         .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(
@@ -311,9 +340,10 @@ pub const AStarContext = struct {
                 return actions;
             }
 
-            try self.addAdjLadderNodes(current_n, goal.toI(), null);
+            //try self.addAdjLadderNodes(current_n, goal.toI(), null);
             try self.addAdjNodes(current_n, goal, null);
         }
+        std.debug.print("ITERATION LIMIT EXCEEDED\n", .{});
         return null;
     }
 
@@ -408,22 +438,24 @@ pub const AStarContext = struct {
     }
 
     pub fn addAdjNodes(self: *Self, node: *Node, goal: V3f, override_h: ?u32) !void {
-        const block_above = self.world.getBlock(V3i.new(node.x, node.y + 2, node.z));
+        const block_above = self.world.getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse return error.fucked;
         const direct_adj = [_]u32{ 1, 3, 5, 7 };
         const diag_adj = [_]u32{ 0, 2, 4, 6 };
         var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
         for (direct_adj) |di| {
             const avec = ADJ[di];
-            acat[di] = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
+            acat[di] = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 2, di);
         }
 
         for (diag_adj) |di| {
             const li = @intCast(u32, @mod(@intCast(i32, di) - 1, 8));
             const ui = @mod(di + 1, 8);
-            if (acat[li].cat == acat[ui].cat and acat[li].cat != .blocked) {
+            //TODO expand this to be more inclusive
+            if (acat[ui].cat == .walk and acat[li].cat == .walk) {
                 const avec = ADJ[di];
-                const cat = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
-                acat[di] = if (cat.cat == acat[ui].cat) cat else .{ .cat = .blocked };
+                const cat = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 2, di);
+                //acat[di] = if (cat.cat == acat[ui].cat) cat else .{ .cat = .blocked };
+                acat[di] = if (cat.cat != .walk) .{ .cat = .blocked } else cat;
             }
         }
 
@@ -439,10 +471,18 @@ pub const AStarContext = struct {
 
             try self.addNode(.{
                 .ntype = cat.cat,
+                //.x = node.x + avec.x * if (cat.cat == .gap) cat.gap else 1,
+                //.z = node.z + avec.y * if (cat.cat == .gap) cat.gap else 1,
                 .x = node.x + avec.x,
                 .z = node.z + avec.y,
                 .y = node.y + cat.y_offset,
-                .G = ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
+                //.G = if (cat.cat == .jump) 1 else ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
+                .G = switch (cat.cat) {
+                    .ladder => 10,
+                    .jump => 10,
+                    .gap => 0,
+                    else => ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
+                },
                 //TODO fix the hurestic
                 //.H = @intCast(u32, try std.math.absInt(@floatToInt(i32, goal.x) - (node.x + avec.x)) +
                 //try std.math.absInt(@floatToInt(i32, goal.z) - (node.z + avec.y))),
@@ -457,8 +497,27 @@ pub const AStarContext = struct {
     //jump
     //ladder
 
+    const walk_list = &.{
+        .walk_through, //Player Head
+        .walk_through, //player feet
+        .walk_on,
+    };
+
+    const jump_list = &.{
+        .walk_through,
+        .walk_through, //Player Head
+        .walk_on, //player feet
+    };
+
+    const fall_list = &.{
+        .walk_through, //Player Head
+        .walk_through, //player feet
+        .walk_through,
+        .walk_on,
+    };
+
     //z is the coordinate beneath players feet
-    pub fn catagorizeAdjColumn(self: *Self, x: i32, y: i32, z: i32, head_blocked: bool, max_fall_dist: u32) ColumnHelper.Category {
+    pub fn catagorizeAdjColumn(self: *Self, x: i32, y: i32, z: i32, head_blocked: bool, max_fall_dist: u32, adj_i: u32) ColumnHelper.Category {
         const col = ColumnHelper{ .x = x, .z = z, .y = y, .ctx = self };
         if (col.walkable(0) and col.canEnter(1) and col.canEnter(2)) {
             return .{ .cat = .walk };
@@ -475,12 +534,25 @@ pub const AStarContext = struct {
                     break;
                 }
             }
+            _ = adj_i;
+            //If nothing found yet check if we can jump across a gap
+            //if (adj_i % 2 != 0) { //odd adj_i are cardinal directions
+            //    const max_gap_dist = 3;
+            //    var gi: i32 = 1;
+            //    while (gi <= max_gap_dist) : (gi += 1) {
+            //        const jcol = ColumnHelper{ .x = x + (ADJ[adj_i].x * gi), .z = z + (ADJ[adj_i].y * gi), .y = y, .ctx = self };
+            //        if (jcol.canEnter(1) and jcol.canEnter(2) and jcol.canEnter(3)) {
+            //            if (jcol.walkable(0))
+            //                return .{ .cat = .gap, .gap = gi };
+            //        }
+            //    }
+            //}
         }
         return .{ .cat = .blocked };
     }
 
     pub fn hasBlockTag(self: *const Self, tag: []const u8, pos: V3i) bool {
-        return (self.tag_table.hasTag(self.reg.getBlockFromState(self.world.getBlock(pos)).id, "minecraft:block", tag));
+        return (self.tag_table.hasTag(self.reg.getBlockFromState(self.world.getBlock(pos) orelse return false).id, "minecraft:block", tag));
     }
 
     //TODO check if it is transparent block
@@ -496,9 +568,9 @@ pub const AStarContext = struct {
             const bx = x + a_vec.x;
             const bz = z + a_vec.y;
             const by = y;
-            l_adj[i][0] = @bitCast(bool, self.world.getBlock(V3i.new(bx, by, bz)) != 0);
-            l_adj[i][1] = @bitCast(bool, self.world.getBlock(V3i.new(bx, by + 1, bz)) != 0);
-            l_adj[i][2] = @bitCast(bool, self.world.getBlock(V3i.new(bx, by + 2, bz)) != 0);
+            l_adj[i][0] = @bitCast(bool, (self.world.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0);
+            l_adj[i][1] = @bitCast(bool, (self.world.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0);
+            l_adj[i][2] = @bitCast(bool, (self.world.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0);
 
             if (l_adj[i][0] and !l_adj[i][1] and !l_adj[i][2]) {
                 return true;

@@ -1,7 +1,13 @@
 const std = @import("std");
 
+const graph = @import("graph");
+const mcBlockAtlas = @import("mc_block_atlas.zig");
+
 const mc = @import("listener.zig");
 const id_list = @import("list.zig");
+const eql = std.mem.eql;
+
+const packet_analyze = @import("analyze_packet_json.zig");
 
 const nbt_zig = @import("nbt.zig");
 const astar = @import("astar.zig");
@@ -46,7 +52,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
     var bot1 = Bot.init(alloc, bot_name);
     const s = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
     bot1.fd = s.handle;
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.write_mutex };
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.fd_mutex };
     defer pctx.packet.deinit();
     try pctx.handshake("localhost", 25565);
     try pctx.loginStart(bot1.name);
@@ -278,7 +284,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     const server_stream = std.net.Stream{ .handle = bot1.fd };
 
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = server_stream.writer(), .mutex = &bot1.write_mutex };
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
     defer pctx.packet.deinit();
 
     if (bot1.connection_state != .play)
@@ -388,10 +394,15 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .Block_Entity_Data => {
             const pos = parse.position();
             const btype = parse.varInt();
-            var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
+            const tr = nbt_zig.TrackingReader(@TypeOf(parse.reader));
+            var tracker = tr.init(arena_alloc, parse.reader);
+            defer tracker.deinit();
+
+            var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader());
+            std.debug.print("\n\n{}\n\n", .{nbt_data});
             _ = pos;
             _ = btype;
-            _ = nbt_data;
+            //_ = nbt_data;
         },
         .Teleport_Entity => {
             const data = parser.parse(PT(&.{
@@ -522,7 +533,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
         .Unload_Chunk => {
             const data = parser.parse(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
-            world.chunk_data.removeChunkColumn(data.cx, data.cz);
+            try world.chunk_data.removeChunkColumn(data.cx, data.cz);
         },
         //BOT specific packets
         .Keep_Alive => {
@@ -572,24 +583,41 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .Set_Container_Slot => {
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
-            const slot_i = @intCast(u16, parse.int(i16));
+            const slot_i = parse.int(i16);
             const data = parse.slot();
-            if (win_id == 0) {
+            if (win_id == -1 and slot_i == -1) {
+                bot1.held_item = data;
+            } else if (win_id == 0) {
                 bot1.container_state = state_id;
-                bot1.inventory[slot_i] = data;
+                bot1.inventory[@intCast(u16, slot_i)] = data;
                 std.debug.print("updating slot {any}\n", .{data});
             }
+        },
+        .Open_Screen => {
+            const win_id = parse.varInt();
+            const win_type = parse.varInt();
+            bot1.interacted_inventory.win_type = @intCast(u32, win_type);
+            //bot1.interacted_inventory.win_id = win_id;
+            const win_title = try parse.string(null);
+            std.debug.print("open window: {d} {d}: {s}\n", .{ win_id, win_type, win_title });
         },
         .Set_Container_Content => {
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
-            const item_count = parse.varInt();
+            const item_count = @intCast(u32, parse.varInt());
             var i: u32 = 0;
             if (win_id == 0) {
                 while (i < item_count) : (i += 1) {
                     bot1.container_state = state_id;
                     const s = parse.slot();
                     bot1.inventory[i] = s;
+                }
+            } else {
+                try bot1.interacted_inventory.setSize(item_count);
+                bot1.interacted_inventory.win_id = win_id;
+                bot1.interacted_inventory.state_id = state_id;
+                while (i < item_count) : (i += 1) {
+                    try bot1.interacted_inventory.setSlot(i, parse.slot());
                 }
             }
         },
@@ -610,13 +638,27 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.boolean, "should_dismount"),
             }));
 
-            std.debug.print(
-                "Sync pos: x: {d}, y: {d}, z: {d}, yaw {d}, pitch : {d} flags: {b}, tel_id: {}\n",
-                .{ data.pos.x, data.pos.y, data.pos.z, data.yaw, data.pitch, data.flags, data.tel_id },
-            );
+            if (bot1.pos != null)
+                std.debug.print(
+                    "Sync pos: x: {d}, y: {d}, z: {d}, yaw {d}, pitch : {d} flags: {b}, tel_id: {}\n\told_pos: {any}\n\tDisc: {d} {d} {d}\n",
+                    .{
+                        data.pos.x,
+                        data.pos.y,
+                        data.pos.z,
+                        data.yaw,
+                        data.pitch,
+                        data.flags,
+                        data.tel_id,
+                        bot1.pos,
+                        bot1.pos.?.x - data.pos.x,
+                        bot1.pos.?.y - data.pos.y,
+                        bot1.pos.?.z - data.pos.z,
+                    },
+                );
             //TODO use if relative flag
             bot1.pos = data.pos;
             _ = FieldMask;
+            //bot1.action_index = null;
 
             try pctx.confirmTeleport(data.tel_id);
 
@@ -695,8 +737,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
             world.packet_cache.chat_time_stamps.insert(timestamp);
 
-            const eql = std.mem.eql;
-
             var it = std.mem.tokenize(u8, msg, " ");
             const key = it.next().?;
 
@@ -718,7 +758,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 break :blk null;
             };
             if (bot_h) |cbot| {
-                var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = cbot.fd }).writer(), .mutex = &cbot.write_mutex };
+                var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = cbot.fd }).writer(), .mutex = &cbot.fd_mutex };
                 defer bp.packet.deinit();
                 var ent_it = world.entities.iterator();
                 var ent = ent_it.next();
@@ -746,7 +786,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                     try bp.sendChat(ret_msg_buf.items);
                 } else if (eql(u8, com, "path")) {
-                    _ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, reg, cbot.pos.?, player_info.?.pos, cbot.fd });
+                    std.debug.print("TITS\n", .{});
+                    try bp.sendChat("pathing");
+                    //_ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, reg, cbot.pos.?, player_info.?.pos, cbot.fd });
                 }
             }
 
@@ -787,23 +829,67 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     }
                 }
                 try pctx.sendChat(ret_msg_buf.items);
-            } else if (eql(u8, key, "axe")) {
-                for (bot1.inventory) |optslot, si| {
+            } else if (eql(u8, key, "report")) {
+                try m_wr.print("Items: ", .{});
+                for (bot1.interacted_inventory.slots.items) |optslot| {
                     if (optslot) |slot| {
-                        //TODO in mc 19.4 tags have been added for axes etc, for now just do a string search
-                        const name = reg.getItem(slot.item_id).name;
-                        const inde = std.mem.indexOf(u8, name, "axe");
-                        if (inde) |in| {
-                            std.debug.print("found axe at {d} {any}\n", .{ si, bot1.inventory[si] });
-                            _ = in;
-                            //try pctx.pickItem(si - 10);
-                            try pctx.clickContainer(0, bot1.container_state, @intCast(i16, si), 0, 2, &.{});
-                            try pctx.setHeldItem(0);
-                            break;
-                        }
-                        //std.debug.print("item: {s}\n", .{item_table.getName(slot.item_id)});
+                        const itemd = reg.getItem(slot.item_id);
+                        try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
                     }
                 }
+                try pctx.sendChat(ret_msg_buf.items);
+            } else if (eql(u8, key, "axe")) {
+                //for (bot1.inventory) |optslot, si| {
+                //if (optslot) |slot| {
+                //    //TODO in mc 19.4 tags have been added for axes etc, for now just do a string search
+                //    const name = reg.getItem(slot.item_id).name;
+                //    const inde = std.mem.indexOf(u8, name, "axe");
+                //    if (inde) |in| {
+                //        std.debug.print("found axe at {d} {any}\n", .{ si, bot1.inventory[si] });
+                //        _ = in;
+                //        //try pctx.pickItem(si - 10);
+                //        try pctx.clickContainer(0, bot1.container_state, @intCast(i16, si), 0, 2, &.{}, null);
+                //        try pctx.setHeldItem(0);
+                //        break;
+                //    }
+                //    //std.debug.print("item: {s}\n", .{item_table.getName(slot.item_id)});
+                //}
+                //}
+            } else if (eql(u8, key, "dump")) {
+                try pctx.sendChat("dumping");
+                const inv = bot1.interacted_inventory;
+                if (inv.win_type == 2) { //A single chest
+                    var first_null_i: u32 = 0;
+                    var num_null: u32 = 0;
+                    var i: u32 = 0;
+                    while (i < 27) : (i += 1) {
+                        if (inv.slots.items[i] == null) {
+                            first_null_i = i;
+                            num_null += 1;
+                            break;
+                        }
+                    }
+
+                    i = 27;
+                    while (i < 63) : (i += 1) {
+                        if (num_null == 0)
+                            break;
+
+                        if (inv.slots.items[i] != null) {
+                            num_null -= 1;
+                            try pctx.clickContainer(inv.win_id.?, inv.state_id, i, 0, 0, &.{.{ .sloti = i, .slot = null }}, inv.slots.items[i].?);
+                            try pctx.clickContainer(inv.win_id.?, inv.state_id, first_null_i, 0, 0, &.{.{ .sloti = first_null_i, .slot = inv.slots.items[i].? }}, null);
+                            break;
+                        }
+                    }
+                }
+            } else if (eql(u8, key, "place")) {
+                try pctx.sendChat("Trying to place above");
+                try pctx.useItemOn(.main, bot1.pos.?.add(V3f.new(0, 2, 0)).toI(), .bottom, 0, 0, 0, false, 0);
+            } else if (eql(u8, key, "close_chest")) {
+                try pctx.sendChat("Trying to close chest");
+                try pctx.closeContainer(bot1.interacted_inventory.win_id.?);
+                bot1.interacted_inventory.win_id = null;
             } else if (eql(u8, key, "open_chest")) {
                 try pctx.sendChat("Trying to open chest");
                 const v = try parseCoord(&it);
@@ -833,7 +919,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 //}
             } else if (eql(u8, key, "jump")) {} else if (eql(u8, key, "query")) {
                 const qb = (try parseCoord(&it)).toI();
-                const bid = world.chunk_data.getBlock(qb);
+                const bid = world.chunk_data.getBlock(qb) orelse 0;
                 try m_wr.print("Block {s} id: {d}", .{
                     reg.getBlockFromState(bid).name,
                     bid,
@@ -853,6 +939,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
     _ = reg;
     while (true) {
         if (exit_mutex.tryLock()) {
+            std.debug.print("bots exiting\n", .{});
             return;
         }
         //const uuid = 0;
@@ -867,24 +954,106 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
         //    break :blk null;
         //};
 
+        var skip_ticks: i32 = 0;
+
         var bot_it = world.bots.iterator();
         var bot_i = bot_it.next();
         while (bot_i != null) : (bot_i = bot_it.next()) {
             const bo = bot_i.?.value_ptr;
+            var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
+            bo.modify_mutex.lock();
+            defer bo.modify_mutex.unlock();
+            //const pw = mc.lookAtBlock(bo.pos.?, V3f.new(-0.3, 1, -0.3));
+            //try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, true);
             if (!bo.handshake_complete)
                 continue;
-            var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.write_mutex };
-            const pw = mc.lookAtBlock(bo.pos.?, V3f.new(-0.3, 1, -0.3));
-            try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, true);
+
+            const dt: f64 = 1.0 / 20.0;
+            //const speed = 4.317;
+            if (skip_ticks > 0) {
+                skip_ticks -= 1;
+            } else {
+                if (bo.action_index) |action| {
+                    switch (bo.action_list.items[action]) {
+                        .movement => |move_| {
+                            var move = move_;
+                            var adt = dt;
+                            var grounded = true;
+                            var moved = false;
+                            var pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
+                            while (true) {
+                                var move_vec = bo.move_state.update(adt);
+                                grounded = move_vec.grounded;
+
+                                bo.pos = move_vec.new_pos;
+                                moved = true;
+
+                                if (move_vec.move_complete) {
+                                    bo.nextAction(move_vec.remaining_dt);
+                                    if (bo.action_index) |new_acc| {
+                                        if (bo.action_list.items[new_acc] != .movement) {
+                                            break;
+                                        } else if (bo.action_list.items[new_acc].movement.kind == .jump and move.kind == .jump) {
+                                            bo.move_state.time = 0;
+                                            skip_ticks = 100;
+                                            break;
+                                        }
+                                    } else {
+                                        break;
+                                    }
+                                } else {
+                                    break;
+                                }
+                                //move_vec = //above switch statement
+                            }
+                            if (moved) {
+                                try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, grounded);
+                            }
+                        },
+                        .block_break => |bb| {
+                            _ = bb;
+                            //if (block_break_timer == null) {
+                            //    const pw = mc.lookAtBlock(bot1.pos.?, bb.pos.toF());
+                            //    try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                            //    try bp.playerAction(.start_digging, bb.pos);
+                            //    block_break_timer = dt;
+                            //} else {
+                            //    block_break_timer.? += dt;
+                            //    if (block_break_timer.? >= 0.5) {
+                            //        block_break_timer = null;
+                            //        try bp.playerAction(.finish_digging, bb.pos);
+                            //        current_action = player_actions.popOrNull();
+                            //        if (current_action) |acc| {
+                            //            switch (acc) {
+                            //                .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
+                            //                .block_break => block_break_timer = null,
+                            //            }
+                            //        }
+                            //    }
+                            //}
+                        },
+                    }
+                }
+            }
         }
 
         std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
     }
 }
 
-pub fn basicPathfindThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, start: V3f, goal: V3f, bot_handle: i32) !void {
+pub fn basicPathfindThread(
+    alloc: std.mem.Allocator,
+    world: *McWorld,
+    reg: *const Reg.DataReg,
+    start: V3f,
+    goal: V3f,
+    bot_handle: i32,
+    return_ctx_mutex: *std.Thread.Mutex,
+    return_ctx: *?astar.AStarContext,
+) !void {
+    std.debug.print("PATHFIND CALLED \n", .{});
     var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
-    defer pathctx.deinit();
+    errdefer pathctx.deinit();
 
     const found = try pathctx.pathfind(start, goal);
     if (found) |*actions| {
@@ -892,7 +1061,287 @@ pub fn basicPathfindThread(alloc: std.mem.Allocator, world: *McWorld, reg: *cons
         for (player_actions.items) |pitem| {
             std.debug.print("action: {any}\n", .{pitem});
         }
-        try world.action_lists.addList(.{ .list = player_actions.*, .bot_id = bot_handle });
+
+        const botp = world.bots.getPtr(bot_handle) orelse return error.invalidBotHandle;
+        botp.modify_mutex.lock();
+        botp.action_list.deinit();
+        botp.action_list = player_actions.*;
+        botp.action_index = player_actions.items.len;
+        botp.nextAction(0);
+        botp.modify_mutex.unlock();
+    }
+    std.debug.print("FINISHED DUMPING\n", .{});
+
+    return_ctx_mutex.lock();
+    if (return_ctx.* != null) {
+        return_ctx.*.?.deinit();
+    }
+    return_ctx.* = pathctx;
+    return_ctx_mutex.unlock();
+    std.debug.print("PATHFIND FINISHED\n", .{});
+}
+
+pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, bot_fd: i32) !void {
+    var win = try graph.SDL.Window.createWindow("My window");
+    defer win.destroyWindow();
+    var ctx = try graph.GraphicsContext.init(&alloc, 163);
+    defer ctx.deinit();
+
+    const mc_atlas = try mcBlockAtlas.buildAtlas(alloc);
+    defer mc_atlas.deinit(alloc);
+
+    var camera = graph.Camera3D{};
+    camera.pos.data = [_]f32{ -2.20040695e+02, 6.80385284e+01, 1.00785331e+02 };
+    win.grabMouse(true);
+
+    //A chunk is just a vertex array
+    const ChunkVerts = struct {
+        cubes: graph.Cubes,
+    };
+    var vert_map = std.AutoHashMap(i32, std.AutoHashMap(i32, ChunkVerts)).init(alloc);
+    defer {
+        var it = vert_map.iterator();
+        while (it.next()) |kv| {
+            var zit = kv.value_ptr.iterator();
+            while (zit.next()) |zkv| { //Cubes
+                zkv.value_ptr.cubes.deinit();
+            }
+            kv.value_ptr.deinit();
+        }
+    }
+
+    var font = try graph.Font.init("dos.ttf", alloc, 16, 163, &graph.Font.CharMaps.AsciiBasic, null);
+    defer font.deinit();
+
+    var testmap = graph.Bind(&.{
+        .{ "print_coord", "c" },
+        .{ "toggle_draw_nodes", "t" },
+    }).init();
+
+    var draw_nodes: bool = false;
+
+    //std.time.sleep(std.time.ns_per_s * 10);
+
+    var cubes = graph.Cubes.init(&alloc, mc_atlas.texture.id, ctx.tex_shad);
+    defer cubes.deinit();
+
+    const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
+    const grass_block_id = reg.getBlockFromName("grass_block");
+
+    var gctx = graph.NewCtx.init(alloc);
+    defer gctx.deinit();
+
+    var astar_ctx_mutex: std.Thread.Mutex = .{};
+    var astar_ctx: ?astar.AStarContext = null;
+    defer {
+        if (astar_ctx) |*actx| {
+            actx.deinit();
+        }
+    }
+
+    //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
+    while (!win.should_exit) {
+        try gctx.begin(graph.itc(0x2f2f2fff));
+        try cubes.indicies.resize(0);
+        try cubes.vertices.resize(0);
+        win.pumpEvents(); //Important that this is called after beginDraw for input lag reasons
+
+        for (win.keys.slice()) |key| {
+            switch (testmap.get(key.scancode)) {
+                .print_coord => std.debug.print("Camera pos: {any}\n", .{camera.pos}),
+                .toggle_draw_nodes => draw_nodes = !draw_nodes,
+                else => {},
+            }
+        }
+
+        if (draw_nodes and astar_ctx_mutex.tryLock()) {
+            if (astar_ctx) |actx| {
+                for (actx.open.items) |item| {
+                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                    try cubes.vertices.appendSlice(
+                        &graph.cube(@intToFloat(f32, item.x), @intToFloat(f32, item.y), @intToFloat(f32, item.z), 0.7, 0.2, 0.6, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6),
+                    );
+                }
+                for (actx.closed.items) |item| {
+                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                    try cubes.vertices.appendSlice(
+                        &graph.cube(@intToFloat(f32, item.x), @intToFloat(f32, item.y), @intToFloat(f32, item.z), 0.7, 0.2, 0.6, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6),
+                    );
+                }
+            }
+            astar_ctx_mutex.unlock();
+        }
+
+        if (world.chunk_data.rw_lock.tryLockShared()) {
+            defer world.chunk_data.rw_lock.unlockShared();
+            {
+                //Camera raycast to block
+                const point_start = camera.pos;
+                const count = 10;
+                var t: f32 = 1;
+                var i: u32 = 0;
+                while (t < count) {
+                    i += 1;
+                    const mx = camera.front.data[0];
+                    const my = camera.front.data[1];
+                    const mz = camera.front.data[2];
+                    t += 0.001;
+
+                    const next_xt = if (@fabs(mx) < 0.001) 100000 else ((if (mx > 0) @ceil(mx * t + point_start.data[0]) else @floor(mx * t + point_start.data[0])) - point_start.data[0]) / mx;
+                    const next_yt = if (@fabs(my) < 0.001) 100000 else ((if (my > 0) @ceil(my * t + point_start.data[1]) else @floor(my * t + point_start.data[1])) - point_start.data[1]) / my;
+                    const next_zt = if (@fabs(mz) < 0.001) 100000 else ((if (mz > 0) @ceil(mz * t + point_start.data[2]) else @floor(mz * t + point_start.data[2])) - point_start.data[2]) / mz;
+                    if (i > 10) break;
+
+                    t = std.math.min3(next_xt, next_yt, next_zt);
+                    if (t > count)
+                        break;
+
+                    const point = point_start.add(camera.front.scale(t + 0.01)).data;
+                    //const point = point_start.lerp(point_end, t / count).data;
+                    const pi = V3i{
+                        .x = @floatToInt(i32, @floor(point[0])),
+                        .y = @floatToInt(i32, @floor(point[1])),
+                        .z = @floatToInt(i32, @floor(point[2])),
+                    };
+                    if (world.chunk_data.getBlock(pi)) |block| {
+                        if (block != 0) {
+                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                            try cubes.vertices.appendSlice(&graph.cube(@intToFloat(f32, pi.x), @intToFloat(f32, pi.y), @intToFloat(f32, pi.z), 1.1, 1.2, 1.1, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xcb41db66)} ** 6));
+
+                            if (win.mouse.left_down) {
+                                bot1.modify_mutex.lock();
+                                bot1.action_index = null;
+
+                                _ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, reg, bot1.pos.?, pi.toF().add(V3f.new(0, 1, 0)), bot1.fd, &astar_ctx_mutex, &astar_ctx });
+                                bot1.modify_mutex.unlock();
+                            }
+
+                            break;
+                        }
+                    }
+                }
+            }
+
+            for (world.chunk_data.rebuild_notify.items) |item| {
+                const vx = try vert_map.getOrPut(item.x);
+                if (!vx.found_existing) {
+                    vx.value_ptr.* = std.AutoHashMap(i32, ChunkVerts).init(alloc);
+                }
+                const vz = try vx.value_ptr.getOrPut(item.y);
+                if (!vz.found_existing) {
+                    vz.value_ptr.cubes = graph.Cubes.init(&alloc, mc_atlas.texture.id, ctx.tex_shad);
+                } else {
+                    try vz.value_ptr.cubes.indicies.resize(0);
+                    try vz.value_ptr.cubes.vertices.resize(0);
+                }
+
+                if (world.chunk_data.x.get(item.x)) |xx| {
+                    if (xx.get(item.y)) |chunk| {
+                        for (chunk) |sec, sec_i| {
+                            if (sec_i < 7) continue;
+                            if (sec.bits_per_entry == 0) continue;
+                            //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
+                            //var block = s_it.next();
+
+                            {
+                                var i: u32 = 0;
+                                while (i < 16 * 16 * 16) : (i += 1) {
+                                    const block = sec.getBlockFromIndex(i);
+                                    const itc = graph.itc;
+                                    const bid = reg.getBlockIdFromState(block.block);
+                                    if (bid == 0)
+                                        continue;
+                                    const colors = if (bid == grass_block_id) [_]graph.CharColor{itc(0x77c05aff)} ** 6 else null;
+                                    const co = block.pos;
+                                    const x = co.x + item.x * 16;
+                                    const y = (co.y + @intCast(i32, sec_i) * 16) - 64;
+                                    const z = co.z + item.y * 16;
+                                    if (world.chunk_data.isOccluded(V3i.new(x, y, z)))
+                                        continue;
+                                    try vz.value_ptr.cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, vz.value_ptr.cubes.vertices.items.len)));
+                                    try vz.value_ptr.cubes.vertices.appendSlice(&graph.cube(
+                                        @intToFloat(f32, x),
+                                        @intToFloat(f32, y),
+                                        @intToFloat(f32, z),
+                                        1,
+                                        1,
+                                        1,
+                                        mc_atlas.getTextureRec(bid),
+                                        mc_atlas.texture.w,
+                                        mc_atlas.texture.h,
+                                        if (colors) |col| &col else null,
+                                    ));
+                                }
+                            }
+                        }
+                        vz.value_ptr.cubes.setData();
+                    } else {
+                        vz.value_ptr.cubes.deinit();
+                        _ = vx.value_ptr.remove(item.y);
+                    }
+                }
+            }
+            try world.chunk_data.rebuild_notify.resize(0);
+        }
+
+        { //Draw the chunks
+            var it = vert_map.iterator();
+            while (it.next()) |kv| {
+                var zit = kv.value_ptr.iterator();
+                while (zit.next()) |kv2| {
+                    kv2.value_ptr.cubes.draw(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+                }
+            }
+        }
+
+        {
+            bot1.modify_mutex.lock();
+            if (bot1.pos) |bpos| {
+                const p = bpos.toRay();
+                try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                try cubes.vertices.appendSlice(&graph.cube(p.x - 0.3, p.y, p.z - 0.3, 0.6, 1.8, 0.6, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6));
+            }
+            if (bot1.action_list.items.len > 0) {
+                const list = bot1.action_list.items;
+                var last_pos = bot1.pos.?;
+                var i: usize = list.len;
+                while (i > 0) : (i -= 1) {
+                    switch (list[i - 1]) {
+                        .movement => |move| {
+                            const color: u32 = switch (move.kind) {
+                                .walk => 0xff0000ff,
+                                .fall => 0x0fff00ff,
+                                .jump => 0x000fffff,
+                                .ladder => 0x2222ffff,
+                                .gap => 0x00ff00ff,
+                                else => 0x000000ff,
+                            };
+                            const p = move.pos.toRay();
+                            const lp = last_pos.toRay();
+                            try gctx.line3D(graph.Vec3f.new(lp.x, lp.y + 1, lp.z), graph.Vec3f.new(p.x, p.y + 1, p.z), 0xffffffff);
+                            last_pos = move.pos;
+                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                            try cubes.vertices.appendSlice(&graph.cube(p.x, p.y, p.z, 0.2, 0.2, 0.2, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(color)} ** 6));
+                        },
+                        else => {},
+                    }
+                }
+            }
+            bot1.modify_mutex.unlock();
+        }
+
+        cubes.setData();
+        cubes.draw(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+
+        camera.update(&win);
+
+        graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
+        try gctx.rect(graph.Rec(@divTrunc(win.screen_width, 2), @divTrunc(win.screen_height, 2), 10, 10), 0xffffffff);
+        gctx.end(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+        //try ctx.beginDraw(graph.itc(0x2f2f2fff));
+        //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
+        //ctx.endDraw(win.screen_width, win.screen_height);
+        win.swap();
     }
 }
 
@@ -902,11 +1351,33 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
+    const dr = try Reg.NewDataReg.init(alloc, "1.20");
+    defer dr.deinit();
+
+    var arg_it = try std.process.argsWithAllocator(alloc);
+    defer arg_it.deinit();
+    const prog_name = arg_it.next() orelse unreachable;
+    _ = prog_name;
+
+    var draw = false;
+    if (arg_it.next()) |action_arg| {
+        if (eql(u8, action_arg, "analyze")) {
+            try packet_analyze.analyzeWalk(alloc, arg_it.next() orelse return);
+            return;
+        }
+        if (eql(u8, action_arg, "draw")) {
+            draw = true;
+        }
+        if (eql(u8, action_arg, "init")) {
+            return;
+        }
+    }
+
     const bot_names = [_]struct { name: []const u8, sex: enum { male, female } }{
         .{ .name = "John", .sex = .male },
         .{ .name = "James", .sex = .male },
         .{ .name = "Charles", .sex = .male },
-        .{ .name = "George", .sex = .male },
+        //.{ .name = "George", .sex = .male },
         //.{ .name = "Henry", .sex = .male },
         //.{ .name = "Robert", .sex = .male },
         //.{ .name = "Harry", .sex = .male },
@@ -914,8 +1385,8 @@ pub fn main() !void {
         //.{ .name = "Fred", .sex = .male },
         //.{ .name = "Albert", .sex = .male },
 
-        .{ .name = "Mary", .sex = .female },
-        .{ .name = "Anna", .sex = .female },
+        //.{ .name = "Mary", .sex = .female },
+        //.{ .name = "Anna", .sex = .female },
         //.{ .name = "Emma", .sex = .female },
         //.{ .name = "Minnie", .sex = .female },
         //.{ .name = "Margaret", .sex = .female },
@@ -938,11 +1409,14 @@ pub fn main() !void {
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
+    var bot_fd: i32 = 0;
     for (bot_names) |bn, i| {
         const mb = try botJoin(alloc, bn.name);
         event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
         try world.bots.put(mb.fd, mb);
+        if (bot_fd == 0)
+            bot_fd = mb.fd;
     }
 
     var update_bots_exit_mutex: std.Thread.Mutex = .{};
@@ -956,6 +1430,11 @@ pub fn main() !void {
     var tb = PacketParse{ .buf = std.ArrayList(u8).init(alloc) };
     defer tb.buf.deinit();
 
+    if (draw) {
+        const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, &reg, bot_fd });
+        draw_thread.detach();
+    }
+
     var bps_timer = try std.time.Timer.start();
     var bytes_read: usize = 0;
     while (run) {
@@ -964,7 +1443,7 @@ pub fn main() !void {
             //std.debug.print("KBps: {d}\n", .{@divTrunc(bytes_read, 1000)});
             bytes_read = 0;
         }
-        const e_count = std.os.epoll_wait(epoll_fd, &events, 1000);
+        const e_count = std.os.epoll_wait(epoll_fd, &events, 10);
         for (events[0..e_count]) |eve| {
             if (eve.data.fd == std.io.getStdIn().handle) {
                 var msg: [256]u8 = undefined;
@@ -972,10 +1451,12 @@ pub fn main() !void {
                 var itt = std.mem.tokenize(u8, msg[0 .. n - 1], " ");
                 const key = itt.next() orelse continue;
                 std.debug.print("\"{s}\"\n", .{key});
-                const eql = std.mem.eql;
                 if (eql(u8, "exit", key)) {
                     update_bots_exit_mutex.unlock();
                     run = false;
+                } else if (eql(u8, "draw", key)) {
+                    //const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, &reg, bot_fd });
+                    //draw_thread.detach();
                 } else if (eql(u8, "query", key)) {
                     if (itt.next()) |tag_type| {
                         const tags = world.tag_table.tags.getPtr(tag_type) orelse unreachable;

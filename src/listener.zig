@@ -12,6 +12,7 @@ const Queue = std.atomic.Queue;
 const com = @import("common.zig");
 
 //TODO Edit api to use vector structs for everything
+//TODO use an enum for all serverbound packet ids
 
 const Serv = std.net.Stream.Writer;
 pub const PacketCtx = struct {
@@ -74,14 +75,22 @@ pub const PacketCtx = struct {
         try self.wr();
     }
 
+    pub fn closeContainer(self: *@This(), win_id: u8) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x0B);
+        try self.packet.ubyte(win_id);
+        try self.wr();
+    }
+
     pub fn clickContainer(
         self: *@This(),
         win: u8,
         state_id: i32,
-        slot: i16,
+        slot: u32,
         button: u8,
         mode: u8,
-        new_slot_data: []const struct { sloti: i16, slot: Slot },
+        new_slot_data: []const struct { sloti: u32, slot: ?Slot },
+        held_slot: ?Slot,
     ) !void {
         try self.packet.clear();
         try self.packet.varInt(0x0A);
@@ -92,12 +101,10 @@ pub const PacketCtx = struct {
         try self.packet.varInt(mode);
         try self.packet.varInt(@intCast(i32, new_slot_data.len));
         for (new_slot_data) |item| {
-            _ = item;
-            //try self.packet.short(item.sloti);
-            //try self.packet.boolean(true);
-
+            try self.packet.short(@intCast(u16, item.sloti));
+            try self.packet.slot(item.slot);
         }
-        try self.packet.boolean(false);
+        try self.packet.slot(held_slot);
 
         try self.wr();
     }
@@ -269,6 +276,20 @@ pub const Packet = struct {
         try self.buffer.writer().writeByte(if (val) 0x01 else 0x00);
     }
 
+    pub fn slot(self: *Self, val: ?Slot) !void {
+        const wr = self.buffer.writer();
+        try self.boolean(val != null);
+        if (val) |sl| {
+            try self.varInt(sl.item_id);
+            try self.ubyte(sl.count);
+            if (sl.nbt_buffer) |buf| {
+                _ = try wr.write(buf);
+            } else {
+                try self.ubyte(0);
+            }
+        }
+    }
+
     pub fn varInt(self: *Self, int: i32) !void {
         var val = toVarInt(int);
         const wr = self.buffer.writer();
@@ -411,8 +432,7 @@ pub fn toVarInt(input: i32) VarInt {
 pub const Slot = struct {
     item_id: u16,
     count: u8,
-    //TODO nbt
-
+    nbt_buffer: ?[]u8 = null,
 };
 
 const reader_type = std.net.Stream.Reader;
@@ -420,6 +440,7 @@ const reader_type = std.net.Stream.Reader;
 pub fn packetParseCtx(comptime readerT: type) type {
     return struct {
         const Self = @This();
+        const Reader = readerT;
 
         //This structure makes no attempt to keep track of memory it allocates, as much of what is parsed is
         //garbage
@@ -450,13 +471,21 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
         pub fn slot(self: *Self) ?Slot {
             if (self.boolean()) { //Is item present
-
-                const s = Slot{
+                var s = Slot{
                     .item_id = @intCast(u16, self.varInt()),
                     .count = self.int(u8),
+                    .nbt_buffer = null,
                 };
-                const nbt = nbt_zig.parse(self.alloc, self.reader) catch unreachable;
+
+                const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
+                var tracker = tr.init(self.alloc, self.reader);
+
+                const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
                 _ = nbt;
+                if (tracker.buffer.items.len > 1) {
+                    s.nbt_buffer = tracker.buffer.items;
+                }
+
                 return s;
             }
             return null;
@@ -794,7 +823,8 @@ pub const ServerListener = struct {
     }
 };
 
-pub const Chunk = [16]ChunkSection;
+pub const NUM_CHUNK_SECTION = 16; //TODO There are more than 16 vertical chunks in 1.18+. Limits are from -64 -> 319
+pub const Chunk = [NUM_CHUNK_SECTION]ChunkSection;
 pub const ChunkMapCoord = std.AutoHashMap(i32, Chunk);
 pub const ChunkMap = struct {
     const Self = @This();
@@ -806,9 +836,22 @@ pub const ChunkMap = struct {
     alloc: std.mem.Allocator,
 
     rw_lock: std.Thread.RwLock = .{},
+    rebuild_notify: std.ArrayList(vector.V2i),
+
+    pub fn addNotify(self: *Self, cx: i32, cz: i32) !void {
+        var found = false;
+        for (self.rebuild_notify.items) |item| {
+            if (item.x == cx and item.y == cz) {
+                found = true;
+                break;
+            }
+        }
+        if (!found)
+            try self.rebuild_notify.append(.{ .x = cx, .y = cz });
+    }
 
     pub fn init(alloc: std.mem.Allocator) Self {
-        return .{ .x = XTYPE.init(alloc), .alloc = alloc };
+        return .{ .x = XTYPE.init(alloc), .alloc = alloc, .rebuild_notify = std.ArrayList(vector.V2i).init(alloc) };
     }
 
     pub fn deinit(self: *Self) void {
@@ -823,11 +866,13 @@ pub const ChunkMap = struct {
             kv.value_ptr.deinit();
         }
 
+        self.rebuild_notify.deinit();
         self.x.deinit();
     }
 
-    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32) void {
+    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32) !void {
         self.rw_lock.lock();
+        try self.addNotify(cx, cz);
         if (self.x.getPtr(cx)) |zw| {
             if (zw.getPtr(cz)) |*cc| {
                 for (cc.*) |*section| {
@@ -860,18 +905,35 @@ pub const ChunkMap = struct {
         return &column[@intCast(u32, ch.y)];
     }
 
-    pub fn getBlock(self: *Self, pos: V3i) BLOCK_ID_INT {
+    pub fn isOccluded(self: *Self, pos: V3i) bool {
+        if ((self.getBlock(pos.add(V3i.new(0, 1, 0))) orelse return false) == 0)
+            return false;
+        if ((self.getBlock(pos.add(V3i.new(0, -1, 0))) orelse return false) == 0)
+            return false;
+        if ((self.getBlock(pos.add(V3i.new(1, 0, 0))) orelse return false) == 0)
+            return false;
+        if ((self.getBlock(pos.add(V3i.new(-1, 0, 0))) orelse return false) == 0)
+            return false;
+        if ((self.getBlock(pos.add(V3i.new(0, 0, 1))) orelse return false) == 0)
+            return false;
+        if ((self.getBlock(pos.add(V3i.new(0, 0, -1))) orelse return false) == 0)
+            return false;
+        return true;
+    }
+
+    pub fn getBlock(self: *Self, pos: V3i) ?BLOCK_ID_INT {
         self.rw_lock.lockShared();
         defer self.rw_lock.unlockShared();
         const ch = ChunkMap.getChunkCoord(pos);
+        if (pos.y < -64) return null;
 
         const rx = @mod(pos.x, 16);
         const rz = @mod(pos.z, 16);
         const ry = @mod(pos.y + 64, 16);
 
-        const world_z = self.x.getPtr(ch.x) orelse unreachable;
-        const column = world_z.getPtr(ch.z) orelse unreachable;
-        const section = column[@intCast(u32, ch.y)];
+        const world_z = self.x.getPtr(ch.x) orelse return null;
+        const column = world_z.getPtr(ch.z) orelse return null;
+        const section = column[@intCast(u32, if (ch.y >= NUM_CHUNK_SECTION) return null else ch.y)];
         switch (section.bits_per_entry) {
             0 => {
                 return section.mapping.items[0];
@@ -898,6 +960,7 @@ pub const ChunkMap = struct {
     pub fn setBlockChunk(self: *Self, chunk_pos: V3i, rel_pos: V3i, id: BLOCK_ID_INT) !void {
         self.rw_lock.lock();
         defer self.rw_lock.unlock();
+        try self.addNotify(chunk_pos.x, chunk_pos.z);
         const world_z = self.x.getPtr(chunk_pos.x) orelse unreachable;
         const column = world_z.getPtr(chunk_pos.z) orelse unreachable;
         const section = &column[@intCast(u32, chunk_pos.y + 4)];
@@ -913,6 +976,10 @@ pub const ChunkMap = struct {
     pub fn setBlock(self: *Self, pos: V3i, id: BLOCK_ID_INT) !void {
         self.rw_lock.lock();
         defer self.rw_lock.unlock();
+        {
+            const co = ChunkMap.getChunkCoord(pos);
+            try self.addNotify(co.x, co.z);
+        }
         const section = self.getChunkSectionPtr(pos) orelse unreachable;
 
         const rx = @intCast(u32, @mod(pos.x, 16));
@@ -925,6 +992,8 @@ pub const ChunkMap = struct {
     pub fn insertChunkColumn(self: *Self, cx: i32, cz: i32, chunk: Chunk) !void {
         self.rw_lock.lock();
         defer self.rw_lock.unlock();
+
+        try self.addNotify(cx, cz);
 
         const zmap = try self.x.getOrPut(cx);
         if (!zmap.found_existing) {
@@ -990,13 +1059,14 @@ pub const ChunkSection = struct {
 
         pub fn getCoord(it: *DataIterator) V3i {
             const i = (it.buffer_index * @divTrunc(64, it.bits_per_entry)) + it.shift_index;
-            const y = @intCast(i32, @divTrunc(i, 256));
-            const z = @intCast(i32, @divTrunc(@rem(i, 256), 16));
-            const x = @intCast(i32, @rem(@rem(i, 256), 16));
+            const y = @intCast(i32, i >> 8);
+            const z = @intCast(i32, (i >> 4) & 0xf);
+            const x = @intCast(i32, i & 0xf);
             return .{ .x = x, .y = y, .z = z };
         }
     };
 
+    last_update_time: i64 = 0,
     mapping: std.ArrayList(BLOCK_ID_INT),
     data: std.ArrayList(u64),
     bits_per_entry: u8,
@@ -1020,6 +1090,15 @@ pub const ChunkSection = struct {
                 return BlockIndex{ .index = data_index, .offset = @intCast(usize, shift_index), .bit_count = @intCast(u6, self.bits_per_entry) };
             },
         }
+    }
+
+    pub fn getBlockFromIndex(self: *const Self, i: u32) struct { pos: V3i, block: BLOCK_ID_INT } {
+        const blocks_per_long = @divTrunc(64, self.bits_per_entry);
+        const data_index = @divTrunc(i, blocks_per_long);
+        const shift_index = @rem(i, blocks_per_long);
+
+        const id = (self.data.items[data_index] >> @intCast(u6, shift_index * self.bits_per_entry)) & getBitMask(self.bits_per_entry);
+        return .{ .block = self.mapping.items[id], .pos = V3i.new(@intCast(i32, i & 0xf), @intCast(i32, i >> 8), @intCast(i32, i >> 4) & 0xf) };
     }
 
     //This function sets the data array to whatever index is mapped to id,
@@ -1179,6 +1258,27 @@ pub const TagRegistry = struct {
             }
         }
         return false;
+    }
+
+    //Generate a sorted list of ids that have any of the tags[]
+    pub fn compileTagList(self: *Self, tag_type: []const u8, tags: []const []const u8) !std.ArrayList(u32) {
+        var list = std.ArrayList(u32).init(self.alloc);
+        for (tags) |tag| {
+            for (((self.tags.getPtr(tag_type) orelse unreachable).getPtr(tag) orelse unreachable).items) |it| {
+                var found = false;
+                for (list.items) |item| {
+                    if (item == it) {
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found)
+                    try list.append(it);
+            }
+        }
+
+        std.sort.sort(u32, list.items, void, std.sort.asc(u32));
+        return list;
     }
 
     pub fn deinit(self: *Self) void {

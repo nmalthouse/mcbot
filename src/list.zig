@@ -30,6 +30,8 @@ pub const login_packet_enum = genEnum(Login_ids[0..]);
 
 pub const entity_type_enum = genEnum(Entity_Types[0..]);
 
+pub const server_bound_enum = genEnum(ServerBoundPlayIds[0..]);
+
 pub const Login_ids = [_][]const u8{
     "Disconnect",
     "Encryption_Request",
