@@ -120,38 +120,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
 pub const McWorld = struct {
     const Self = @This();
 
-    pub const Action_List = struct {
-        pub const ListItem = struct {
-            list: std.ArrayList(astar.AStarContext.PlayerActionItem),
-            bot_id: i32,
-
-            pub fn deinit(self: *@This()) void {
-                self.list.deinit();
-            }
-        };
-        items: std.ArrayList(ListItem),
-        mutex: std.Thread.Mutex = .{},
-
-        pub fn init(alloc: std.mem.Allocator) @This() {
-            return .{
-                .items = std.ArrayList(ListItem).init(alloc),
-            };
-        }
-
-        pub fn addList(self: *@This(), item: ListItem) !void {
-            self.mutex.lock();
-            try self.items.append(item);
-            defer self.mutex.unlock();
-        }
-
-        pub fn deinit(self: *@This()) void {
-            for (self.items.items) |*ite| {
-                ite.deinit();
-            }
-            self.items.deinit();
-        }
-    };
-
     chunk_data: mc.ChunkMap,
 
     //TODO make entities and bots thread safe
@@ -162,8 +130,6 @@ pub const McWorld = struct {
     packet_cache: struct {
         chat_time_stamps: RingBuf(32, u64) = RingBuf(32, u64).init(0),
     },
-
-    action_lists: Action_List,
 
     has_tag_table: bool = false,
 
@@ -177,7 +143,6 @@ pub const McWorld = struct {
             .bots = std.AutoHashMap(i32, Bot).init(alloc),
             .master_id = null,
             .tag_table = mc.TagRegistry.init(alloc),
-            .action_lists = Action_List.init(alloc),
         };
     }
 
@@ -186,7 +151,6 @@ pub const McWorld = struct {
         self.entities.deinit();
         self.bots.deinit();
         self.tag_table.deinit();
-        self.action_lists.deinit();
     }
 };
 
@@ -206,29 +170,6 @@ pub fn parseCoord(it: *std.mem.TokenIterator(u8, .scalar)) !vector.V3f {
         .z = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
     };
 }
-
-const ADJ = [8]V2i{
-    .{ .x = -1, .y = 1 },
-    .{ .x = 0, .y = 1 },
-    .{ .x = 1, .y = 1 },
-    .{ .x = 1, .y = 0 },
-
-    .{ .x = 1, .y = -1 },
-    .{ .x = 0, .y = -1 },
-    .{ .x = -1, .y = -1 },
-    .{ .x = -1, .y = 0 },
-};
-
-const ADJ_COST = [8]u32{
-    14,
-    10,
-    14,
-    10,
-    14,
-    10,
-    14,
-    10,
-};
 
 pub const Entity = struct {
     uuid: u128,
@@ -726,7 +667,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const sig_present_bool = parse.boolean();
             _ = index;
             if (sig_present_bool) {
-                std.debug.print("NOT SUPPORTED \n", .{});
+                std.debug.print("CHAT SIG NOT SUPPORTED \n", .{});
                 unreachable;
             }
 
@@ -742,6 +683,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const key = it.next().?;
 
             var ret_msg_buf = std.ArrayList(u8).init(alloc);
+            defer ret_msg_buf.deinit();
             const m_wr = ret_msg_buf.writer();
 
             var lower_name: [16]u8 = undefined;
@@ -787,7 +729,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                     try bp.sendChat(ret_msg_buf.items);
                 } else if (eql(u8, com, "path")) {
-                    std.debug.print("TITS\n", .{});
                     try bp.sendChat("pathing");
                     //_ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, reg, cbot.pos.?, player_info.?.pos, cbot.fd });
                 }
@@ -936,32 +877,62 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     }
 }
 
-pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, exit_mutex: *std.Thread.Mutex) !void {
-    _ = reg;
+pub fn simpleBotScript(alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld, reg: *const Reg.DataReg) !void {
+    const pos1 = graph.Vec3f.new(-226, 68, 206);
+    _ = pos1;
+    const pos2 = graph.Vec3f.new(-236, 70, 204);
+    _ = pos2;
+    var bot_command_index: u32 = 0;
     while (true) {
-        if (exit_mutex.tryLock()) {
-            std.debug.print("bots exiting\n", .{});
+        thread_data.lock(.script_thread);
+        if (thread_data.u_status == .terminate_thread) {
+            std.debug.print("Stopping botScript thread\n", .{});
+            thread_data.unlock(.script_thread);
             return;
         }
-        //const uuid = 0;
-        //var ent_it = world.entities.iterator();
-        //var ent = ent_it.next();
-        //const player_info: ?Entity = blk: {
-        //    while (ent != null) : (ent = ent_it.next()) {
-        //        if (ent.?.value_ptr.uuid == uuid) {
-        //            break :blk ent.?.value_ptr.*;
-        //        }
-        //    }
-        //    break :blk null;
-        //};
+
+        //Fake a coroutine implementation
+        switch (bot_command_index) {
+            1 => {
+                var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
+                errdefer pathctx.deinit();
+            },
+            2 => std.time.sleep(std.time.ns_per_s),
+            3 => {},
+            4 => std.time.sleep(std.time.ns_per_s),
+            else => bot_command_index = 0,
+        }
+        bot_command_index += 1;
+    }
+}
+
+pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, exit_mutex: *std.Thread.Mutex) !void {
+    var bot_it_1 = world.bots.iterator();
+    const bot1 = bot_it_1.next();
+    if (bot1 == null)
+        return error.NoBotsToSpawnScriptsFor;
+    const bo = bot1.?.value_ptr;
+
+    var b1_thread_data = bot.BotScriptThreadData.init(alloc);
+    defer b1_thread_data.deinit();
+    b1_thread_data.lock(.bot_thread);
+    const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ alloc, &b1_thread_data, world, reg });
+    defer b1_thread.join();
+
+    while (true) {
+        if (exit_mutex.tryLock()) {
+            std.debug.print("Stopping updateBots thread\n", .{});
+            b1_thread_data.lock(.bot_thread);
+            b1_thread_data.u_status = .terminate_thread;
+            b1_thread_data.unlock(.bot_thread);
+            return;
+        }
 
         var skip_ticks: i32 = 0;
 
-        var bot_it = world.bots.iterator();
-        var bot_i = bot_it.next();
-        while (bot_i != null) : (bot_i = bot_it.next()) {
-            const bo = bot_i.?.value_ptr;
+        {
             var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
+            defer bp.deinit();
             bo.modify_mutex.lock();
             defer bo.modify_mutex.unlock();
             //const pw = mc.lookAtBlock(bo.pos.?, V3f.new(-0.3, 1, -0.3));
@@ -1083,7 +1054,7 @@ pub fn basicPathfindThread(
 }
 
 pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, bot_fd: i32) !void {
-    var win = try graph.SDL.Window.createWindow("Debug Mario Window", .{});
+    var win = try graph.SDL.Window.createWindow("Debug mcbot Window", .{});
     defer win.destroyWindow();
     var ctx = try graph.GraphicsContext.init(alloc, 163);
     defer ctx.deinit();
@@ -1123,7 +1094,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 
     //std.time.sleep(std.time.ns_per_s * 10);
 
-    var cubes = graph.Cubes.init(alloc, mc_atlas.texture.id, ctx.tex_shad);
+    var cubes = graph.Cubes.init(alloc, mc_atlas.texture, ctx.tex_shad);
     defer cubes.deinit();
 
     const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
@@ -1158,37 +1129,27 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
         if (draw_nodes and astar_ctx_mutex.tryLock()) {
             if (astar_ctx) |actx| {
                 for (actx.open.items) |item| {
-                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
-                    try cubes.vertices.appendSlice(
-                        &graph.cube(
-                            @as(f32, @floatFromInt(item.x)),
-                            @as(f32, @floatFromInt(item.y)),
-                            @as(f32, @floatFromInt(item.z)),
-                            0.7,
-                            0.2,
-                            0.6,
-                            mc_atlas.getTextureRec(1),
-                            @intCast(mc_atlas.texture.w),
-                            @intCast(mc_atlas.texture.h),
-                            &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
-                        ),
+                    try cubes.cube(
+                        @as(f32, @floatFromInt(item.x)),
+                        @as(f32, @floatFromInt(item.y)),
+                        @as(f32, @floatFromInt(item.z)),
+                        0.7,
+                        0.2,
+                        0.6,
+                        mc_atlas.getTextureRec(1),
+                        &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
                     );
                 }
                 for (actx.closed.items) |item| {
-                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
-                    try cubes.vertices.appendSlice(
-                        &graph.cube(
-                            @as(f32, @floatFromInt(item.x)),
-                            @as(f32, @floatFromInt(item.y)),
-                            @as(f32, @floatFromInt(item.z)),
-                            0.7,
-                            0.2,
-                            0.6,
-                            mc_atlas.getTextureRec(1),
-                            @intCast(mc_atlas.texture.w),
-                            @intCast(mc_atlas.texture.h),
-                            &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
-                        ),
+                    try cubes.cube(
+                        @as(f32, @floatFromInt(item.x)),
+                        @as(f32, @floatFromInt(item.y)),
+                        @as(f32, @floatFromInt(item.z)),
+                        0.7,
+                        0.2,
+                        0.6,
+                        mc_atlas.getTextureRec(1),
+                        &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
                     );
                 }
             }
@@ -1228,8 +1189,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                     };
                     if (world.chunk_data.getBlock(pi)) |block| {
                         if (block != 0) {
-                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
-                            try cubes.vertices.appendSlice(&graph.cube(
+                            try cubes.cube(
                                 @as(f32, @floatFromInt(pi.x)),
                                 @as(f32, @floatFromInt(pi.y)),
                                 @as(f32, @floatFromInt(pi.z)),
@@ -1237,10 +1197,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                 1.2,
                                 1.1,
                                 mc_atlas.getTextureRec(1),
-                                @intCast(mc_atlas.texture.w),
-                                @intCast(mc_atlas.texture.h),
                                 &[_]graph.CharColor{graph.itc(0xcb41db66)} ** 6,
-                            ));
+                            );
 
                             if (win.mouse.left == .rising) {
                                 bot1.modify_mutex.lock();
@@ -1263,7 +1221,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                 }
                 const vz = try vx.value_ptr.getOrPut(item.y);
                 if (!vz.found_existing) {
-                    vz.value_ptr.cubes = graph.Cubes.init(alloc, mc_atlas.texture.id, ctx.tex_shad);
+                    vz.value_ptr.cubes = graph.Cubes.init(alloc, mc_atlas.texture, ctx.tex_shad);
                 } else {
                     try vz.value_ptr.cubes.indicies.resize(0);
                     try vz.value_ptr.cubes.vertices.resize(0);
@@ -1292,8 +1250,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                     const z = co.z + item.y * 16;
                                     if (world.chunk_data.isOccluded(V3i.new(x, y, z)))
                                         continue;
-                                    try vz.value_ptr.cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(vz.value_ptr.cubes.vertices.items.len))));
-                                    try vz.value_ptr.cubes.vertices.appendSlice(&graph.cube(
+                                    try vz.value_ptr.cubes.cube(
                                         @as(f32, @floatFromInt(x)),
                                         @as(f32, @floatFromInt(y)),
                                         @as(f32, @floatFromInt(z)),
@@ -1301,10 +1258,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                         1,
                                         1,
                                         mc_atlas.getTextureRec(bid),
-                                        @intCast(mc_atlas.texture.w),
-                                        @intCast(mc_atlas.texture.h),
                                         if (colors) |col| &col else null,
-                                    ));
+                                    );
                                 }
                             }
                         }
@@ -1332,8 +1287,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
             bot1.modify_mutex.lock();
             if (bot1.pos) |bpos| {
                 const p = bpos.toRay();
-                try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
-                try cubes.vertices.appendSlice(&graph.cube(
+                try cubes.cube(
                     p.x - 0.3,
                     p.y,
                     p.z - 0.3,
@@ -1341,10 +1295,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                     1.8,
                     0.6,
                     mc_atlas.getTextureRec(1),
-                    @intCast(mc_atlas.texture.w),
-                    @intCast(mc_atlas.texture.h),
                     &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
-                ));
+                );
             }
             if (bot1.action_list.items.len > 0) {
                 const list = bot1.action_list.items;
@@ -1365,8 +1317,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                             const lp = last_pos.toRay();
                             gctx.line3D(graph.Vec3f.new(lp.x, lp.y + 1, lp.z), graph.Vec3f.new(p.x, p.y + 1, p.z), 0xffffffff);
                             last_pos = move.pos;
-                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
-                            try cubes.vertices.appendSlice(&graph.cube(
+                            try cubes.cube(
                                 p.x,
                                 p.y,
                                 p.z,
@@ -1374,10 +1325,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                 0.2,
                                 0.2,
                                 mc_atlas.getTextureRec(1),
-                                @intCast(mc_atlas.texture.w),
-                                @intCast(mc_atlas.texture.h),
                                 &[_]graph.CharColor{graph.itc(color)} ** 6,
-                            ));
+                            );
                         },
                         else => {},
                     }
@@ -1402,12 +1351,12 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 }
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 16 }){};
     defer _ = gpa.detectLeaks();
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
-    const dr = try Reg.NewDataReg.init(alloc, "1.20");
+    const dr = try Reg.NewDataReg.init(alloc, "1.19.3");
     defer dr.deinit();
 
     var arg_it = try std.process.argsWithAllocator(alloc);
@@ -1431,8 +1380,8 @@ pub fn main() !void {
 
     const bot_names = [_]struct { name: []const u8, sex: enum { male, female } }{
         .{ .name = "John", .sex = .male },
-        .{ .name = "James", .sex = .male },
-        .{ .name = "Charles", .sex = .male },
+        //.{ .name = "James", .sex = .male },
+        //.{ .name = "Charles", .sex = .male },
         //.{ .name = "George", .sex = .male },
         //.{ .name = "Henry", .sex = .male },
         //.{ .name = "Robert", .sex = .male },
@@ -1512,8 +1461,8 @@ pub fn main() !void {
                     update_bots_exit_mutex.unlock();
                     run = false;
                 } else if (eql(u8, "draw", key)) {
-                    //const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, &reg, bot_fd });
-                    //draw_thread.detach();
+                    const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, &reg, bot_fd });
+                    draw_thread.detach();
                 } else if (eql(u8, "query", key)) {
                     if (itt.next()) |tag_type| {
                         const tags = world.tag_table.tags.getPtr(tag_type) orelse unreachable;
@@ -1615,230 +1564,4 @@ pub fn main() !void {
             }
         }
     }
-
-    //var draw = false;
-
-    //if (draw) {
-    //    c.InitWindow(1800, 1000, "Window");
-    //}
-    ////defer c.CloseWindow();
-
-    ////BEGIN RAYLIB
-    //var camera: c.Camera3D = undefined;
-    //camera.position = .{ .x = 15.0, .y = 10.0, .z = 15.0 }; // Camera position
-    //camera.target = .{ .x = 0.0, .y = 0.0, .z = 0.0 }; // Camera looking at point
-    //camera.up = .{ .x = 0.0, .y = 1.0, .z = 0.0 }; // Camera up vector (rotation towards target)
-    //camera.fovy = 90.0; // Camera field-of-view Y
-    //camera.projection = c.CAMERA_PERSPECTIVE;
-    ////c.DisableCursor();
-    //c.SetCameraMode(camera, c.CAMERA_FREE);
-
-    //var run = true;
-    //while (run) {
-    //    //if (draw) {
-    //    //    //c.BeginDrawing();
-    //    //    c.ClearBackground(c.RAYWHITE);
-    //    //    c.BeginMode3D(camera);
-
-    //    //    c.UpdateCamera(&camera);
-
-    //    //    if (bot1.pos != null) {
-    //    //        const playerpos = bot1.pos.?;
-    //    //        camera.target = playerpos.toRay();
-    //    //        {
-    //    //            const pi = playerpos.toI();
-    //    //            const section = world.getChunkSectionPtr(playerpos.toI());
-    //    //            const cc = mc.ChunkMap.getChunkCoord(playerpos.toI());
-
-    //    //            if (section) |sec| {
-    //    //                var it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
-    //    //                var block = it.next();
-    //    //                while (block != null) : (block = it.next()) {
-    //    //                    if (sec.mapping.items[block.?] == 0)
-    //    //                        continue;
-    //    //                    const co = it.getCoord();
-    //    //                    c.DrawCube(.{
-    //    //                        .x = @intToFloat(f32, co.x + cc.x * 16),
-    //    //                        .y = @intToFloat(f32, co.y + (cc.y - 4) * 16),
-    //    //                        .z = @intToFloat(f32, co.z + cc.z * 16),
-    //    //                    }, 1.0, 1.0, 1.0, c.GRAY);
-    //    //                }
-    //    //            }
-
-    //    //            for (ADJ) |adj| {
-    //    //                const offset = pi.add(V3i.new(adj.x * 16, 0, adj.y * 16));
-    //    //                const section1 = world.getChunkSectionPtr(offset);
-    //    //                const cc1 = mc.ChunkMap.getChunkCoord(offset);
-    //    //                if (section1) |sec| {
-    //    //                    var it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
-    //    //                    var block = it.next();
-    //    //                    while (block != null) : (block = it.next()) {
-    //    //                        if (sec.mapping.items[block.?] == 0)
-    //    //                            continue;
-    //    //                        const co = it.getCoord();
-    //    //                        c.DrawCube(.{
-    //    //                            .x = @intToFloat(f32, co.x + cc1.x * 16),
-    //    //                            .y = @intToFloat(f32, co.y + (cc1.y - 4) * 16),
-    //    //                            .z = @intToFloat(f32, co.z + cc1.z * 16),
-    //    //                        }, 1.0, 1.0, 1.0, c.GRAY);
-    //    //                    }
-    //    //                }
-    //    //            }
-
-    //    //            for (player_actions.items) |act| {
-    //    //                switch (act) {
-    //    //                    .movement => |mv| {
-    //    //                        const color = switch (mv.kind) {
-    //    //                            .ladder => c.BLACK,
-    //    //                            .walk => c.BLUE,
-    //    //                            .jump => c.RED,
-    //    //                            .fall => c.GREEN,
-    //    //                            else => unreachable,
-    //    //                        };
-    //    //                        c.DrawCube(mv.pos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 0.3, 0.3, 0.3, color);
-    //    //                    },
-    //    //                    else => {},
-    //    //                }
-    //    //            }
-
-    //    //            //for (pathctx.closed.items) |op| {
-    //    //            //    const w = 0.3;
-    //    //            //    c.DrawCube(
-    //    //            //        V3f.newi(op.x, op.y, op.z).toRay(),
-    //    //            //        w,
-    //    //            //        w,
-    //    //            //        w,
-    //    //            //        c.BLUE,
-    //    //            //    );
-    //    //            //}
-    //    //        }
-    //    //        c.DrawCube(playerpos.subtract(V3f.new(0.5, 0, 0.5)).toRay(), 1.0, 1.0, 1.0, c.RED);
-    //    //    }
-
-    //    //    c.DrawGrid(10, 1.0);
-
-    //    //    c.EndMode3D();
-
-    //    //    c.EndDrawing();
-    //    //}
-
-    //    //if (bot1.handshake_complete) {
-    //    //    const dt: f64 = 1.0 / 20.0;
-    //    //    if (current_action) |action| {
-    //    //        switch (action) {
-    //    //            .movement => |move_| {
-    //    //                var move = move_;
-    //    //                var adt = dt;
-    //    //                var grounded = true;
-    //    //                var moved = false;
-    //    //                var pw = mc.lookAtBlock(bot1.pos.?, V3f.new(0, 0, 0));
-    //    //                while (true) {
-    //    //                    var move_vec = blk: {
-    //    //                        switch (move.kind) {
-    //    //                            .walk => {
-    //    //                                break :blk move_state.walk(speed, adt);
-    //    //                            },
-    //    //                            .jump => break :blk move_state.jump(speed, adt),
-    //    //                            .fall => break :blk move_state.fall(speed, adt),
-    //    //                            .ladder => break :blk move_state.ladder(2.35, adt),
-    //    //                            .blocked => unreachable,
-
-    //    //                            //else => {
-    //    //                            //    unreachable;
-    //    //                            //},
-    //    //                        }
-    //    //                    };
-    //    //                    grounded = move_vec.grounded;
-
-    //    //                    bot1.pos = move_vec.new_pos;
-    //    //                    moved = true;
-
-    //    //                    if (!move_vec.move_complete) {
-    //    //                        break;
-    //    //                    } else {
-    //    //                        if (player_actions.items.len > 0) {
-    //    //                            switch (player_actions.items[player_actions.items.len - 1]) {
-    //    //                                .movement => {
-    //    //                                    adt = move_vec.remaining_dt;
-    //    //                                    current_action = player_actions.pop();
-    //    //                                    move = current_action.?.movement;
-    //    //                                    move_state.init_pos = move_vec.new_pos;
-    //    //                                    move_state.final_pos = move.pos;
-    //    //                                    move_state.time = 0;
-    //    //                                },
-    //    //                                else => {
-    //    //                                    current_action = player_actions.pop();
-    //    //                                    if (current_action) |acc| {
-    //    //                                        switch (acc) {
-    //    //                                            .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
-    //    //                                            .block_break => block_break_timer = null,
-    //    //                                        }
-    //    //                                    }
-    //    //                                    break;
-    //    //                                },
-    //    //                            }
-    //    //                        } else {
-    //    //                            current_action = null;
-    //    //                            break;
-    //    //                        }
-    //    //                    }
-    //    //                    //move_vec = //above switch statement
-    //    //                }
-    //    //                if (moved) {
-    //    //                    try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, grounded);
-    //    //                }
-    //    //            },
-    //    //            .block_break => |bb| {
-    //    //                if (block_break_timer == null) {
-    //    //                    const pw = mc.lookAtBlock(bot1.pos.?, bb.pos.toF());
-    //    //                    try pctx.setPlayerRot(pw.yaw, pw.pitch, true);
-    //    //                    try pctx.playerAction(.start_digging, bb.pos);
-    //    //                    block_break_timer = dt;
-    //    //                } else {
-    //    //                    block_break_timer.? += dt;
-    //    //                    if (block_break_timer.? >= 0.5) {
-    //    //                        block_break_timer = null;
-    //    //                        try pctx.playerAction(.finish_digging, bb.pos);
-    //    //                        current_action = player_actions.popOrNull();
-    //    //                        if (current_action) |acc| {
-    //    //                            switch (acc) {
-    //    //                                .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
-    //    //                                .block_break => block_break_timer = null,
-    //    //                            }
-    //    //                        }
-    //    //                    }
-    //    //                }
-    //    //            },
-    //    //        }
-    //    //    } else {
-    //    //        if (doit) {
-    //    //            if (try pathctx.findTree(bot1.pos.?)) |*actions| {
-    //    //                player_actions.deinit();
-    //    //                player_actions = actions.*;
-    //    //                for (player_actions.items) |pitem| {
-    //    //                    std.debug.print("action: {any}\n", .{pitem});
-    //    //                }
-    //    //                current_action = player_actions.popOrNull();
-    //    //                if (current_action) |acc| {
-    //    //                    switch (acc) {
-    //    //                        .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
-    //    //                        .block_break => block_break_timer = null,
-    //    //                    }
-    //    //                }
-    //    //            }
-    //    //        }
-    //    //        if (niklas_id) |nid| {
-    //    //            niklas_cooldown += dt;
-    //    //            if (niklas_cooldown > max_niklas_cooldown) {
-    //    //                if (entities.get(nid)) |ne| {
-    //    //                    const pw = mc.lookAtBlock(bot1.pos.?, ne.pos.add(V3f.new(-0.3, 1, -0.3)));
-    //    //                    try pctx.setPlayerPositionRot(bot1.pos.?, pw.yaw, pw.pitch, true);
-    //    //                }
-    //    //                niklas_cooldown = 0;
-    //    //            }
-    //    //        }
-    //    //    }
-    //    //}
-    //    std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
-    //}
 }

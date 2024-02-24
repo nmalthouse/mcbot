@@ -146,6 +146,8 @@ pub const NewDataReg = struct {
     }
 };
 
+//TODO
+//should we remove the old datareg in favor of NEW. why do two even exist
 pub const DataRegContainer = struct {
     reg: DataReg,
     data_j: std.json.Parsed(DataReg),

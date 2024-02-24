@@ -30,6 +30,10 @@ pub const PacketCtx = struct {
     server: Serv,
     mutex: *std.Thread.Mutex,
 
+    pub fn deinit(self: *@This()) void {
+        self.packet.deinit();
+    }
+
     pub fn wr(self: *@This()) !void {
         try self.packet.writeToServer(self.server, self.mutex);
     }
@@ -146,6 +150,7 @@ pub const PacketCtx = struct {
     }
 
     pub fn clientCommand(self: *@This(), action: u8) !void {
+        //action == 0, player respawn, action == 1, player opened stats window
         try self.packet.clear();
         try self.packet.varInt(0x06);
         try self.packet.varInt(action);
@@ -835,6 +840,7 @@ pub const ChunkMap = struct {
     x: XTYPE,
     alloc: std.mem.Allocator,
 
+    //These are used for DrawThread
     rw_lock: std.Thread.RwLock = .{},
     rebuild_notify: std.ArrayList(vector.V2i),
 
@@ -1133,7 +1139,6 @@ pub const ChunkSection = struct {
 
                 var new_i: usize = 0;
                 var new_shift_i: usize = 0;
-                std.debug.print("New bpe : {d}, {d}\n", .{ new_bpe, self.mapping.items.len });
 
                 var old_it = DataIterator{ .buffer = self.data.items, .bits_per_entry = self.bits_per_entry };
                 var old_dat = old_it.next();

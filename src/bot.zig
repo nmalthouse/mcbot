@@ -297,6 +297,49 @@ pub const Inventory = struct {
     }
 };
 
+pub const BotScriptThreadData = struct {
+    const Self = @This();
+    const Owner = enum { bot_thread, script_thread, none };
+    //this is written by updateBotsThread and read by scriptThread
+    u_status: enum { actions_empty, actions_error, terminate_thread },
+
+    actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
+    action_index: ?usize = null,
+    mutex: std.Thread.Mutex,
+    owner: Owner,
+
+    pub fn init(alloc: std.mem.Allocator) Self {
+        return .{
+            .u_status = .actions_empty,
+            .mutex = .{},
+            .actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
+            .owner = .none,
+        };
+    }
+
+    pub fn lock(self: *Self, new_owner: Owner) void {
+        if (self.owner == new_owner)
+            return;
+
+        self.mutex.lock();
+        self.owner = new_owner;
+    }
+
+    pub fn unlock(self: *Self, owner: Owner) void {
+        if (self.owner == owner) {
+            self.owner = .none;
+            self.mutex.unlock();
+            return;
+        }
+        std.debug.print("attempt to unlock an unowned mutex\n", .{});
+        unreachable;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.actions.deinit();
+    }
+};
+
 //Stores info about a specific bot/player
 //Not a client as chunk data etc can be shaerd between Bots
 pub const Bot = struct {
