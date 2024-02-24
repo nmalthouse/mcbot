@@ -1,7 +1,8 @@
 const std = @import("std");
 
 const graph = @import("graph");
-const mcBlockAtlas = @import("mc_block_atlas.zig");
+//const mcBlockAtlas = @import("mc_block_atlas.zig");
+const mcBlockAtlas = graph.mcblockatlas;
 
 const mc = @import("listener.zig");
 const id_list = @import("list.zig");
@@ -69,7 +70,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
         const parseT = mc.packetParseCtx(fbsT.Reader);
         var parse = parseT.init(fbs_.reader(), arena_alloc);
         const pid = parse.varInt();
-        switch (@intToEnum(id_list.login_packet_enum, pid)) {
+        switch (@as(id_list.login_packet_enum, @enumFromInt(pid))) {
             .Disconnect => {
                 const reason = try parse.string(null);
                 std.debug.print("Disconnected: {s}\n", .{reason});
@@ -95,7 +96,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
             .Login_Success => {
                 const uuid = parse.int(u128);
                 const username = try parse.string(16);
-                const n_props = @intCast(u32, parse.varInt());
+                const n_props = @as(u32, @intCast(parse.varInt()));
                 std.debug.print("Login Success: {d}: {s}\nPropertes:\n", .{ uuid, username });
                 var n: u32 = 0;
                 while (n < n_props) : (n += 1) {
@@ -189,20 +190,20 @@ pub const McWorld = struct {
     }
 };
 
-pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8)) ?vector.V3f {
+pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8, .scalar)) ?vector.V3f {
     var ret = V3f{
-        .x = @intToFloat(f64, std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null),
-        .y = @intToFloat(f64, std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null),
-        .z = @intToFloat(f64, std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null),
+        .x = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
+        .y = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
+        .z = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
     };
     return ret;
 }
 
-pub fn parseCoord(it: *std.mem.TokenIterator(u8)) !vector.V3f {
+pub fn parseCoord(it: *std.mem.TokenIterator(u8, .scalar)) !vector.V3f {
     return .{
-        .x = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-        .y = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
-        .z = @intToFloat(f64, try std.fmt.parseInt(i64, it.next() orelse "0", 0)),
+        .x = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
+        .y = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
+        .z = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
     };
 }
 
@@ -289,7 +290,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;
-    switch (@intToEnum(id_list.packet_enum, pid)) {
+    switch (@as(id_list.packet_enum, @enumFromInt(pid))) {
         //WORLD specific packets
         .Plugin_Message => {
             const channel_name = try parse.string(null);
@@ -435,17 +436,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var n: u32 = 0;
             while (n < n_blocks) : (n += 1) {
                 const bd = parse.varLong();
-                const bid = @intCast(u16, bd >> 12);
-                const lx = @intCast(i32, (bd >> 8) & 15);
-                const lz = @intCast(i32, (bd >> 4) & 15);
-                const ly = @intCast(i32, bd & 15);
+                const bid = @as(u16, @intCast(bd >> 12));
+                const lx = @as(i32, @intCast((bd >> 8) & 15));
+                const lz = @as(i32, @intCast((bd >> 4) & 15));
+                const ly = @as(i32, @intCast(bd & 15));
                 try world.chunk_data.setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
             }
         },
         .Block_Update => {
             const pos = parse.position();
             const new_id = parse.varInt();
-            try world.chunk_data.setBlock(pos, @intCast(mc.BLOCK_ID_INT, new_id));
+            try world.chunk_data.setBlock(pos, @as(mc.BLOCK_ID_INT, @intCast(new_id)));
         },
         .Chunk_Data_and_Update_Light => {
             const cx = parse.int(i32);
@@ -460,7 +461,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const data_size = parse.varInt();
             var chunk_data = std.ArrayList(u8).init(alloc);
             defer chunk_data.deinit();
-            try chunk_data.resize(@intCast(usize, data_size));
+            try chunk_data.resize(@as(usize, @intCast(data_size)));
             try parse.reader.readNoEof(chunk_data.items);
 
             var chunk: mc.Chunk = undefined;
@@ -478,7 +479,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     const bp_entry = try cr.readInt(u8, .Big);
                     {
                         if (bp_entry == 0) {
-                            try chunk_section.mapping.append(@intCast(mc.BLOCK_ID_INT, mc.readVarInt(cr)));
+                            try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mc.readVarInt(cr))));
                         } else {
                             const num_pal_entry = mc.readVarInt(cr);
                             chunk_section.bits_per_entry = bp_entry;
@@ -486,7 +487,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                             var i: u32 = 0;
                             while (i < num_pal_entry) : (i += 1) {
                                 const mapping = mc.readVarInt(cr);
-                                try chunk_section.mapping.append(@intCast(mc.BLOCK_ID_INT, mapping));
+                                try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
                             }
                         }
 
@@ -515,7 +516,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                             }
                         }
 
-                        const num_longs = @intCast(u32, mc.readVarInt(cr));
+                        const num_longs = @as(u32, @intCast(mc.readVarInt(cr)));
                         try cr.skipBytes(num_longs * @sizeOf(u64), .{});
                     }
                 }
@@ -561,7 +562,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.boolean, "is_flat"),
                 P(.boolean, "has_death_location"),
             }));
-            bot1.view_dist = @intCast(u8, data.sim_dist);
+            bot1.view_dist = @as(u8, @intCast(data.sim_dist));
         },
         .Combat_Death => {
             const id = parse.varInt();
@@ -589,14 +590,14 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 bot1.held_item = data;
             } else if (win_id == 0) {
                 bot1.container_state = state_id;
-                bot1.inventory[@intCast(u16, slot_i)] = data;
+                bot1.inventory[@as(u16, @intCast(slot_i))] = data;
                 std.debug.print("updating slot {any}\n", .{data});
             }
         },
         .Open_Screen => {
             const win_id = parse.varInt();
             const win_type = parse.varInt();
-            bot1.interacted_inventory.win_type = @intCast(u32, win_type);
+            bot1.interacted_inventory.win_type = @as(u32, @intCast(win_type));
             //bot1.interacted_inventory.win_id = win_id;
             const win_title = try parse.string(null);
             std.debug.print("open window: {d} {d}: {s}\n", .{ win_id, win_type, win_title });
@@ -604,7 +605,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .Set_Container_Content => {
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
-            const item_count = @intCast(u32, parse.varInt());
+            const item_count = @as(u32, @intCast(parse.varInt()));
             var i: u32 = 0;
             if (win_id == 0) {
                 while (i < item_count) : (i += 1) {
@@ -673,7 +674,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .Set_Health => {
             bot1.health = parse.float(f32);
-            bot1.food = @intCast(u8, parse.varInt());
+            bot1.food = @as(u8, @intCast(parse.varInt()));
             bot1.food_saturation = parse.float(f32);
         },
         .Set_Head_Rotation => {},
@@ -698,10 +699,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                             var ids = std.ArrayList(u32).init(alloc);
                             defer ids.deinit();
-                            try ids.resize(@intCast(usize, num_ids));
+                            try ids.resize(@as(usize, @intCast(num_ids)));
                             var ni: u32 = 0;
                             while (ni < num_ids) : (ni += 1)
-                                ids.items[ni] = @intCast(u32, parse.varInt());
+                                ids.items[ni] = @as(u32, @intCast(parse.varInt()));
                             //std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
                             try world.tag_table.addTag(identifier, ident, ids.items);
                         }
@@ -737,7 +738,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
             world.packet_cache.chat_time_stamps.insert(timestamp);
 
-            var it = std.mem.tokenize(u8, msg, " ");
+            var it = std.mem.tokenizeScalar(u8, msg, ' ');
             const key = it.next().?;
 
             var ret_msg_buf = std.ArrayList(u8).init(alloc);
@@ -1037,7 +1038,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
             }
         }
 
-        std.time.sleep(@floatToInt(u64, std.time.ns_per_s * (1.0 / 20.0)));
+        std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * (1.0 / 20.0))));
     }
 }
 
@@ -1082,9 +1083,9 @@ pub fn basicPathfindThread(
 }
 
 pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, bot_fd: i32) !void {
-    var win = try graph.SDL.Window.createWindow("My window");
+    var win = try graph.SDL.Window.createWindow("Debug Mario Window", .{});
     defer win.destroyWindow();
-    var ctx = try graph.GraphicsContext.init(&alloc, 163);
+    var ctx = try graph.GraphicsContext.init(alloc, 163);
     defer ctx.deinit();
 
     const mc_atlas = try mcBlockAtlas.buildAtlas(alloc);
@@ -1110,7 +1111,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
         }
     }
 
-    var font = try graph.Font.init("dos.ttf", alloc, 16, 163, &graph.Font.CharMaps.AsciiBasic, null);
+    var font = try graph.Font.init(alloc, std.fs.cwd(), "dos.ttf", 16, 163, .{});
     defer font.deinit();
 
     var testmap = graph.Bind(&.{
@@ -1122,13 +1123,13 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 
     //std.time.sleep(std.time.ns_per_s * 10);
 
-    var cubes = graph.Cubes.init(&alloc, mc_atlas.texture.id, ctx.tex_shad);
+    var cubes = graph.Cubes.init(alloc, mc_atlas.texture.id, ctx.tex_shad);
     defer cubes.deinit();
 
     const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
     const grass_block_id = reg.getBlockFromName("grass_block");
 
-    var gctx = graph.NewCtx.init(alloc);
+    var gctx = graph.NewCtx.init(alloc, 123);
     defer gctx.deinit();
 
     var astar_ctx_mutex: std.Thread.Mutex = .{};
@@ -1141,7 +1142,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
-        try gctx.begin(graph.itc(0x2f2f2fff));
+        try gctx.begin(0x2f2f2fff);
         try cubes.indicies.resize(0);
         try cubes.vertices.resize(0);
         win.pumpEvents(); //Important that this is called after beginDraw for input lag reasons
@@ -1157,15 +1158,37 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
         if (draw_nodes and astar_ctx_mutex.tryLock()) {
             if (astar_ctx) |actx| {
                 for (actx.open.items) |item| {
-                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
                     try cubes.vertices.appendSlice(
-                        &graph.cube(@intToFloat(f32, item.x), @intToFloat(f32, item.y), @intToFloat(f32, item.z), 0.7, 0.2, 0.6, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6),
+                        &graph.cube(
+                            @as(f32, @floatFromInt(item.x)),
+                            @as(f32, @floatFromInt(item.y)),
+                            @as(f32, @floatFromInt(item.z)),
+                            0.7,
+                            0.2,
+                            0.6,
+                            mc_atlas.getTextureRec(1),
+                            @intCast(mc_atlas.texture.w),
+                            @intCast(mc_atlas.texture.h),
+                            &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
+                        ),
                     );
                 }
                 for (actx.closed.items) |item| {
-                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
+                    try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
                     try cubes.vertices.appendSlice(
-                        &graph.cube(@intToFloat(f32, item.x), @intToFloat(f32, item.y), @intToFloat(f32, item.z), 0.7, 0.2, 0.6, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6),
+                        &graph.cube(
+                            @as(f32, @floatFromInt(item.x)),
+                            @as(f32, @floatFromInt(item.y)),
+                            @as(f32, @floatFromInt(item.z)),
+                            0.7,
+                            0.2,
+                            0.6,
+                            mc_atlas.getTextureRec(1),
+                            @intCast(mc_atlas.texture.w),
+                            @intCast(mc_atlas.texture.h),
+                            &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
+                        ),
                     );
                 }
             }
@@ -1192,23 +1215,34 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                     const next_zt = if (@fabs(mz) < 0.001) 100000 else ((if (mz > 0) @ceil(mz * t + point_start.data[2]) else @floor(mz * t + point_start.data[2])) - point_start.data[2]) / mz;
                     if (i > 10) break;
 
-                    t = std.math.min3(next_xt, next_yt, next_zt);
+                    t = @min(next_xt, next_yt, next_zt);
                     if (t > count)
                         break;
 
                     const point = point_start.add(camera.front.scale(t + 0.01)).data;
                     //const point = point_start.lerp(point_end, t / count).data;
                     const pi = V3i{
-                        .x = @floatToInt(i32, @floor(point[0])),
-                        .y = @floatToInt(i32, @floor(point[1])),
-                        .z = @floatToInt(i32, @floor(point[2])),
+                        .x = @as(i32, @intFromFloat(@floor(point[0]))),
+                        .y = @as(i32, @intFromFloat(@floor(point[1]))),
+                        .z = @as(i32, @intFromFloat(@floor(point[2]))),
                     };
                     if (world.chunk_data.getBlock(pi)) |block| {
                         if (block != 0) {
-                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
-                            try cubes.vertices.appendSlice(&graph.cube(@intToFloat(f32, pi.x), @intToFloat(f32, pi.y), @intToFloat(f32, pi.z), 1.1, 1.2, 1.1, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xcb41db66)} ** 6));
+                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
+                            try cubes.vertices.appendSlice(&graph.cube(
+                                @as(f32, @floatFromInt(pi.x)),
+                                @as(f32, @floatFromInt(pi.y)),
+                                @as(f32, @floatFromInt(pi.z)),
+                                1.1,
+                                1.2,
+                                1.1,
+                                mc_atlas.getTextureRec(1),
+                                @intCast(mc_atlas.texture.w),
+                                @intCast(mc_atlas.texture.h),
+                                &[_]graph.CharColor{graph.itc(0xcb41db66)} ** 6,
+                            ));
 
-                            if (win.mouse.left_down) {
+                            if (win.mouse.left == .rising) {
                                 bot1.modify_mutex.lock();
                                 bot1.action_index = null;
 
@@ -1229,7 +1263,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                 }
                 const vz = try vx.value_ptr.getOrPut(item.y);
                 if (!vz.found_existing) {
-                    vz.value_ptr.cubes = graph.Cubes.init(&alloc, mc_atlas.texture.id, ctx.tex_shad);
+                    vz.value_ptr.cubes = graph.Cubes.init(alloc, mc_atlas.texture.id, ctx.tex_shad);
                 } else {
                     try vz.value_ptr.cubes.indicies.resize(0);
                     try vz.value_ptr.cubes.vertices.resize(0);
@@ -1237,7 +1271,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 
                 if (world.chunk_data.x.get(item.x)) |xx| {
                     if (xx.get(item.y)) |chunk| {
-                        for (chunk) |sec, sec_i| {
+                        for (chunk, 0..) |sec, sec_i| {
                             if (sec_i < 7) continue;
                             if (sec.bits_per_entry == 0) continue;
                             //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
@@ -1254,21 +1288,21 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                     const colors = if (bid == grass_block_id) [_]graph.CharColor{itc(0x77c05aff)} ** 6 else null;
                                     const co = block.pos;
                                     const x = co.x + item.x * 16;
-                                    const y = (co.y + @intCast(i32, sec_i) * 16) - 64;
+                                    const y = (co.y + @as(i32, @intCast(sec_i)) * 16) - 64;
                                     const z = co.z + item.y * 16;
                                     if (world.chunk_data.isOccluded(V3i.new(x, y, z)))
                                         continue;
-                                    try vz.value_ptr.cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, vz.value_ptr.cubes.vertices.items.len)));
+                                    try vz.value_ptr.cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(vz.value_ptr.cubes.vertices.items.len))));
                                     try vz.value_ptr.cubes.vertices.appendSlice(&graph.cube(
-                                        @intToFloat(f32, x),
-                                        @intToFloat(f32, y),
-                                        @intToFloat(f32, z),
+                                        @as(f32, @floatFromInt(x)),
+                                        @as(f32, @floatFromInt(y)),
+                                        @as(f32, @floatFromInt(z)),
                                         1,
                                         1,
                                         1,
                                         mc_atlas.getTextureRec(bid),
-                                        mc_atlas.texture.w,
-                                        mc_atlas.texture.h,
+                                        @intCast(mc_atlas.texture.w),
+                                        @intCast(mc_atlas.texture.h),
                                         if (colors) |col| &col else null,
                                     ));
                                 }
@@ -1298,8 +1332,19 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
             bot1.modify_mutex.lock();
             if (bot1.pos) |bpos| {
                 const p = bpos.toRay();
-                try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
-                try cubes.vertices.appendSlice(&graph.cube(p.x - 0.3, p.y, p.z - 0.3, 0.6, 1.8, 0.6, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6));
+                try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
+                try cubes.vertices.appendSlice(&graph.cube(
+                    p.x - 0.3,
+                    p.y,
+                    p.z - 0.3,
+                    0.6,
+                    1.8,
+                    0.6,
+                    mc_atlas.getTextureRec(1),
+                    @intCast(mc_atlas.texture.w),
+                    @intCast(mc_atlas.texture.h),
+                    &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
+                ));
             }
             if (bot1.action_list.items.len > 0) {
                 const list = bot1.action_list.items;
@@ -1318,10 +1363,21 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                             };
                             const p = move.pos.toRay();
                             const lp = last_pos.toRay();
-                            try gctx.line3D(graph.Vec3f.new(lp.x, lp.y + 1, lp.z), graph.Vec3f.new(p.x, p.y + 1, p.z), 0xffffffff);
+                            gctx.line3D(graph.Vec3f.new(lp.x, lp.y + 1, lp.z), graph.Vec3f.new(p.x, p.y + 1, p.z), 0xffffffff);
                             last_pos = move.pos;
-                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@intCast(u32, cubes.vertices.items.len)));
-                            try cubes.vertices.appendSlice(&graph.cube(p.x, p.y, p.z, 0.2, 0.2, 0.2, mc_atlas.getTextureRec(1), mc_atlas.texture.w, mc_atlas.texture.h, &[_]graph.CharColor{graph.itc(color)} ** 6));
+                            try cubes.indicies.appendSlice(&graph.genCubeIndicies(@as(u32, @intCast(cubes.vertices.items.len))));
+                            try cubes.vertices.appendSlice(&graph.cube(
+                                p.x,
+                                p.y,
+                                p.z,
+                                0.2,
+                                0.2,
+                                0.2,
+                                mc_atlas.getTextureRec(1),
+                                @intCast(mc_atlas.texture.w),
+                                @intCast(mc_atlas.texture.h),
+                                &[_]graph.CharColor{graph.itc(color)} ** 6,
+                            ));
                         },
                         else => {},
                     }
@@ -1336,7 +1392,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
         camera.update(&win);
 
         graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
-        try gctx.rect(graph.Rec(@divTrunc(win.screen_width, 2), @divTrunc(win.screen_height, 2), 10, 10), 0xffffffff);
+        gctx.rect(graph.Rec(@divTrunc(win.screen_width, 2), @divTrunc(win.screen_height, 2), 10, 10), 0xffffffff);
         gctx.end(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
         //try ctx.beginDraw(graph.itc(0x2f2f2fff));
         //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
@@ -1362,7 +1418,7 @@ pub fn main() !void {
     var draw = false;
     if (arg_it.next()) |action_arg| {
         if (eql(u8, action_arg, "analyze")) {
-            try packet_analyze.analyzeWalk(alloc, arg_it.next() orelse return);
+            //try packet_analyze.analyzeWalk(alloc, arg_it.next() orelse return);
             return;
         }
         if (eql(u8, action_arg, "draw")) {
@@ -1402,15 +1458,16 @@ pub fn main() !void {
     var world = McWorld.init(alloc);
     defer world.deinit();
 
-    const reg = try Reg.DataReg.init(alloc, "mcproto/converted/all.json");
-    defer reg.deinit(alloc);
+    var creg = try Reg.DataRegContainer.init(alloc, std.fs.cwd(), "mcproto/converted/all.json");
+    defer creg.deinit();
+    const reg = creg.reg;
 
     var event_structs: [bot_names.len]std.os.linux.epoll_event = undefined;
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
     var bot_fd: i32 = 0;
-    for (bot_names) |bn, i| {
+    for (bot_names, 0..) |bn, i| {
         const mb = try botJoin(alloc, bn.name);
         event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
@@ -1499,8 +1556,8 @@ pub fn main() !void {
                         //pp.buf.append(buf[0]) catch |err| break :blk err;
                         if (buf[0] & 0x80 == 0) {
                             var fbs = std.io.FixedBufferStream([]u8){ .buffer = pbuf[0..ppos], .pos = 0 };
-                            pp.data_len = @intCast(u32, mc.readVarInt(fbs.reader()));
-                            pp.len_len = @intCast(u32, ppos);
+                            pp.data_len = @as(u32, @intCast(mc.readVarInt(fbs.reader())));
+                            pp.len_len = @as(u32, @intCast(ppos));
 
                             if (pp.data_len.? == 0)
                                 unreachable;
@@ -1521,7 +1578,7 @@ pub fn main() !void {
                             //TODO set this read to nonblocking?
                             const nr = try std.os.read(eve.data.fd, pp.buf.items[start .. start + num_left_to_read]);
 
-                            pp.num_read += @intCast(u32, nr);
+                            pp.num_read += @as(u32, @intCast(nr));
                             if (nr == 0) //TODO properly support partial reads
                                 unreachable;
 
@@ -1537,7 +1594,7 @@ pub fn main() !void {
                             }
                         } else {
                             const nr = try std.os.read(eve.data.fd, pbuf[start .. start + num_left_to_read]);
-                            pp.num_read += @intCast(u32, nr);
+                            pp.num_read += @as(u32, @intCast(nr));
 
                             if (nr == 0) //TODO properly support partial reads
                                 unreachable;

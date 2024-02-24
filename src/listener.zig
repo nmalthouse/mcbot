@@ -47,9 +47,9 @@ pub const PacketCtx = struct {
     ) !void {
         try self.packet.clear();
         try self.packet.varInt(0x31);
-        try self.packet.varInt(@enumToInt(hand));
+        try self.packet.varInt(@intFromEnum(hand));
         try self.packet.iposition(block_pos);
-        try self.packet.varInt(@enumToInt(face));
+        try self.packet.varInt(@intFromEnum(face));
         try self.packet.float(cx);
         try self.packet.float(cy);
         try self.packet.float(cz);
@@ -61,7 +61,7 @@ pub const PacketCtx = struct {
     pub fn pickItem(self: *@This(), sloti: usize) !void {
         try self.packet.clear();
         try self.packet.varInt(0x19);
-        try self.packet.varInt(@intCast(i32, sloti));
+        try self.packet.varInt(@as(i32, @intCast(sloti)));
 
         //try self.packet.writeToServer(self.server);
         try self.wr();
@@ -71,7 +71,7 @@ pub const PacketCtx = struct {
         try self.packet.clear();
 
         try self.packet.varInt(0x28);
-        try self.packet.short(@intCast(u16, index));
+        try self.packet.short(@as(u16, @intCast(index)));
         try self.wr();
     }
 
@@ -96,12 +96,12 @@ pub const PacketCtx = struct {
         try self.packet.varInt(0x0A);
         try self.packet.ubyte(win);
         try self.packet.varInt(state_id);
-        try self.packet.short(@intCast(u16, slot));
+        try self.packet.short(@as(u16, @intCast(slot)));
         try self.packet.ubyte(button);
         try self.packet.varInt(mode);
-        try self.packet.varInt(@intCast(i32, new_slot_data.len));
+        try self.packet.varInt(@as(i32, @intCast(new_slot_data.len)));
         for (new_slot_data) |item| {
-            try self.packet.short(@intCast(u16, item.sloti));
+            try self.packet.short(@as(u16, @intCast(item.sloti)));
             try self.packet.slot(item.slot);
         }
         try self.packet.slot(held_slot);
@@ -128,7 +128,7 @@ pub const PacketCtx = struct {
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
         try self.packet.clear();
         try self.packet.varInt(0x1C); //Packet id
-        try self.packet.varInt(@enumToInt(status));
+        try self.packet.varInt(@intFromEnum(status));
         try self.packet.iposition(block_pos);
         try self.packet.ubyte(0); //Face of block
         try self.packet.varInt(0);
@@ -237,7 +237,7 @@ test "num bits req" {
 }
 
 pub fn getBitMask(num_bits: usize) u64 {
-    return (~@as(u64, 0x0)) >> @intCast(u6, 64 - num_bits);
+    return (~@as(u64, 0x0)) >> @as(u6, @intCast(64 - num_bits));
 
     //From wiki.vg/chunk_format:
     //For block states with bits per entry <= 4, 4 bits are used to represent a block.
@@ -305,14 +305,14 @@ pub const Packet = struct {
     }
 
     pub fn string(self: *Self, str: []const u8) !void {
-        try self.varInt(@intCast(i32, str.len));
+        try self.varInt(@as(i32, @intCast(str.len)));
         const wr = self.buffer.writer();
         _ = try wr.write(str);
     }
 
     pub fn float(self: *Self, f: f32) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u32, @bitCast(u32, f), .Big);
+        _ = try wr.writeInt(u32, @as(u32, @bitCast(f)), .Big);
     }
 
     pub fn ubyte(self: *Self, b: u8) !void {
@@ -332,7 +332,7 @@ pub const Packet = struct {
 
     pub fn double(self: *Self, f: f64) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u64, @bitCast(u64, f), .Big);
+        _ = try wr.writeInt(u64, @as(u64, @bitCast(f)), .Big);
     }
 
     pub fn short(self: *Self, val: u16) !void {
@@ -346,7 +346,7 @@ pub const Packet = struct {
         defer mutex.unlock();
         const comp_enable = (self.comp_thresh > -1);
         //_ = try server.writeByte(0);
-        var len = toVarInt(@intCast(i32, self.buffer.items.len) + @as(i32, if (comp_enable) 1 else 0));
+        var len = toVarInt(@as(i32, @intCast(self.buffer.items.len)) + @as(i32, if (comp_enable) 1 else 0));
         _ = try server.write(len.getSlice());
         if (comp_enable)
             _ = try server.writeByte(0);
@@ -384,16 +384,16 @@ pub fn toVarLong(input: i64) VarLong {
     const SEG: u64 = 0x7f;
 
     var ret = VarLong{ .bytes = .{ 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 }, .len = 0 };
-    var value = @bitCast(u64, input);
+    var value = @as(u64, @bitCast(input));
 
     while (true) {
         if ((value & ~SEG) == 0) {
-            ret.bytes[ret.len] = @intCast(u8, value & SEG);
+            ret.bytes[ret.len] = @as(u8, @intCast(value & SEG));
             ret.len += 1;
             return ret;
         }
 
-        ret.bytes[ret.len] = @intCast(u8, (value & SEG) | CONT);
+        ret.bytes[ret.len] = @as(u8, @intCast((value & SEG) | CONT));
         ret.len += 1;
 
         if (ret.len >= 10) {
@@ -409,16 +409,16 @@ pub fn toVarInt(input: i32) VarInt {
     const SEG: u32 = 0x7f;
 
     var ret = VarInt{ .bytes = .{ 0, 0, 0, 0, 0 }, .len = 0 };
-    var value = @bitCast(u32, input);
+    var value = @as(u32, @bitCast(input));
 
     while (true) {
         if ((value & ~SEG) == 0) {
-            ret.bytes[ret.len] = @intCast(u8, value & SEG);
+            ret.bytes[ret.len] = @as(u8, @intCast(value & SEG));
             ret.len += 1;
             return VarInt{ .bytes = ret.bytes, .len = ret.len };
         }
 
-        ret.bytes[ret.len] = @intCast(u8, (value & SEG) | CONT);
+        ret.bytes[ret.len] = @as(u8, @intCast((value & SEG) | CONT));
         ret.len += 1;
 
         if (ret.len >= 5) {
@@ -472,7 +472,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         pub fn slot(self: *Self) ?Slot {
             if (self.boolean()) { //Is item present
                 var s = Slot{
-                    .item_id = @intCast(u16, self.varInt()),
+                    .item_id = @as(u16, @intCast(self.varInt())),
                     .count = self.int(u8),
                     .nbt_buffer = null,
                 };
@@ -493,10 +493,10 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
         pub fn float(self: *Self, comptime fT: type) fT {
             if (fT == f32) {
-                return @bitCast(f32, self.int(u32));
+                return @as(f32, @bitCast(self.int(u32)));
             }
             if (fT == f64) {
-                return @bitCast(f64, self.int(u64));
+                return @as(f64, @bitCast(self.int(u64)));
             }
             unreachable;
         }
@@ -512,18 +512,18 @@ pub fn packetParseCtx(comptime readerT: type) type {
         pub fn cposition(self: *Self) vector.V3i {
             const pos = self.int(i64);
             return .{
-                .x = @intCast(i32, pos >> 42),
-                .y = @intCast(i32, pos << 44 >> 44),
-                .z = @intCast(i32, pos << 22 >> 42),
+                .x = @as(i32, @intCast(pos >> 42)),
+                .y = @as(i32, @intCast(pos << 44 >> 44)),
+                .z = @as(i32, @intCast(pos << 22 >> 42)),
             };
         }
 
         pub fn position(self: *Self) vector.V3i {
             const pos = self.int(i64);
             return .{
-                .x = @intCast(i32, pos >> 38),
-                .y = @intCast(i32, pos << 52 >> 52),
-                .z = @intCast(i32, pos << 26 >> 38),
+                .x = @as(i32, @intCast(pos >> 38)),
+                .y = @as(i32, @intCast(pos << 52 >> 52)),
+                .z = @as(i32, @intCast(pos << 26 >> 38)),
             };
         }
 
@@ -540,7 +540,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn string(self: *Self, max_len: ?usize) ![]const u8 {
-            const len = @intCast(u32, readVarInt(self.reader));
+            const len = @as(u32, @intCast(readVarInt(self.reader)));
             if (max_len) |l|
                 if (len > l) return error.StringExceedsMaxLen;
             const slice = try self.alloc.alloc(u8, len);
@@ -563,13 +563,13 @@ pub fn readVarLong(reader: anytype) i64 {
 
     while (true) {
         current_byte = reader.readByte() catch unreachable;
-        value |= @intCast(u64, current_byte & SEG) << @intCast(u5, pos);
+        value |= @as(u64, @intCast(current_byte & SEG)) << @as(u5, @intCast(pos));
         if ((current_byte & CONT) == 0) break;
         pos += 7;
         if (pos >= 64) unreachable;
     }
 
-    return @bitCast(i64, value);
+    return @as(i64, @bitCast(value));
 }
 
 pub fn readVarInt(reader: anytype) i32 {
@@ -582,13 +582,13 @@ pub fn readVarInt(reader: anytype) i32 {
 
     while (true) {
         current_byte = reader.readByte() catch unreachable;
-        value |= @intCast(u32, current_byte & SEG) << @intCast(u5, pos);
+        value |= @as(u32, @intCast(current_byte & SEG)) << @as(u5, @intCast(pos));
         if ((current_byte & CONT) == 0) break;
         pos += 7;
         if (pos >= 32) unreachable;
     }
 
-    return @bitCast(i32, value);
+    return @as(i32, @bitCast(value));
 }
 
 pub fn readVarIntWithError(reader: anytype) !i32 {
@@ -601,13 +601,13 @@ pub fn readVarIntWithError(reader: anytype) !i32 {
 
     while (true) {
         current_byte = try reader.readByte();
-        value |= @intCast(u32, current_byte & SEG) << @intCast(u5, pos);
+        value |= @as(u32, @intCast(current_byte & SEG)) << @as(u5, @intCast(pos));
         if ((current_byte & CONT) == 0) break;
         pos += 7;
         if (pos >= 32) unreachable;
     }
 
-    return @bitCast(i32, value);
+    return @as(i32, @bitCast(value));
 }
 
 test "toVarLong" {
@@ -644,7 +644,7 @@ test "toVarLong" {
         &.{ 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x80, 0x01 },
     };
 
-    for (values) |v, i| {
+    for (values, 0..) |v, i| {
         var vi = toVarLong(v);
         const sl = vi.getSlice();
         try expect(std.mem.eql(u8, sl, expected[i]));
@@ -681,7 +681,7 @@ test "toVarInt" {
         &.{ 0x80, 0x80, 0x80, 0x80, 0x08 },
     };
 
-    for (values) |v, i| {
+    for (values, 0..) |v, i| {
         var vi = toVarInt(v);
         const sl = vi.getSlice();
         try expect(std.mem.eql(u8, sl, expected[i]));
@@ -744,7 +744,7 @@ pub fn cmdThread(
 
 pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_threshold: i32) ![]const u8 {
     const comp_enabled = (comp_threshold > -1);
-    const total_len = @intCast(u32, readVarInt(reader));
+    const total_len = @as(u32, @intCast(readVarInt(reader)));
     //const is_compressed = blk: {
     //    if (comp_enabled)
     //        break :blk (readVarInt(reader) != 0);
@@ -763,7 +763,7 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
         const comp_len = readVarInt(in_stream.reader());
         if (comp_len == 0)
             return buf[in_stream.pos..];
-        var zlib_stream = try std.compress.zlib.zlibStream(alloc, in_stream.reader());
+        var zlib_stream = try std.compress.zlib.decompressStream(alloc, in_stream.reader());
         defer zlib_stream.deinit();
         const ubuf = try zlib_stream.reader().readAllAlloc(alloc, std.math.maxInt(usize));
         alloc.free(buf);
@@ -859,7 +859,7 @@ pub const ChunkMap = struct {
         while (it.next()) |kv| {
             var zit = kv.value_ptr.iterator();
             while (zit.next()) |kv2| {
-                for (kv2.value_ptr.*) |*section| {
+                for (kv2.value_ptr) |*section| {
                     section.deinit();
                 }
             }
@@ -891,9 +891,9 @@ pub const ChunkMap = struct {
     }
 
     pub fn getChunkCoord(pos: V3i) V3i {
-        const cx = @intCast(i32, @divFloor(pos.x, 16));
-        const cz = @intCast(i32, @divFloor(pos.z, 16));
-        const cy = @intCast(i32, @divFloor(pos.y + 64, 16));
+        const cx = @as(i32, @intCast(@divFloor(pos.x, 16)));
+        const cz = @as(i32, @intCast(@divFloor(pos.z, 16)));
+        const cy = @as(i32, @intCast(@divFloor(pos.y + 64, 16)));
         return .{ .x = cx, .y = cy, .z = cz };
     }
 
@@ -902,7 +902,7 @@ pub const ChunkMap = struct {
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
         const column = world_z.getPtr(ch.z) orelse return null;
-        return &column[@intCast(u32, ch.y)];
+        return &column[@as(u32, @intCast(ch.y))];
     }
 
     pub fn isOccluded(self: *Self, pos: V3i) bool {
@@ -933,7 +933,7 @@ pub const ChunkMap = struct {
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
         const column = world_z.getPtr(ch.z) orelse return null;
-        const section = column[@intCast(u32, if (ch.y >= NUM_CHUNK_SECTION) return null else ch.y)];
+        const section = column[@as(u32, @intCast(if (ch.y >= NUM_CHUNK_SECTION) return null else ch.y))];
         switch (section.bits_per_entry) {
             0 => {
                 return section.mapping.items[0];
@@ -942,15 +942,15 @@ pub const ChunkMap = struct {
             else => {
                 const block_index = rx + (rz * 16) + (ry * 256);
                 const blocks_per_long = @divTrunc(64, section.bits_per_entry);
-                const data_index = @intCast(u32, @divTrunc(block_index, blocks_per_long));
+                const data_index = @as(u32, @intCast(@divTrunc(block_index, blocks_per_long)));
                 const shift_index = @rem(block_index, blocks_per_long);
-                const mapping = (section.data.items[data_index] >> @intCast(u6, (shift_index * section.bits_per_entry))) & getBitMask(section.bits_per_entry);
+                const mapping = (section.data.items[data_index] >> @as(u6, @intCast((shift_index * section.bits_per_entry)))) & getBitMask(section.bits_per_entry);
                 switch (section.bits_per_entry) {
                     4...8 => { //Indirect mapping
                         return section.mapping.items[mapping];
                     },
                     else => { //Direct mapping for >= 9 bits_per_entry
-                        return @intCast(BLOCK_ID_INT, mapping);
+                        return @as(BLOCK_ID_INT, @intCast(mapping));
                     },
                 }
             },
@@ -963,12 +963,12 @@ pub const ChunkMap = struct {
         try self.addNotify(chunk_pos.x, chunk_pos.z);
         const world_z = self.x.getPtr(chunk_pos.x) orelse unreachable;
         const column = world_z.getPtr(chunk_pos.z) orelse unreachable;
-        const section = &column[@intCast(u32, chunk_pos.y + 4)];
+        const section = &column[@as(u32, @intCast(chunk_pos.y + 4))];
 
         try section.setBlock(
-            @intCast(u32, rel_pos.x),
-            @intCast(u32, rel_pos.y),
-            @intCast(u32, rel_pos.z),
+            @as(u32, @intCast(rel_pos.x)),
+            @as(u32, @intCast(rel_pos.y)),
+            @as(u32, @intCast(rel_pos.z)),
             id,
         );
     }
@@ -982,9 +982,9 @@ pub const ChunkMap = struct {
         }
         const section = self.getChunkSectionPtr(pos) orelse unreachable;
 
-        const rx = @intCast(u32, @mod(pos.x, 16));
-        const rz = @intCast(u32, @mod(pos.z, 16));
-        const ry = @intCast(u32, @mod(pos.y + 64, 16));
+        const rx = @as(u32, @intCast(@mod(pos.x, 16)));
+        const rz = @as(u32, @intCast(@mod(pos.z, 16)));
+        const ry = @as(u32, @intCast(@mod(pos.y + 64, 16)));
 
         try section.setBlock(rx, ry, rz, id);
     }
@@ -1002,7 +1002,7 @@ pub const ChunkMap = struct {
 
         const chunk_entry = try zmap.value_ptr.getOrPut(cz);
         if (chunk_entry.found_existing) {
-            for (chunk_entry.value_ptr.*) |*cs| {
+            for (chunk_entry.value_ptr) |*cs| {
                 cs.deinit();
             }
         }
@@ -1017,8 +1017,8 @@ pub fn lookAtBlock(pos: V3f, block: V3f) struct { yaw: f32, pitch: f32 } {
     const asin = std.math.asin;
     const atan2 = std.math.atan2;
     return .{
-        .pitch = -rads(f32, @floatCast(f32, asin(vect.y / vect.magnitude()))),
-        .yaw = -rads(f32, @floatCast(f32, atan2(f64, vect.x, vect.z))),
+        .pitch = -rads(f32, @as(f32, @floatCast(asin(vect.y / vect.magnitude())))),
+        .yaw = -rads(f32, @as(f32, @floatCast(atan2(f64, vect.x, vect.z)))),
     };
 }
 
@@ -1046,7 +1046,7 @@ pub const ChunkSection = struct {
             if (it.bits_per_entry == 0) return null;
             const entries_per_long = @divTrunc(64, it.bits_per_entry);
             if (((it.buffer_index) * entries_per_long) + it.shift_index >= BLOCKS_PER_SECTION) return null;
-            const id = (it.buffer[it.buffer_index] >> @intCast(u6, it.shift_index * it.bits_per_entry)) & getBitMask(it.bits_per_entry);
+            const id = (it.buffer[it.buffer_index] >> @as(u6, @intCast(it.shift_index * it.bits_per_entry))) & getBitMask(it.bits_per_entry);
             it.shift_index += 1;
             if (it.shift_index >= entries_per_long) {
                 it.shift_index = 0;
@@ -1059,9 +1059,9 @@ pub const ChunkSection = struct {
 
         pub fn getCoord(it: *DataIterator) V3i {
             const i = (it.buffer_index * @divTrunc(64, it.bits_per_entry)) + it.shift_index;
-            const y = @intCast(i32, i >> 8);
-            const z = @intCast(i32, (i >> 4) & 0xf);
-            const x = @intCast(i32, i & 0xf);
+            const y = @as(i32, @intCast(i >> 8));
+            const z = @as(i32, @intCast((i >> 4) & 0xf));
+            const x = @as(i32, @intCast(i & 0xf));
             return .{ .x = x, .y = y, .z = z };
         }
     };
@@ -1084,10 +1084,10 @@ pub const ChunkSection = struct {
             else => {
                 const block_index = rx + (rz * 16) + (ry * 256);
                 const blocks_per_long = @divTrunc(64, self.bits_per_entry);
-                const data_index = @intCast(u32, @divTrunc(block_index, blocks_per_long));
+                const data_index = @as(u32, @intCast(@divTrunc(block_index, blocks_per_long)));
                 const shift_index = @rem(block_index, blocks_per_long);
                 //const mapping = (self.data.items[data_index] >> @intCast(u6, (shift_index * self.bits_per_entry))) & self.getBitMask();
-                return BlockIndex{ .index = data_index, .offset = @intCast(usize, shift_index), .bit_count = @intCast(u6, self.bits_per_entry) };
+                return BlockIndex{ .index = data_index, .offset = @as(usize, @intCast(shift_index)), .bit_count = @as(u6, @intCast(self.bits_per_entry)) };
             },
         }
     }
@@ -1097,8 +1097,8 @@ pub const ChunkSection = struct {
         const data_index = @divTrunc(i, blocks_per_long);
         const shift_index = @rem(i, blocks_per_long);
 
-        const id = (self.data.items[data_index] >> @intCast(u6, shift_index * self.bits_per_entry)) & getBitMask(self.bits_per_entry);
-        return .{ .block = self.mapping.items[id], .pos = V3i.new(@intCast(i32, i & 0xf), @intCast(i32, i >> 8), @intCast(i32, i >> 4) & 0xf) };
+        const id = (self.data.items[data_index] >> @as(u6, @intCast(shift_index * self.bits_per_entry))) & getBitMask(self.bits_per_entry);
+        return .{ .block = self.mapping.items[id], .pos = V3i.new(@as(i32, @intCast(i & 0xf)), @as(i32, @intCast(i >> 8)), @as(i32, @intCast(i >> 4)) & 0xf) };
     }
 
     //This function sets the data array to whatever index is mapped to id,
@@ -1106,8 +1106,8 @@ pub const ChunkSection = struct {
     pub fn setData(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) void {
         const bi = self.getBlockIndex(rx, ry, rz);
         const long = &self.data.items[bi.index];
-        const mask = getBitMask(self.bits_per_entry) << @intCast(u6, bi.offset * bi.bit_count);
-        const shifted_id = @intCast(u64, self.getMapping(id) orelse unreachable) << @intCast(u6, bi.offset * bi.bit_count);
+        const mask = getBitMask(self.bits_per_entry) << @as(u6, @intCast(bi.offset * bi.bit_count));
+        const shifted_id = @as(u64, @intCast(self.getMapping(id) orelse unreachable)) << @as(u6, @intCast(bi.offset * bi.bit_count));
         long.* = (long.* & ~mask) | shifted_id;
     }
 
@@ -1128,7 +1128,8 @@ pub const ChunkSection = struct {
                 const new_bpl = @divTrunc(64, new_bpe);
                 var new_data = std.ArrayList(u64).init(self.data.allocator);
                 try new_data.resize(@divTrunc(BLOCKS_PER_SECTION, new_bpl) + 1);
-                std.mem.set(u64, new_data.items, 0);
+                @memset(new_data.items, 0);
+                //std.mem.set(u64, new_data.items, 0);
 
                 var new_i: usize = 0;
                 var new_shift_i: usize = 0;
@@ -1139,8 +1140,8 @@ pub const ChunkSection = struct {
                 while (old_dat != null) : (old_dat = old_it.next()) {
                     //std.debug.print("{d} {d}: {d}\n", .{ i, new_i, new_shift_i });
                     const long = &new_data.items[new_i];
-                    const mask = getBitMask(new_bpe) << @intCast(u6, new_shift_i * new_bpe);
-                    const shifted_id = old_dat.? << @intCast(u6, new_shift_i * new_bpe);
+                    const mask = getBitMask(new_bpe) << @as(u6, @intCast(new_shift_i * new_bpe));
+                    const shifted_id = old_dat.? << @as(u6, @intCast(new_shift_i * new_bpe));
                     long.* = (long.* & ~mask) | shifted_id;
 
                     //TODO is this math correct
@@ -1155,7 +1156,7 @@ pub const ChunkSection = struct {
                 try self.mapping.append(id);
                 self.data.deinit();
                 self.data = new_data;
-                self.bits_per_entry = @intCast(u8, new_bpe);
+                self.bits_per_entry = @as(u8, @intCast(new_bpe));
                 self.setData(rx, ry, rz, id);
             } else {
                 try self.mapping.append(id);

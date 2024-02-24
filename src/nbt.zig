@@ -86,7 +86,7 @@ pub const Entry = union(Tag) {
     pub const List = struct {
         pub const Entries = std.ArrayListUnmanaged(Entry);
         // TODO: Handle lists with anytypes (I believe they exist in the wild?)
-        @"type": Tag,
+        type: Tag,
         entries: Entries,
     };
 
@@ -133,7 +133,7 @@ pub const Entry = union(Tag) {
                 try writer.writeAll("\"");
             },
             .list => |list| {
-                try writer.print("{s}, {d} entries {{", .{ @tagName(list.@"type"), list.entries.items.len });
+                try writer.print("{s}, {d} entries {{", .{ @tagName(list.type), list.entries.items.len });
                 writer.context.n += 1;
                 for (list.entries.items) |ent|
                     try writer.print("\ntag_{s}(None): {}", .{ @tagName(ent), ent });
@@ -197,13 +197,13 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
         .short => .{ .short = try reader.readIntBig(i16) },
         .int => .{ .int = try reader.readIntBig(i32) },
         .long => .{ .long = try reader.readIntBig(i64) },
-        .float => .{ .float = @bitCast(f32, try reader.readIntBig(u32)) },
-        .double => .{ .double = @bitCast(f64, try reader.readIntBig(u64)) },
+        .float => .{ .float = @as(f32, @bitCast(try reader.readIntBig(u32))) },
+        .double => .{ .double = @as(f64, @bitCast(try reader.readIntBig(u64))) },
         .byte_array => ba: {
             const len = try reader.readIntBig(i32);
             std.debug.assert(len >= 0);
-            var array = try allocator.alloc(i8, @intCast(usize, len));
-            _ = try reader.readAll(@ptrCast([]u8, array));
+            var array = try allocator.alloc(i8, @as(usize, @intCast(len)));
+            _ = try reader.readAll(@as([]u8, @ptrCast(array)));
             break :ba .{ .byte_array = array };
         },
         .string => str: {
@@ -218,13 +218,13 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
             // TODO: Handle negatives, ends
             const len = try reader.readIntBig(i32);
             std.debug.assert(len >= 0);
-            try entries.ensureTotalCapacity(allocator, @intCast(usize, len));
-            entries.items.len = @intCast(usize, len);
+            try entries.ensureTotalCapacity(allocator, @as(usize, @intCast(len)));
+            entries.items.len = @as(usize, @intCast(len));
 
             for (entries.items) |*item|
                 item.* = (try parseWithOptions(allocator, reader, false, @"type")).entry;
 
-            break :lis .{ .list = .{ .@"type" = @"type", .entries = entries } };
+            break :lis .{ .list = .{ .type = @"type", .entries = entries } };
         },
         .compound => com: {
             var hashmap = Entry.Compound{};
@@ -238,14 +238,14 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
         .int_array => ia: {
             const len = try reader.readIntBig(i32);
             std.debug.assert(len >= 0);
-            var array = try allocator.alloc(i32, @intCast(usize, len));
+            var array = try allocator.alloc(i32, @as(usize, @intCast(len)));
             for (array) |*i| i.* = try reader.readIntBig(i32);
             break :ia .{ .int_array = array };
         },
         .long_array => la: {
             const len = try reader.readIntBig(i32);
             std.debug.assert(len >= 0);
-            var array = try allocator.alloc(i64, @intCast(usize, len));
+            var array = try allocator.alloc(i64, @as(usize, @intCast(len)));
             for (array) |*i| i.* = try reader.readIntBig(i64);
             break :la .{ .long_array = array };
         },

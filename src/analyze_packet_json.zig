@@ -74,13 +74,13 @@ pub fn analyzeWalk(parent_alloc: std.mem.Allocator, dump_file_name: []const u8) 
                 var parse = parseT.init(fbs.reader(), alloc);
                 const plen = parse.varInt();
                 _ = plen;
-                const pid = @intCast(u32, parse.varInt());
+                const pid = @as(u32, @intCast(parse.varInt()));
 
                 const dstport = getVal(tcp.get("tcp.dstport") orelse continue, .String) orelse continue;
                 const srcport = getVal(tcp.get("tcp.srcport") orelse continue, .String) orelse continue;
 
                 if (eql(u8, srcport, "25565")) { //Clientbound
-                    switch (@intToEnum(ids.packet_enum, pid)) {
+                    switch (@as(ids.packet_enum, @enumFromInt(pid))) {
                         .Set_Entity_Velocity,
                         .Set_Entity_Metadata,
                         .Update_Time,
@@ -97,7 +97,7 @@ pub fn analyzeWalk(parent_alloc: std.mem.Allocator, dump_file_name: []const u8) 
                 }
 
                 if (eql(u8, dstport, "25565")) { //Serverbound
-                    switch (@intToEnum(ids.server_bound_enum, pid)) {
+                    switch (@as(ids.server_bound_enum, @enumFromInt(pid))) {
                         .Set_Player_Rotation => {},
                         .Set_Player_Position, .Set_Player_Position_and_Rotation => {
                             const x = parse.float(f64);

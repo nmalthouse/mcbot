@@ -4,13 +4,12 @@ const builtin = std.builtin;
 pub fn genEnum(comptime id_strings: []const []const u8) type {
     var enum_fields: [id_strings.len]builtin.Type.EnumField = undefined;
 
-    for (id_strings) |str, i| {
+    for (id_strings, 0..) |str, i| {
         enum_fields[i] = .{ .name = str, .value = i };
     }
 
     return @Type(builtin.Type{
         .Enum = .{
-            .layout = .Auto,
             .tag_type = usize,
             .fields = &enum_fields,
             .is_exhaustive = true,

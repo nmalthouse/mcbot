@@ -132,7 +132,7 @@ pub const AStarContext = struct {
         y: i32,
 
         pub fn queryList(s: *const S, list: []const Query) bool {
-            for (list) |item, index| {
+            for (list, 0..) |item, index| {
                 const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + index, s.z)) orelse return false).id;
                 switch (item) {
                     .walk_on => return id != 0,
@@ -141,7 +141,7 @@ pub const AStarContext = struct {
         }
 
         pub fn walkable(s: *const S, y: i32) bool {
-            return @bitCast(bool, (s.ctx.world.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false) != 0);
+            return @as(bool, @bitCast((s.ctx.world.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false) != 0));
         }
 
         pub fn canEnter(s: *const S, y: i32) bool {
@@ -149,7 +149,7 @@ pub const AStarContext = struct {
             const tag_list = [_][]const u8{ "flowers", "rails", "signs", "crops", "climbable", "buttons", "banners" };
             const fully_tag = blk: {
                 var list: [tag_list.len][]const u8 = undefined;
-                inline for (tag_list) |li, i| {
+                inline for (tag_list, 0..) |li, i| {
                     list[i] = "minecraft:" ++ li;
                 }
                 break :blk list;
@@ -246,7 +246,7 @@ pub const AStarContext = struct {
 
     pub fn findTree(self: *Self, start: V3f) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
-        try self.addOpen(.{ .x = @floatToInt(i32, start.x), .y = @floatToInt(i32, start.y), .z = @floatToInt(i32, start.z) });
+        try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
 
         while (true) {
             const current_n = self.popLowestFOpen() orelse break;
@@ -311,13 +311,13 @@ pub const AStarContext = struct {
 
         try self.reset();
         try self.addOpen(.{
-            .x = @floatToInt(i32, @floor(start.x)),
-            .y = @floatToInt(i32, @floor(start.y)),
-            .z = @floatToInt(i32, @floor(start.z)),
+            .x = @as(i32, @intFromFloat(@floor(start.x))),
+            .y = @as(i32, @intFromFloat(@floor(start.y))),
+            .z = @as(i32, @intFromFloat(@floor(start.z))),
         });
-        const gpx = @floatToInt(i32, @round(goal.x));
-        const gpy = @floatToInt(i32, @round(goal.y));
-        const gpz = @floatToInt(i32, @round(goal.z));
+        const gpx = @as(i32, @intFromFloat(@round(goal.x)));
+        const gpy = @as(i32, @intFromFloat(@round(goal.y)));
+        const gpz = @as(i32, @intFromFloat(@round(goal.z)));
 
         var i: u32 = 0;
         const ITERATION_LIMIT = 1000;
@@ -349,7 +349,7 @@ pub const AStarContext = struct {
 
     pub fn addAdjLadderNodes(self: *Self, node: *Node, goal: V3i, override_h: ?u32) !void {
         var y_offset: i32 = 1;
-        const h = if (override_h != null) override_h.? else @intCast(u32, try std.math.absInt(goal.x - (node.x)) + try std.math.absInt(goal.z - (node.z)));
+        const h = if (override_h != null) override_h.? else @as(u32, @intCast(try std.math.absInt(goal.x - (node.x)) + try std.math.absInt(goal.z - (node.z))));
         while (self.hasBlockTag("minecraft:climbable", V3i.new(node.x, node.y + y_offset, node.z))) : (y_offset += 1) {
             if (self.hasWalkableAdj(node.x, node.y + y_offset, node.z))
                 try self.addNode(.{
@@ -357,7 +357,7 @@ pub const AStarContext = struct {
                     .x = node.x,
                     .z = node.z,
                     .y = node.y + y_offset + 1,
-                    .G = node.G + @intCast(u32, try std.math.absInt(y_offset)),
+                    .G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
                     .H = h,
                     //.H = @intCast(u32, try std.math.absInt(goal.x - (node.x)) +
                     //    try std.math.absInt(goal.z - (node.z))),
@@ -372,7 +372,7 @@ pub const AStarContext = struct {
                     .x = node.x,
                     .z = node.z,
                     .y = node.y + y_offset + 1,
-                    .G = node.G + @intCast(u32, try std.math.absInt(y_offset)),
+                    .G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
                     //.H = @intCast(u32, try std.math.absInt(goal.x - (node.x)) +
                     //try std.math.absInt(goal.z - (node.z))),
                     .H = h,
@@ -421,7 +421,7 @@ pub const AStarContext = struct {
     pub fn popLowestFOpen(self: *Self) ?*Node {
         var lowest: u32 = std.math.maxInt(u32);
         var lowest_index: ?usize = null;
-        for (self.open.items) |node, i| {
+        for (self.open.items, 0..) |node, i| {
             if (node.G + (node.H * 10) < lowest) {
                 lowest = node.G + (node.H * 10);
                 lowest_index = i;
@@ -448,7 +448,7 @@ pub const AStarContext = struct {
         }
 
         for (diag_adj) |di| {
-            const li = @intCast(u32, @mod(@intCast(i32, di) - 1, 8));
+            const li = @as(u32, @intCast(@mod(@as(i32, @intCast(di)) - 1, 8)));
             const ui = @mod(di + 1, 8);
             //TODO expand this to be more inclusive
             if (acat[ui].cat == .walk and acat[li].cat == .walk) {
@@ -459,11 +459,11 @@ pub const AStarContext = struct {
             }
         }
 
-        for (acat) |cat, i| {
+        for (acat, 0..) |cat, i| {
             const avec = ADJ[i];
             const abs = std.math.absInt;
-            const h = if (override_h != null) override_h.? else @intCast(u32, try abs(@floatToInt(i32, goal.x) - (node.x + avec.x)) +
-                try abs(@floatToInt(i32, goal.z) - (node.z + avec.y)));
+            const h = if (override_h != null) override_h.? else @as(u32, @intCast(try abs(@as(i32, @intFromFloat(goal.x)) - (node.x + avec.x)) +
+                try abs(@as(i32, @intFromFloat(goal.z)) - (node.z + avec.y))));
             if (cat.cat == .blocked)
                 continue;
             if (cat.cat == .jump and block_above != 0)
@@ -481,7 +481,7 @@ pub const AStarContext = struct {
                     .ladder => 10,
                     .jump => 10,
                     .gap => 0,
-                    else => ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
+                    else => ADJ_COST[i] + node.G + @as(u32, @intCast((try std.math.absInt(cat.y_offset)) * 1)),
                 },
                 //TODO fix the hurestic
                 //.H = @intCast(u32, try std.math.absInt(@floatToInt(i32, goal.x) - (node.x + avec.x)) +
@@ -529,7 +529,7 @@ pub const AStarContext = struct {
             var i: i32 = 0;
             while (y + i >= -64) : (i -= 1) {
                 if (col.walkable(i)) {
-                    if (@intCast(u32, (std.math.absInt(i) catch unreachable)) <= max_fall_dist)
+                    if (@as(u32, @intCast((std.math.absInt(i) catch unreachable))) <= max_fall_dist)
                         return .{ .cat = .fall, .y_offset = i };
                     break;
                 }
@@ -557,20 +557,20 @@ pub const AStarContext = struct {
 
     //TODO check if it is transparent block
     pub fn isWalkable(self: *Self, x: i32, y: i32, z: i32) bool {
-        return @bitCast(bool, self.world.getBlock(x, y, z) != 0);
+        return @as(bool, @bitCast(self.world.getBlock(x, y, z) != 0));
     }
 
     pub fn hasWalkableAdj(self: *Self, x: i32, y: i32, z: i32) bool {
         var l_adj: [4][3]bool = undefined;
         const a_ind = [_]u32{ 1, 3, 5, 7 };
-        for (a_ind) |ind, i| {
+        for (a_ind, 0..) |ind, i| {
             const a_vec = ADJ[ind];
             const bx = x + a_vec.x;
             const bz = z + a_vec.y;
             const by = y;
-            l_adj[i][0] = @bitCast(bool, (self.world.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0);
-            l_adj[i][1] = @bitCast(bool, (self.world.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0);
-            l_adj[i][2] = @bitCast(bool, (self.world.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0);
+            l_adj[i][0] = @as(bool, @bitCast((self.world.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
+            l_adj[i][1] = @as(bool, @bitCast((self.world.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
+            l_adj[i][2] = @as(bool, @bitCast((self.world.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
 
             if (l_adj[i][0] and !l_adj[i][1] and !l_adj[i][2]) {
                 return true;

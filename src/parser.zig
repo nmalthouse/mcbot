@@ -54,12 +54,11 @@ pub const TypeList = [_]TypeItem{
 //needed instead of a union so that instatiation is not needed when specifing a struct by listing fields, see fn parseType
 fn genTypeListEnum(comptime list: []const TypeItem) type {
     var enum_fields: [list.len]std.builtin.Type.EnumField = undefined;
-    for (list) |it, i| {
+    for (list, 0..) |it, i| {
         enum_fields[i] = .{ .name = it.name, .value = i };
     }
     return @Type(std.builtin.Type{
         .Enum = .{
-            .layout = .Auto,
             .tag_type = usize,
             .fields = &enum_fields,
             .is_exhaustive = true,
@@ -82,10 +81,10 @@ pub fn P(comptime type_: Types, comptime name: []const u8) ParseItem {
 const parseTypeReturnType = struct { t: type, list: []const ParseItem };
 pub fn parseType(comptime parse_items: []const ParseItem) parseTypeReturnType {
     var struct_fields: [parse_items.len]std.builtin.Type.StructField = undefined;
-    for (parse_items) |item, i| {
+    for (parse_items, 0..) |item, i| {
         struct_fields[i] = .{
             .name = item.name,
-            .field_type = TypeList[@enumToInt(item.type_)].Type,
+            .type = TypeList[@intFromEnum(item.type_)].Type,
             .is_comptime = false,
             .default_value = null,
             .alignment = 0,
@@ -112,13 +111,13 @@ pub fn readVarInt(reader: anytype) i32 {
 
     while (true) {
         current_byte = reader.readByte() catch unreachable;
-        value |= @intCast(u32, current_byte & SEG) << @intCast(u5, pos);
+        value |= @as(u32, @intCast(current_byte & SEG)) << @as(u5, @intCast(pos));
         if ((current_byte & CONT) == 0) break;
         pos += 7;
         if (pos >= 32) unreachable;
     }
 
-    return @bitCast(i32, value);
+    return @as(i32, @bitCast(value));
 }
 
 pub fn packetParseCtx(comptime readerT: type) type {
@@ -138,10 +137,10 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
         fn float(self: *Self, comptime fT: type) fT {
             if (fT == f32) {
-                return @bitCast(f32, self.int(u32));
+                return @as(f32, @bitCast(self.int(u32)));
             }
             if (fT == f64) {
-                return @bitCast(f64, self.int(u64));
+                return @as(f64, @bitCast(self.int(u64)));
             }
             unreachable;
         }
@@ -149,9 +148,9 @@ pub fn packetParseCtx(comptime readerT: type) type {
         fn position(self: *Self) vector.V3i {
             const pos = self.int(i64);
             return .{
-                .x = @intCast(i32, pos >> 38),
-                .y = @intCast(i32, pos << 52 >> 52),
-                .z = @intCast(i32, pos << 26 >> 38),
+                .x = @as(i32, @intCast(pos >> 38)),
+                .y = @as(i32, @intCast(pos << 52 >> 52)),
+                .z = @as(i32, @intCast(pos << 26 >> 38)),
             };
         }
 
@@ -168,7 +167,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         fn string(self: *Self) ![]const u8 {
-            const len = @intCast(u32, readVarInt(self.reader));
+            const len = @as(u32, @intCast(readVarInt(self.reader)));
             const slice = try self.alloc.alloc(u8, len);
             try self.reader.readNoEof(slice);
             return slice;
@@ -178,19 +177,19 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const r = self.reader;
             var ret: p_type.t = undefined;
             const info = @typeInfo(p_type.t).Struct.fields;
-            inline for (p_type.list) |item, i| {
+            inline for (p_type.list, 0..) |item, i| {
                 @field(ret, info[i].name) = blk: {
                     switch (item.type_) {
                         .long, .byte, .ubyte, .short, .ushort, .int, .uuid => {
-                            break :blk self.reader.readInt(info[i].field_type, .Big) catch unreachable;
+                            break :blk self.reader.readInt(info[i].type, .Big) catch unreachable;
                         },
                         .boolean => break :blk (r.readInt(u8, .Big) catch unreachable == 0x1),
                         .string, .chat, .identifier => break :blk self.string() catch unreachable,
-                        .float, .double => break :blk self.float(info[i].field_type),
+                        .float, .double => break :blk self.float(info[i].type),
                         .varInt => break :blk readVarInt(r),
                         .position => break :blk self.position,
                         .V3f => break :blk self.v3f(),
-                        .angle => break :blk @intToFloat(f32, self.int(u8)) / (256.0 / 360.0),
+                        .angle => break :blk @as(f32, @floatFromInt(self.int(u8))) / (256.0 / 360.0),
                         .shortV3i => {
                             break :blk .{
                                 .x = self.int(i16),
@@ -201,7 +200,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
                         .stringList => {
                             const len = readVarInt(r);
-                            var strs = self.alloc.alloc([]const u8, @intCast(u32, len)) catch unreachable;
+                            var strs = self.alloc.alloc([]const u8, @as(u32, @intCast(len))) catch unreachable;
                             var n: u32 = 0;
                             while (n < len) : (n += 1) {
                                 strs[n] = self.string() catch unreachable;

@@ -1,5 +1,5 @@
 const std = @import("std");
-const ziglib = @import("ziglib/build.zig");
+const ziglib = @import("ratgraph/build.zig");
 
 pub fn build(b: *std.build.Builder) void {
     // Standard target options allows the person running `zig build` to choose
@@ -10,20 +10,22 @@ pub fn build(b: *std.build.Builder) void {
 
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
+    const mode = b.standardOptimizeOption(.{});
 
-    const exe = b.addExecutable("mcbot", "src/main.zig");
-    exe.setTarget(target);
-    exe.setBuildMode(mode);
-    exe.install();
-    exe.linkLibC();
-    exe.linkSystemLibraryName("raylib");
-    exe.linkSystemLibraryName("event");
-    exe.addIncludePath("lib");
+    const exe = b.addExecutable(.{
+        .name = "mcbot",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = mode,
+        .link_libc = true,
+    });
+    b.installArtifact(exe);
+    exe.linkSystemLibrary("event");
+    exe.addIncludePath(.{ .path = "lib" });
     //exe.addIncludePath("/usr/include");
 
-    ziglib.linkLibrary(exe);
-    ziglib.addPackage(exe, "graph");
+    const module = ziglib.module(b, exe);
+    exe.addModule("graph", module);
 
     //exe.addCSourceFiles(&.{
     //    "lib/libnbt/nbt_build.c",
@@ -32,7 +34,7 @@ pub fn build(b: *std.build.Builder) void {
     //    "lib/libnbt/nbt_utils.c",
     //}, &.{"-Wall"});
 
-    const run_cmd = exe.run();
+    const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         run_cmd.addArgs(args);
@@ -40,11 +42,4 @@ pub fn build(b: *std.build.Builder) void {
 
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
-
-    const exe_tests = b.addTest("src/main.zig");
-    exe_tests.setTarget(target);
-    exe_tests.setBuildMode(mode);
-
-    const test_step = b.step("test", "Run unit tests");
-    test_step.dependOn(&exe_tests.step);
 }

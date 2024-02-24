@@ -107,39 +107,56 @@ pub const NewDataReg = struct {
     blocks: BlocksJson,
     entities: EntitiesJson,
 
+    item_j: std.json.Parsed(ItemsJson),
+    block_j: std.json.Parsed(BlocksJson),
+    ent_j: std.json.Parsed(EntitiesJson),
+
     pub fn init(alloc: std.mem.Allocator, comptime version: []const u8) !Self {
         var cwd = std.fs.cwd();
         var data_dir = try cwd.openDir("minecraft-data/data/pc/" ++ version, .{});
         defer data_dir.close();
 
-        const version_file = try data_dir.openFile("version.json", .{});
-        defer version_file.close();
-        const version_info = try com.readJsonFd(&version_file, alloc, VersionJson);
-        com.freeJson(VersionJson, alloc, version_info);
+        var version_info = try com.readJson(data_dir, "version.json", alloc, VersionJson);
+        defer version_info.deinit();
 
-        const items_file = try data_dir.openFile("items.json", .{});
-        defer items_file.close();
-
-        const ent_file = try data_dir.openFile("entities.json", .{});
-        defer ent_file.close();
-
-        const block_file = try data_dir.openFile("blocks.json", .{});
-        defer block_file.close();
+        const items = try com.readJson(data_dir, "items.json", alloc, ItemsJson);
+        const ent = try com.readJson(data_dir, "entities.json", alloc, EntitiesJson);
+        const block = try com.readJson(data_dir, "blocks.json", alloc, BlocksJson);
 
         const ret = Self{
-            .version_id = version_info.version,
+            .version_id = version_info.value.version,
             .alloc = alloc,
-            .items = try com.readJsonFd(&items_file, alloc, ItemsJson),
-            .entities = try com.readJsonFd(&ent_file, alloc, EntitiesJson),
-            .blocks = try com.readJsonFd(&block_file, alloc, BlocksJson),
+            .items = items.value,
+            .entities = ent.value,
+            .blocks = block.value,
+
+            .item_j = items,
+            .block_j = block,
+            .ent_j = ent,
         };
         return ret;
     }
 
+    //TODO ugly, we do this
+
     pub fn deinit(self: *const Self) void {
-        com.freeJson(ItemsJson, self.alloc, self.items);
-        com.freeJson(EntitiesJson, self.alloc, self.entities);
-        com.freeJson(BlocksJson, self.alloc, self.blocks);
+        self.item_j.deinit();
+        self.block_j.deinit();
+        self.ent_j.deinit();
+    }
+};
+
+pub const DataRegContainer = struct {
+    reg: DataReg,
+    data_j: std.json.Parsed(DataReg),
+
+    pub fn init(alloc: std.mem.Allocator, dir: std.fs.Dir, filename: []const u8) !@This() {
+        const j = try com.readJson(dir, filename, alloc, DataReg);
+        return .{ .reg = j.value, .data_j = j };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        self.data_j.deinit();
     }
 };
 
@@ -187,15 +204,6 @@ pub const DataReg = struct {
         }
     };
 
-    pub fn init(alloc: std.mem.Allocator, filename: []const u8) !Self {
-        const reg = try com.readJsonFile(filename, alloc, Self);
-        return reg;
-    }
-
-    pub fn deinit(self: *const Self, alloc: std.mem.Allocator) void {
-        com.freeJson(Self, alloc, self.*);
-    }
-
     //alloc: std.mem.Allocator,
 
     blocks: []const Block, //Block information indexed by block id
@@ -225,7 +233,7 @@ pub const DataReg = struct {
         block.max_state = 0;
 
         const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
-        return @intCast(BlockId, index);
+        return @as(BlockId, @intCast(index));
     }
 
     pub fn getBlockFromState(self: *const Self, state_id: BlockId) Block {

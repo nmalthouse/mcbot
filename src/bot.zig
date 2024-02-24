@@ -34,7 +34,7 @@ pub fn quadFL(a: f64, b: f64, C: f64) ?f64 {
     const resA = (-b - @sqrt(disc)) / (2 * a);
     const resB = (-b + @sqrt(disc)) / (2 * a);
 
-    return std.math.min(resA, resB);
+    return @min(resA, resB);
 }
 
 pub fn quadFR(a: f64, b: f64, C: f64) ?f64 {
@@ -44,7 +44,7 @@ pub fn quadFR(a: f64, b: f64, C: f64) ?f64 {
     const resA = (-b - @sqrt(disc)) / (2 * a);
     const resB = (-b + @sqrt(disc)) / (2 * a);
 
-    return std.math.max(resA, resB);
+    return @max(resA, resB);
 }
 
 pub const MovementState = struct {

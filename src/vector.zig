@@ -24,9 +24,9 @@ pub fn Ivec(comptime itype: type) type {
 
         pub fn toF(a: Self) V3f {
             return .{
-                .x = @intToFloat(f64, a.x),
-                .y = @intToFloat(f64, a.y),
-                .z = @intToFloat(f64, a.z),
+                .x = @as(f64, @floatFromInt(a.x)),
+                .y = @as(f64, @floatFromInt(a.y)),
+                .z = @as(f64, @floatFromInt(a.z)),
             };
         }
     };
@@ -74,9 +74,9 @@ pub const V3f = struct {
 
     pub fn toI(a: @This()) V3i {
         return .{
-            .x = @floatToInt(i32, a.x),
-            .y = @floatToInt(i32, a.y),
-            .z = @floatToInt(i32, a.z),
+            .x = @as(i32, @intFromFloat(a.x)),
+            .y = @as(i32, @intFromFloat(a.y)),
+            .z = @as(i32, @intFromFloat(a.z)),
         };
     }
 
@@ -86,17 +86,17 @@ pub const V3f = struct {
 
     pub fn newi(x_: i64, y_: i64, z_: i64) @This() {
         return .{
-            .x = @intToFloat(f64, x_),
-            .y = @intToFloat(f64, y_),
-            .z = @intToFloat(f64, z_),
+            .x = @as(f64, @floatFromInt(x_)),
+            .y = @as(f64, @floatFromInt(y_)),
+            .z = @as(f64, @floatFromInt(z_)),
         };
     }
 
     pub fn toRay(a: @This()) c.Vector3 {
         return .{
-            .x = @floatCast(f32, a.x),
-            .y = @floatCast(f32, a.y),
-            .z = @floatCast(f32, a.z),
+            .x = @as(f32, @floatCast(a.x)),
+            .y = @as(f32, @floatCast(a.y)),
+            .z = @as(f32, @floatCast(a.z)),
         };
     }
 

@@ -67,10 +67,10 @@ pub const McAtlas = struct {
     pub fn getTextureRec(self: *const @This(), protocol_id: u32) graph.Rect {
         const atlas_id = self.protocol_id_to_atlas_map[protocol_id];
         return graph.Rec(
-            @intToFloat(f32, (atlas_id % self.entry_span) * self.entry_w),
-            @intToFloat(f32, (atlas_id / self.entry_span) * self.entry_w),
-            @intToFloat(f32, self.entry_w),
-            @intToFloat(f32, self.entry_w),
+            @as(f32, @floatFromInt((atlas_id % self.entry_span) * self.entry_w)),
+            @as(f32, @floatFromInt((atlas_id / self.entry_span) * self.entry_w)),
+            @as(f32, @floatFromInt(self.entry_w)),
+            @as(f32, @floatFromInt(self.entry_w)),
         );
     }
 
@@ -116,7 +116,7 @@ pub fn buildAtlas(alloc: std.mem.Allocator) !McAtlas {
         }
 
         const entry_w = 16;
-        const width = @floatToInt(u32, @ceil(@sqrt(@intToFloat(f32, pngs.items.len))));
+        const width = @as(u32, @intFromFloat(@ceil(@sqrt(@as(f32, @floatFromInt(pngs.items.len))))));
         var atlas_bitmap = try graph.Bitmap.initBlank(alloc, width * entry_w, width * entry_w);
         defer atlas_bitmap.data.deinit();
 
@@ -138,7 +138,7 @@ pub fn buildAtlas(alloc: std.mem.Allocator) !McAtlas {
         var atlas_index: usize = 0;
         for (json) |block| {
             try matches.resize(0);
-            for (pngs.items) |png_file, pi| {
+            for (pngs.items, 0..) |png_file, pi| {
                 const idiff = std.mem.indexOfDiff(u8, png_file, block.name);
                 if (idiff == block.name.len)
                     try matches.append(.{ .index = pi, .len = png_file.len });
@@ -160,10 +160,10 @@ pub fn buildAtlas(alloc: std.mem.Allocator) !McAtlas {
                     entry_w,
                     entry_w,
                     &atlas_bitmap,
-                    @intCast(u32, (atlas_index % width) * entry_w),
-                    @intCast(u32, (atlas_index / width) * entry_w),
+                    @as(u32, @intCast((atlas_index % width) * entry_w)),
+                    @as(u32, @intCast((atlas_index / width) * entry_w)),
                 );
-                proto_map.items[block.id] = @intCast(u16, atlas_index);
+                proto_map.items[block.id] = @as(u16, @intCast(atlas_index));
 
                 atlas_index += 1;
             } else {

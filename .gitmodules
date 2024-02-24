@@ -1,0 +1,3 @@
+[submodule "ratgraph"]
+	path = ratgraph
+	url = gitlab:/nmalthouse/ratgraph.git
