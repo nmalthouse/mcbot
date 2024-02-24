@@ -340,7 +340,7 @@ pub const AStarContext = struct {
                 return actions;
             }
 
-            //try self.addAdjLadderNodes(current_n, goal.toI(), null);
+            try self.addAdjLadderNodes(current_n, goal.toI(), null);
             try self.addAdjNodes(current_n, goal, null);
         }
         std.debug.print("ITERATION LIMIT EXCEEDED\n", .{});
@@ -534,19 +534,20 @@ pub const AStarContext = struct {
                     break;
                 }
             }
-            _ = adj_i;
-            //If nothing found yet check if we can jump across a gap
-            //if (adj_i % 2 != 0) { //odd adj_i are cardinal directions
-            //    const max_gap_dist = 3;
-            //    var gi: i32 = 1;
-            //    while (gi <= max_gap_dist) : (gi += 1) {
-            //        const jcol = ColumnHelper{ .x = x + (ADJ[adj_i].x * gi), .z = z + (ADJ[adj_i].y * gi), .y = y, .ctx = self };
-            //        if (jcol.canEnter(1) and jcol.canEnter(2) and jcol.canEnter(3)) {
-            //            if (jcol.walkable(0))
-            //                return .{ .cat = .gap, .gap = gi };
-            //        }
-            //    }
-            //}
+            //Can we jump across this?
+            if (!head_blocked and col.canEnter(1) and col.canEnter(2) and col.canEnter(3)) {
+                if (adj_i % 2 != 0) { //odd adj_i are cardinal directions
+                    const max_gap_dist = 3;
+                    var gi: i32 = 1;
+                    while (gi <= max_gap_dist) : (gi += 1) {
+                        const jcol = ColumnHelper{ .x = x + (ADJ[adj_i].x * gi), .z = z + (ADJ[adj_i].y * gi), .y = y, .ctx = self };
+                        if (jcol.canEnter(1) and jcol.canEnter(2) and jcol.canEnter(3)) {
+                            if (jcol.walkable(0))
+                                return .{ .cat = .gap, .gap = gi };
+                        }
+                    }
+                }
+            }
         }
         return .{ .cat = .blocked };
     }

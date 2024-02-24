@@ -877,11 +877,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     }
 }
 
-pub fn simpleBotScript(alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld, reg: *const Reg.DataReg) !void {
-    const pos1 = graph.Vec3f.new(-226, 68, 206);
-    _ = pos1;
-    const pos2 = graph.Vec3f.new(-236, 70, 204);
-    _ = pos2;
+pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld, reg: *const Reg.DataReg) !void {
+    const disable = false;
+    const locations = [_]V3f{
+        V3f.new(-225, 68, 209),
+        //V3f.new(-236, 69, 204),
+        //V3f.new(-230, 75, 202),
+        V3f.new(-232, 72, 214),
+        V3f.new(-231, 72, 208),
+        V3f.new(-222, 72, 202),
+    };
+    var location_index: usize = 0;
     var bot_command_index: u32 = 0;
     while (true) {
         thread_data.lock(.script_thread);
@@ -891,18 +897,26 @@ pub fn simpleBotScript(alloc: std.mem.Allocator, thread_data: *bot.BotScriptThre
             return;
         }
 
-        //Fake a coroutine implementation
+        defer bot_command_index += 1;
+        defer std.time.sleep(std.time.ns_per_s / 10); //This sleep is here so updateBots has time to tryLock()
+        defer thread_data.unlock(.script_thread);
+        if (disable)
+            continue;
+        //Fake a coroutine
         switch (bot_command_index) {
             1 => {
                 var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
-                errdefer pathctx.deinit();
+                defer pathctx.deinit();
+                bo.modify_mutex.lock();
+                const found = try pathctx.pathfind(bo.pos.?, locations[location_index]);
+                location_index = (location_index + 1) % locations.len;
+                if (found) |*actions|
+                    thread_data.setActions(actions.*, bo.pos.?);
+                bo.modify_mutex.unlock();
             },
             2 => std.time.sleep(std.time.ns_per_s),
-            3 => {},
-            4 => std.time.sleep(std.time.ns_per_s),
             else => bot_command_index = 0,
         }
-        bot_command_index += 1;
     }
 }
 
@@ -916,7 +930,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
     var b1_thread_data = bot.BotScriptThreadData.init(alloc);
     defer b1_thread_data.deinit();
     b1_thread_data.lock(.bot_thread);
-    const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ alloc, &b1_thread_data, world, reg });
+    const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world, reg });
     defer b1_thread.join();
 
     while (true) {
@@ -930,23 +944,22 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 
         var skip_ticks: i32 = 0;
 
-        {
+        //The scriptThread will be blocked whenever we are in this block until we notify we need more actions by unlocking
+        if (b1_thread_data.trylock(.bot_thread)) {
             var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
             defer bp.deinit();
             bo.modify_mutex.lock();
             defer bo.modify_mutex.unlock();
-            //const pw = mc.lookAtBlock(bo.pos.?, V3f.new(-0.3, 1, -0.3));
-            //try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, true);
             if (!bo.handshake_complete)
                 continue;
 
             const dt: f64 = 1.0 / 20.0;
-            //const speed = 4.317;
             if (skip_ticks > 0) {
                 skip_ticks -= 1;
             } else {
-                if (bo.action_index) |action| {
-                    switch (bo.action_list.items[action]) {
+                const bt = &b1_thread_data;
+                if (bt.action_index) |action| {
+                    switch (bt.actions.items[action]) {
                         .movement => |move_| {
                             var move = move_;
                             var adt = dt;
@@ -954,26 +967,28 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                             var moved = false;
                             var pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
                             while (true) {
-                                var move_vec = bo.move_state.update(adt);
+                                var move_vec = bt.move_state.update(adt);
                                 grounded = move_vec.grounded;
 
                                 bo.pos = move_vec.new_pos;
                                 moved = true;
 
                                 if (move_vec.move_complete) {
-                                    bo.nextAction(move_vec.remaining_dt);
-                                    if (bo.action_index) |new_acc| {
-                                        if (bo.action_list.items[new_acc] != .movement) {
+                                    bt.nextAction(move_vec.remaining_dt, bo.pos.?);
+                                    if (bt.action_index) |new_acc| {
+                                        if (bt.actions.items[new_acc] != .movement) {
                                             break;
-                                        } else if (bo.action_list.items[new_acc].movement.kind == .jump and move.kind == .jump) {
-                                            bo.move_state.time = 0;
+                                        } else if (bt.actions.items[new_acc].movement.kind == .jump and move.kind == .jump) {
+                                            bt.move_state.time = 0;
                                             skip_ticks = 100;
                                             break;
                                         }
                                     } else {
+                                        bt.unlock(.bot_thread); //We have no more left so notify
                                         break;
                                     }
                                 } else {
+                                    //TODO signal error
                                     break;
                                 }
                                 //move_vec = //above switch statement
@@ -1005,6 +1020,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                             //}
                         },
                     }
+                } else {
+                    bt.unlock(.bot_thread);
                 }
             }
         }

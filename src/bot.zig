@@ -193,7 +193,26 @@ pub const MovementState = struct {
                     };
                 }
             },
-            .ladder => {},
+            .ladder => {
+                const climb_speed = 3;
+                if (mvec.magnitude() != 0) unreachable; //we can only climb up or down
+                const max_t = @fabs(iv.y) / climb_speed;
+                if (max_t < self.time + dt) {
+                    const r = (self.time + dt) - max_t;
+                    self.time = max_t;
+                    return MoveResult{
+                        .remaining_dt = r,
+                        .move_complete = true,
+                        .new_pos = self.final_pos,
+                    };
+                }
+                self.time += dt;
+                return MoveResult{
+                    .remaining_dt = 0,
+                    .move_complete = false,
+                    .new_pos = self.init_pos.add(V3f.new(0, iv.y, 0).getUnitVec().smul(climb_speed * self.time)),
+                };
+            },
         }
         unreachable;
     }
@@ -302,11 +321,12 @@ pub const BotScriptThreadData = struct {
     const Owner = enum { bot_thread, script_thread, none };
     //this is written by updateBotsThread and read by scriptThread
     u_status: enum { actions_empty, actions_error, terminate_thread },
+    mutex: std.Thread.Mutex,
+    owner: Owner,
 
     actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
     action_index: ?usize = null,
-    mutex: std.Thread.Mutex,
-    owner: Owner,
+    move_state: MovementState = undefined,
 
     pub fn init(alloc: std.mem.Allocator) Self {
         return .{
@@ -325,6 +345,15 @@ pub const BotScriptThreadData = struct {
         self.owner = new_owner;
     }
 
+    pub fn trylock(self: *Self, new_owner: Owner) bool {
+        if (self.owner == new_owner)
+            return true;
+        const can_lock = self.mutex.tryLock();
+        if (can_lock)
+            self.owner = new_owner;
+        return can_lock;
+    }
+
     pub fn unlock(self: *Self, owner: Owner) void {
         if (self.owner == owner) {
             self.owner = .none;
@@ -337,6 +366,27 @@ pub const BotScriptThreadData = struct {
 
     pub fn deinit(self: *Self) void {
         self.actions.deinit();
+    }
+
+    pub fn nextAction(self: *Self, init_dt: f64, pos: V3f) void {
+        if (self.action_index == null)
+            return;
+        self.action_index = if (self.action_index.? == 0) null else self.action_index.? - 1;
+        if (self.action_index) |act| {
+            switch (self.actions.items[act]) {
+                .movement => |mov| {
+                    self.move_state = MovementState.init(pos, mov.pos, init_dt, mov.kind);
+                },
+                else => {},
+            }
+        }
+    }
+
+    pub fn setActions(self: *Self, new_list: std.ArrayList(astar.AStarContext.PlayerActionItem), pos: V3f) void {
+        self.actions.deinit();
+        self.actions = new_list;
+        self.action_index = new_list.items.len;
+        self.nextAction(0, pos);
     }
 };
 
