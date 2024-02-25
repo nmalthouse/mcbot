@@ -144,7 +144,7 @@ pub const PacketParse = struct {
     }
 };
 
-pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld, reg: *const Reg.DataReg) !void {
+pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
@@ -708,7 +708,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 try m_wr.print("Items: ", .{});
                 for (bot1.inventory) |optslot| {
                     if (optslot) |slot| {
-                        const itemd = reg.getItem(slot.item_id);
+                        const itemd = world.reg.getItem(slot.item_id);
                         try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
                     }
                 }
@@ -717,7 +717,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 try m_wr.print("Items: ", .{});
                 for (bot1.interacted_inventory.slots.items) |optslot| {
                     if (optslot) |slot| {
-                        const itemd = reg.getItem(slot.item_id);
+                        const itemd = world.reg.getItem(slot.item_id);
                         try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
                     }
                 }
@@ -805,11 +805,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 const qb = (try parseCoord(&it)).toI();
                 const bid = world.chunk_data.getBlock(qb) orelse 0;
                 try m_wr.print("Block {s} id: {d}", .{
-                    reg.getBlockFromState(bid).name,
+                    world.reg.getBlockFromState(bid).name,
                     bid,
                 });
                 try pctx.sendChat(ret_msg_buf.items);
-                std.debug.print("{}", .{reg.getBlockFromState(bid)});
+                std.debug.print("{}", .{world.reg.getBlockFromState(bid)});
                 //try pctx.sendChat(m_fbs.getWritten());
             }
         },
@@ -819,7 +819,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     }
 }
 
-pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld, reg: *const Reg.DataReg) !void {
+pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
     const disable = false;
     const locations = [_]V3f{
         V3f.new(-225, 68, 209),
@@ -848,7 +848,7 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
         //Fake a coroutine
         switch (bot_command_index) {
             1 => {
-                var pathctx = astar.AStarContext.init(alloc, world, &world.tag_table, reg);
+                var pathctx = astar.AStarContext.init(alloc, world);
                 defer pathctx.deinit();
                 bo.modify_mutex.lock();
                 const found = try pathctx.pathfind(bo.pos.?, locations[location_index]);
@@ -872,7 +872,7 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
     }
 }
 
-pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, exit_mutex: *std.Thread.Mutex) !void {
+pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Thread.Mutex) !void {
     var bot_it_1 = world.bots.iterator();
     const bot1 = bot_it_1.next();
     if (bot1 == null)
@@ -882,7 +882,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
     var b1_thread_data = bot.BotScriptThreadData.init(alloc);
     defer b1_thread_data.deinit();
     b1_thread_data.lock(.bot_thread);
-    const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world, reg });
+    const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world });
     defer b1_thread.join();
 
     var skip_ticks: i32 = 0;
@@ -989,7 +989,6 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
 pub fn basicPathfindThread(
     alloc: std.mem.Allocator,
     world: *McWorld,
-    reg: *const Reg.DataReg,
     start: V3f,
     goal: V3f,
     bot_handle: i32,
@@ -997,7 +996,7 @@ pub fn basicPathfindThread(
     return_ctx: *?astar.AStarContext,
 ) !void {
     std.debug.print("PATHFIND CALLED \n", .{});
-    var pathctx = astar.AStarContext.init(alloc, world, &world.tag_table, reg);
+    var pathctx = astar.AStarContext.init(alloc, world);
     errdefer pathctx.deinit();
 
     const found = try pathctx.pathfind(start, goal);
@@ -1026,7 +1025,7 @@ pub fn basicPathfindThread(
     std.debug.print("PATHFIND FINISHED\n", .{});
 }
 
-pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.DataReg, bot_fd: i32) !void {
+pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void {
     var win = try graph.SDL.Window.createWindow("Debug mcbot Window", .{});
     defer win.destroyWindow();
     var ctx = try graph.GraphicsContext.init(alloc, 163);
@@ -1071,7 +1070,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
     defer cubes.deinit();
 
     const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
-    const grass_block_id = reg.getBlockFromName("grass_block");
+    const grass_block_id = world.reg.getBlockFromName("grass_block");
 
     var gctx = graph.NewCtx.init(alloc, 123);
     defer gctx.deinit();
@@ -1177,7 +1176,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                 bot1.modify_mutex.lock();
                                 bot1.action_index = null;
 
-                                _ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, reg, bot1.pos.?, pi.toF().add(V3f.new(0, 1, 0)), bot1.fd, &astar_ctx_mutex, &astar_ctx });
+                                _ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, bot1.pos.?, pi.toF().add(V3f.new(0, 1, 0)), bot1.fd, &astar_ctx_mutex, &astar_ctx });
                                 bot1.modify_mutex.unlock();
                             }
 
@@ -1213,7 +1212,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                 while (i < 16 * 16 * 16) : (i += 1) {
                                     const block = sec.getBlockFromIndex(i);
                                     const itc = graph.itc;
-                                    const bid = reg.getBlockIdFromState(block.block);
+                                    const bid = world.reg.getBlockIdFromState(block.block);
                                     if (bid == 0)
                                         continue;
                                     const colors = if (bid == grass_block_id) [_]graph.CharColor{itc(0x77c05aff)} ** 6 else null;
@@ -1380,9 +1379,9 @@ pub fn main() !void {
     var world = McWorld.init(alloc, &dr);
     defer world.deinit();
 
-    var creg = try Reg.DataRegContainer.init(alloc, std.fs.cwd(), "mcproto/converted/all.json");
-    defer creg.deinit();
-    const reg = creg.reg;
+    //var creg = try Reg.DataRegContainer.init(alloc, std.fs.cwd(), "mcproto/converted/all.json");
+    //defer creg.deinit();
+    //const reg = creg.reg;
 
     var event_structs: [bot_names.len]std.os.linux.epoll_event = undefined;
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
@@ -1400,7 +1399,7 @@ pub fn main() !void {
 
     var update_bots_exit_mutex: std.Thread.Mutex = .{};
     update_bots_exit_mutex.lock();
-    const update_hand = try std.Thread.spawn(.{}, updateBots, .{ alloc, &world, &reg, &update_bots_exit_mutex });
+    const update_hand = try std.Thread.spawn(.{}, updateBots, .{ alloc, &world, &update_bots_exit_mutex });
     defer update_hand.join();
 
     var events: [256]std.os.linux.epoll_event = undefined;
@@ -1410,7 +1409,7 @@ pub fn main() !void {
     defer tb.buf.deinit();
 
     if (draw) {
-        const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, &reg, bot_fd });
+        const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
         draw_thread.detach();
     }
 
@@ -1434,7 +1433,7 @@ pub fn main() !void {
                     update_bots_exit_mutex.unlock();
                     run = false;
                 } else if (eql(u8, "draw", key)) {
-                    const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, &reg, bot_fd });
+                    const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
                     draw_thread.detach();
                 } else if (eql(u8, "query", key)) {
                     if (itt.next()) |tag_type| {
@@ -1505,7 +1504,7 @@ pub fn main() !void {
                                 unreachable;
 
                             if (nr == num_left_to_read) {
-                                try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pp.buf.items, &world, &reg);
+                                try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pp.buf.items, &world);
                                 //const node = alloc.create(QType.Node) catch |err| break :blk err;
                                 //node.* = .{ .prev = null, .next = null, .data = .{ .fd = eve.data.fd, .buf = pp.buf.toOwnedSlice() } };
                                 //q.put(node);
@@ -1522,7 +1521,7 @@ pub fn main() !void {
                                 unreachable;
 
                             if (nr == num_left_to_read) {
-                                try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pbuf[0 .. pp.data_len.? + pp.len_len.?], &world, &reg);
+                                try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pbuf[0 .. pp.data_len.? + pp.len_len.?], &world);
                                 bytes_read += pp.data_len.?;
                                 try pp.reset();
 

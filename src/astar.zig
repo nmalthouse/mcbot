@@ -143,14 +143,13 @@ pub const AStarContext = struct {
         y: i32,
 
         pub fn walkable(s: *const S, y: i32) bool {
-            const id = s.ctx.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false);
+            const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false);
             return s.ctx.world.reg.isBlockCollidable(id.id);
-            //return id.id != 0 and !s.ctx.hasAnyTagFrom("minecraft:block", &Transparent, V3i.new(s.x, s.y + y, s.z));
         }
 
         pub fn canEnter(s: *const S, y: i32) bool {
-            const id = s.ctx.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
-            return !s.ctx.world.reg.isBlockCollidable(id) or s.ctx.tag_table.hasTag(
+            const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
+            return !s.ctx.world.reg.isBlockCollidable(id) or s.ctx.world.tag_table.hasTag(
                 id,
                 "minecraft:block",
                 "minecraft:climbable",
@@ -164,21 +163,16 @@ pub const AStarContext = struct {
 
     alloc: std.mem.Allocator,
     world: *McWorld,
-    //world: *mc.ChunkMap,
-    reg: *const Reg,
-    tag_table: *mc.TagRegistry,
 
     open: std.ArrayList(*Node),
     closed: std.ArrayList(*Node),
 
-    pub fn init(alloc: std.mem.Allocator, world: *McWorld, tag_table: *mc.TagRegistry, reg: *const Reg) Self {
+    pub fn init(alloc: std.mem.Allocator, world: *McWorld) Self {
         return Self{
             .open = std.ArrayList(*Node).init(alloc),
             .closed = std.ArrayList(*Node).init(alloc),
             .world = world,
             .alloc = alloc,
-            .tag_table = tag_table,
-            .reg = reg,
         };
     }
 
@@ -216,7 +210,7 @@ pub const AStarContext = struct {
                     }
                 }
                 if (is_tree) {
-                    const block_info = self.reg.getBlockFromState(self.world.chunk_data.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse continue);
+                    const block_info = self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse continue);
                     var parent: ?*AStarContext.Node = current_n;
                     //try move_vecs.resize(0);
                     var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
@@ -493,16 +487,16 @@ pub const AStarContext = struct {
     }
 
     pub fn hasAnyTagFrom(self: *const Self, namespace: []const u8, tags: []const []const u8, pos: V3i) bool {
-        const block = self.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false);
+        const block = self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false);
         for (tags) |tag| {
-            if (self.tag_table.hasTag(block.id, namespace, tag))
+            if (self.world.tag_table.hasTag(block.id, namespace, tag))
                 return true;
         }
         return false;
     }
 
     pub fn hasBlockTag(self: *const Self, tag: []const u8, pos: V3i) bool {
-        return (self.tag_table.hasTag(self.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false).id, "minecraft:block", tag));
+        return (self.world.tag_table.hasTag(self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false).id, "minecraft:block", tag));
     }
 
     //TODO check if it is transparent block

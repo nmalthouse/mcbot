@@ -44,12 +44,13 @@ const VersionJson = struct {
     majorVersion: []const u8,
 };
 
-pub const ItemsJson = []const struct {
+pub const Item = struct {
     id: ItemId,
     name: []const u8,
     stackSize: u8,
     //displayName: []const u8,
 };
+pub const ItemsJson = []const Item;
 
 pub const EntitiesJson = []const struct {
     id: u8,
@@ -61,7 +62,7 @@ pub const EntitiesJson = []const struct {
 };
 
 //TODO get materials to work, currently causes memory leak with default json.parse
-pub const BlocksJson = []const struct {
+pub const Block = struct {
     pub const BoundingBox = enum(u8) {
         empty,
         block,
@@ -96,14 +97,20 @@ pub const BlocksJson = []const struct {
     transparent: bool,
 
     //filterLight: u8, not relevent
-        fn compareStateIds(ctx: u8, key: BlocksJson, actual: BlocksJson) std.math.Order {
-            _ = ctx;
-            if (key.minStateId >= actual.minStateId and key.minStateId <= actual.maxStateId) return .eq;
-            if (key.minStateId > actual.maxStateId) return .gt;
-            if (key.minStateId < actual.minStateId) return .lt;
-            return .eq;
-        }
+    fn compareStateIds(ctx: u8, key: Block, actual: Block) std.math.Order {
+        _ = ctx;
+        if (key.minStateId >= actual.minStateId and key.minStateId <= actual.maxStateId) return .eq;
+        if (key.minStateId > actual.maxStateId) return .gt;
+        if (key.minStateId < actual.minStateId) return .lt;
+        return .eq;
+    }
+
+    fn asc(ctx: void, lhs: @This(), rhs: @This()) bool {
+        _ = ctx;
+        return lhs.id < rhs.id;
+    }
 };
+pub const BlocksJson = []Block;
 
 pub const NewDataReg = struct {
     const Self = @This();
@@ -138,6 +145,7 @@ pub const NewDataReg = struct {
                 try empty.append(b.id);
         }
         std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
+        std.sort.heap(Block, block.value, {}, Block.asc);
 
         const ret = Self{
             .version_id = version_info.value.version,
@@ -172,79 +180,12 @@ pub const NewDataReg = struct {
 
     pub fn getBlockFromState(self: *const Self, state_id: StateId) Block {
         var block: Block = undefined;
-        block.min_state = state_id;
-        block.max_state = 0;
+        block.minStateId = state_id;
+        block.maxStateId = 0;
 
         const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
         return self.blocks[index];
     }
-};
-
-//TODO
-//should we remove the old datareg in favor of NEW. why do two even exist
-pub const DataRegContainer = struct {
-    reg: DataReg,
-    data_j: std.json.Parsed(DataReg),
-
-    pub fn init(alloc: std.mem.Allocator, dir: std.fs.Dir, filename: []const u8) !@This() {
-        const j = try com.readJson(dir, filename, alloc, DataReg);
-        return .{ .reg = j.value, .data_j = j };
-    }
-
-    pub fn deinit(self: *@This()) void {
-        self.data_j.deinit();
-    }
-};
-
-//This structure should contain all data related to minecraft required for our bot
-pub const DataReg = struct {
-    const Self = @This();
-
-    pub const Material = struct {
-        pub const Tool = struct {
-            item_id: ItemId,
-            multiplier: f32,
-        };
-
-        name: []const u8,
-        tools: []const Tool,
-    };
-
-    pub const Item = struct {
-        id: ItemId,
-        name: []const u8,
-        stack_size: u8,
-    };
-
-    pub const Block = struct {
-        id: BlockId,
-        name: []const u8,
-        hardness: f32,
-        resistance: f32,
-        stack_size: u8,
-        diggable: bool,
-        material_i: u8,
-        transparent: bool,
-        default_state: BlockId,
-        min_state: BlockId,
-        max_state: BlockId,
-        drops: []const ItemId,
-        //TODO handle block states
-
-        fn compareStateIds(ctx: u8, key: Block, actual: Block) std.math.Order {
-            _ = ctx;
-            if (key.min_state >= actual.min_state and key.min_state <= actual.max_state) return .eq;
-            if (key.min_state > actual.max_state) return .gt;
-            if (key.min_state < actual.min_state) return .lt;
-            return .eq;
-        }
-    };
-
-    //alloc: std.mem.Allocator,
-
-    blocks: []const Block, //Block information indexed by block id
-    materials: []const Material, //indexed by material id
-    items: []const Item,
 
     pub fn getItem(self: *const Self, id: ItemId) Item {
         return self.items[id];
@@ -263,21 +204,109 @@ pub const DataReg = struct {
         return null;
     }
 
-    pub fn getBlockIdFromState(self: *const Self, state_id: BlockId) BlockId {
-        var block: Block = undefined;
-        block.min_state = state_id;
-        block.max_state = 0;
-
-        const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
-        return @as(BlockId, @intCast(index));
-    }
-
-    pub fn getBlockFromState(self: *const Self, state_id: BlockId) Block {
-        var block: Block = undefined;
-        block.min_state = state_id;
-        block.max_state = 0;
-
-        const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
-        return self.blocks[index];
+    pub fn getBlockIdFromState(self: *const Self, state_id: StateId) BlockId {
+        return self.getBlockFromState(state_id).id;
     }
 };
+
+//TODO
+//should we remove the old datareg in favor of NEW. why do two even exist
+//pub const DataRegContainer = struct {
+//    reg: DataReg,
+//    data_j: std.json.Parsed(DataReg),
+//
+//    pub fn init(alloc: std.mem.Allocator, dir: std.fs.Dir, filename: []const u8) !@This() {
+//        const j = try com.readJson(dir, filename, alloc, DataReg);
+//        return .{ .reg = j.value, .data_j = j };
+//    }
+//
+//    pub fn deinit(self: *@This()) void {
+//        self.data_j.deinit();
+//    }
+//};
+
+//This structure should contain all data related to minecraft required for our bot
+//pub const DataReg = struct {
+//    const Self = @This();
+//
+//    pub const Material = struct {
+//        pub const Tool = struct {
+//            item_id: ItemId,
+//            multiplier: f32,
+//        };
+//
+//        name: []const u8,
+//        tools: []const Tool,
+//    };
+//
+//    pub const Item = struct {
+//        id: ItemId,
+//        name: []const u8,
+//        stack_size: u8,
+//    };
+//
+//    pub const Block = struct {
+//        id: BlockId,
+//        name: []const u8,
+//        hardness: f32,
+//        resistance: f32,
+//        stack_size: u8,
+//        diggable: bool,
+//        material_i: u8,
+//        transparent: bool,
+//        default_state: BlockId,
+//        min_state: BlockId,
+//        max_state: BlockId,
+//        drops: []const ItemId,
+//        //TODO handle block states
+//
+//        fn compareStateIds(ctx: u8, key: Block, actual: Block) std.math.Order {
+//            _ = ctx;
+//            if (key.min_state >= actual.min_state and key.min_state <= actual.max_state) return .eq;
+//            if (key.min_state > actual.max_state) return .gt;
+//            if (key.min_state < actual.min_state) return .lt;
+//            return .eq;
+//        }
+//    };
+//
+//    //alloc: std.mem.Allocator,
+//
+//    blocks: []const Block, //Block information indexed by block id
+//    materials: []const Material, //indexed by material id
+//    items: []const Item,
+//
+//    pub fn getItem(self: *const Self, id: ItemId) Item {
+//        return self.items[id];
+//    }
+//
+//    pub fn getBlock(self: *const Self, id: BlockId) Block {
+//        return self.blocks[id];
+//    }
+//
+//    pub fn getBlockFromName(self: *const Self, name: []const u8) ?BlockId {
+//        for (self.blocks) |block| {
+//            if (std.mem.eql(u8, block.name, name)) {
+//                return block.id;
+//            }
+//        }
+//        return null;
+//    }
+//
+//    pub fn getBlockIdFromState(self: *const Self, state_id: BlockId) BlockId {
+//        var block: Block = undefined;
+//        block.min_state = state_id;
+//        block.max_state = 0;
+//
+//        const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
+//        return @as(BlockId, @intCast(index));
+//    }
+//
+//    pub fn getBlockFromState(self: *const Self, state_id: BlockId) Block {
+//        var block: Block = undefined;
+//        block.min_state = state_id;
+//        block.max_state = 0;
+//
+//        const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
+//        return self.blocks[index];
+//    }
+//};
