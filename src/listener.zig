@@ -466,11 +466,17 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const pxz = self.int(u8);
             const y = self.int(i16);
             const btype = self.varInt();
-            const nbt = nbt_zig.parse(self.alloc, self.reader) catch unreachable;
-            _ = nbt;
+            const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
+            var tracker = tr.init(self.alloc, self.reader);
+            const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
+            std.debug.print("BID {d}\n", .{btype});
+            if (tracker.buffer.items.len > 1) {
+                std.debug.print("NBT: {s}\n", .{nbt.name.?});
+                nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
+            }
             _ = pxz;
             _ = y;
-            _ = btype;
+            //_ = btype;
             return 0;
         }
 
@@ -486,9 +492,10 @@ pub fn packetParseCtx(comptime readerT: type) type {
                 var tracker = tr.init(self.alloc, self.reader);
 
                 const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
-                _ = nbt;
                 if (tracker.buffer.items.len > 1) {
                     s.nbt_buffer = tracker.buffer.items;
+                    std.debug.print("NBT: {s}\n", .{nbt.name.?});
+                    nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
                 }
 
                 return s;

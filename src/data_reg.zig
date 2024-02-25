@@ -1,5 +1,6 @@
 const std = @import("std");
 const com = @import("common.zig");
+const J = std.json;
 
 //Parsing protocol.json to generate required code
 //At comptime json.parse protocol.json
@@ -35,6 +36,7 @@ const com = @import("common.zig");
 // [P] blocks.json
 
 pub const ItemId = u16;
+pub const EntId = u8;
 pub const BlockId = u16; //TODO block id can be made much smaller
 pub const StateId = u16;
 
@@ -44,6 +46,8 @@ const VersionJson = struct {
     majorVersion: []const u8,
 };
 
+pub const MaterialsJson = J.ArrayHashMap(J.ArrayHashMap(f32));
+
 pub const Item = struct {
     id: ItemId,
     name: []const u8,
@@ -52,14 +56,28 @@ pub const Item = struct {
 };
 pub const ItemsJson = []const Item;
 
-pub const EntitiesJson = []const struct {
+pub const Entity = struct {
     id: u8,
     internalId: u8,
     name: []const u8,
     width: f32,
     height: f32,
     type: []const u8,
+
+    fn compareIds(ctx: u8, key: Entity, actual: Entity) std.math.Order {
+        _ = ctx;
+        if (key.id == actual.id) return .eq;
+        if (key.id > actual.id) return .gt;
+        if (key.id < actual.id) return .lt;
+        return .eq;
+    }
+
+    fn asc(ctx: void, lhs: @This(), rhs: @This()) bool {
+        _ = ctx;
+        return lhs.id < rhs.id;
+    }
 };
+pub const EntitiesJson = []const Entity;
 
 //TODO get materials to work, currently causes memory leak with default json.parse
 pub const Block = struct {
@@ -120,12 +138,14 @@ pub const NewDataReg = struct {
     items: ItemsJson,
     blocks: BlocksJson,
     entities: EntitiesJson,
+    materials: MaterialsJson,
 
     empty_block_ids: std.ArrayList(BlockId),
 
     item_j: std.json.Parsed(ItemsJson),
     block_j: std.json.Parsed(BlocksJson),
     ent_j: std.json.Parsed(EntitiesJson),
+    mat_j: J.Parsed(MaterialsJson),
 
     pub fn init(alloc: std.mem.Allocator, comptime version: []const u8) !Self {
         var cwd = std.fs.cwd();
@@ -138,6 +158,7 @@ pub const NewDataReg = struct {
         const items = try com.readJson(data_dir, "items.json", alloc, ItemsJson);
         const ent = try com.readJson(data_dir, "entities.json", alloc, EntitiesJson);
         const block = try com.readJson(data_dir, "blocks.json", alloc, BlocksJson);
+        const mat = try com.readJson(data_dir, "materials.json", alloc, MaterialsJson);
 
         var empty = std.ArrayList(BlockId).init(alloc);
         for (block.value) |b| {
@@ -147,15 +168,19 @@ pub const NewDataReg = struct {
         std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
         std.sort.heap(Block, block.value, {}, Block.asc);
 
+        //std.sort.heap(Entity, ent.value, {}, Entity.asc);
+
         const ret = Self{
             .version_id = version_info.value.version,
             .alloc = alloc,
             .items = items.value,
             .entities = ent.value,
             .blocks = block.value,
+            .materials = mat.value,
             .empty_block_ids = empty,
 
             .item_j = items,
+            .mat_j = mat,
             .block_j = block,
             .ent_j = ent,
         };
@@ -163,6 +188,7 @@ pub const NewDataReg = struct {
     }
 
     pub fn deinit(self: *const Self) void {
+        self.mat_j.deinit();
         self.empty_block_ids.deinit();
         self.item_j.deinit();
         self.block_j.deinit();
@@ -187,6 +213,15 @@ pub const NewDataReg = struct {
         return self.blocks[index];
     }
 
+    pub fn getEntity(self: *const Self, ent_id: EntId) ?Entity {
+        for (self.entities) |ent| {
+            if (ent.id == ent_id)
+                return ent;
+        }
+        //const index = std.sort.binarySearch(Entity, ent, self.entities, @as(u8, 0), Entity.compareIds) orelse unreachable;
+        return null;
+    }
+
     pub fn getItem(self: *const Self, id: ItemId) Item {
         return self.items[id];
     }
@@ -208,3 +243,43 @@ pub const NewDataReg = struct {
         return self.getBlockFromState(state_id).id;
     }
 };
+
+//pub fn calculateBreakTime()
+//    if (isBestTool):
+//  speedMultiplier = toolMultiplier
+//
+//  if (not canHarvest):
+//    speedMultiplier = 1
+//
+//  else if (toolEfficiency):
+//    speedMultiplier += efficiencyLevel ^ 2 + 1
+//
+//
+//if (hasteEffect):
+//  speedMultiplier *= 0.2 * hasteLevel + 1
+//
+//if (miningFatigue):
+//  speedMultiplier *= 0.3 ^ min(miningFatigueLevel, 4)
+//
+//if (inWater and not hasAquaAffinity):
+//  speedMultiplier /= 5
+//
+//if (not onGround):
+//  speedMultiplier /= 5
+//
+//damage = speedMultiplier / blockHardness
+//
+//if (canHarvest):
+//  damage /= 30
+//else:
+//  damage /= 100
+//
+//# Instant breaking
+//if (damage > 1):
+//  return 0
+//
+//ticks = roundup(1 / damage)
+//
+//seconds = ticks / 20
+//
+//return seconds

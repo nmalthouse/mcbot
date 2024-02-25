@@ -820,7 +820,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 }
 
 pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
-    const disable = false;
+    const disable = true;
     const locations = [_]V3f{
         V3f.new(-225, 68, 209),
         //V3f.new(-236, 69, 204),
