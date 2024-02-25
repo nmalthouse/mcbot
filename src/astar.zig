@@ -1,6 +1,8 @@
 const std = @import("std");
 const mc = @import("listener.zig");
 const Reg = @import("data_reg.zig").DataReg;
+const mcTypes = @import("mcContext.zig");
+const McWorld = mcTypes.McWorld;
 
 const Vector = @import("vector.zig");
 const V3f = Vector.V3f;
@@ -52,6 +54,18 @@ const ADJ_COST = [8]u32{
 //
 //in order for the corners to be accesible nodes the two adjacent cardinals need to be open, complicated once you add jumping etc
 
+pub const Transparent = [_][]const u8{
+    "minecraft:flowers",
+    "minecraft:rails",
+    "minecraft:signs",
+    "minecraft:crops",
+    "minecraft:climbable",
+    "minecraft:buttons",
+    "minecraft:banners",
+    "minecraft:saplings",
+    "minecraft:grass",
+};
+
 pub const AStarContext = struct {
     const Self = @This();
     pub const Node = struct {
@@ -78,6 +92,7 @@ pub const AStarContext = struct {
     pub const PlayerActionItem = union(enum) {
         movement: MoveItem,
         block_break: BreakBlock,
+        wait_ms: u32,
     };
     //TODO create a struct that contains a list of playeractionitems.
     //Use this struct to manage all state regarding player actions:
@@ -115,14 +130,10 @@ pub const AStarContext = struct {
     pub const ColumnHelper = struct {
         const S = @This();
 
-        pub const Query = enum {
-            walk_on,
-            walk_through,
-        };
-
         pub const Category = struct {
             cat: Node.Ntype,
             y_offset: i32 = 0,
+            //this could be renamed to x offset
             gap: i32 = 0,
         };
 
@@ -131,37 +142,19 @@ pub const AStarContext = struct {
         z: i32,
         y: i32,
 
-        pub fn queryList(s: *const S, list: []const Query) bool {
-            for (list, 0..) |item, index| {
-                const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + index, s.z)) orelse return false).id;
-                switch (item) {
-                    .walk_on => return id != 0,
-                }
-            }
-        }
-
         pub fn walkable(s: *const S, y: i32) bool {
-            return @as(bool, @bitCast((s.ctx.world.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false) != 0));
+            const id = s.ctx.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false);
+            return s.ctx.world.reg.isBlockCollidable(id.id);
+            //return id.id != 0 and !s.ctx.hasAnyTagFrom("minecraft:block", &Transparent, V3i.new(s.x, s.y + y, s.z));
         }
 
         pub fn canEnter(s: *const S, y: i32) bool {
-            const id = s.ctx.reg.getBlockFromState(s.ctx.world.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
-            const tag_list = [_][]const u8{ "flowers", "rails", "signs", "crops", "climbable", "buttons", "banners" };
-            const fully_tag = blk: {
-                var list: [tag_list.len][]const u8 = undefined;
-                inline for (tag_list, 0..) |li, i| {
-                    list[i] = "minecraft:" ++ li;
-                }
-                break :blk list;
-            };
-            if (id == 0)
-                return true;
-            for (fully_tag) |tag| {
-                if (s.ctx.hasBlockTag(tag, V3i.new(s.x, y + s.y, s.z))) {
-                    return true;
-                }
-            }
-            return false;
+            const id = s.ctx.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
+            return !s.ctx.world.reg.isBlockCollidable(id) or s.ctx.tag_table.hasTag(
+                id,
+                "minecraft:block",
+                "minecraft:climbable",
+            );
         }
     };
 
@@ -170,14 +163,15 @@ pub const AStarContext = struct {
     };
 
     alloc: std.mem.Allocator,
-    world: *mc.ChunkMap,
+    world: *McWorld,
+    //world: *mc.ChunkMap,
     reg: *const Reg,
     tag_table: *mc.TagRegistry,
 
     open: std.ArrayList(*Node),
     closed: std.ArrayList(*Node),
 
-    pub fn init(alloc: std.mem.Allocator, world: *mc.ChunkMap, tag_table: *mc.TagRegistry, reg: *const Reg) Self {
+    pub fn init(alloc: std.mem.Allocator, world: *McWorld, tag_table: *mc.TagRegistry, reg: *const Reg) Self {
         return Self{
             .open = std.ArrayList(*Node).init(alloc),
             .closed = std.ArrayList(*Node).init(alloc),
@@ -203,47 +197,6 @@ pub const AStarContext = struct {
         self.closed.deinit();
     }
 
-    //TODO check the block above the player is open when we want to jump
-    // Finding a tree (not a data structure) algorithim
-    // Ignore the case where a structure looks like a tree: (villager houses with log columns)
-    // dijkstras algorithim, our end condition is a node existing as dirt, log
-    //
-    // How we define a tree, minecraft:dirt, n minecraft:logs, minecraft:leaves
-    //
-    //pub fn addAdjNodesNoH(self: *Self, node: *Node) !void {
-    //    const direct_adj = [_]u32{ 1, 3, 5, 7 };
-    //    const diag_adj = [_]u32{ 0, 2, 4, 6 };
-    //    var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
-    //    for (direct_adj) |di| {
-    //        const avec = ADJ[di];
-    //        acat[di] = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
-    //    }
-
-    //    for (diag_adj) |di| {
-    //        const li = @intCast(u32, @mod(@intCast(i32, di) - 1, 8));
-    //        const ui = @mod(di + 1, 8);
-    //        if (acat[li].cat == acat[ui].cat and acat[li].cat != .blocked) {
-    //            const avec = ADJ[di];
-    //            const cat = self.catagorizeAdjColumn(node.x + avec.x, node.y - 1, node.z + avec.y, false, 4);
-    //            acat[di] = if (cat.cat == acat[ui].cat) cat else .{ .cat = .blocked };
-    //        }
-    //    }
-
-    //    for (acat) |cat, i| {
-    //        const avec = ADJ[i];
-    //        if (cat.cat == .blocked)
-    //            continue;
-    //        try self.addNode(.{
-    //            .ntype = cat.cat,
-    //            .x = node.x + avec.x,
-    //            .z = node.z + avec.y,
-    //            .y = node.y + cat.y_offset,
-    //            .G = ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
-    //            .H = 0,
-    //        }, node);
-    //    }
-    //}
-
     pub fn findTree(self: *Self, start: V3f) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
         try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
@@ -263,7 +216,7 @@ pub const AStarContext = struct {
                     }
                 }
                 if (is_tree) {
-                    const block_info = self.reg.getBlockFromState(self.world.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))));
+                    const block_info = self.reg.getBlockFromState(self.world.chunk_data.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse continue);
                     var parent: ?*AStarContext.Node = current_n;
                     //try move_vecs.resize(0);
                     var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
@@ -305,7 +258,7 @@ pub const AStarContext = struct {
     //Starting with simplest, check if goal is outside of loaded chunks.
     //Full implementation will need to check range on each node xz
     pub fn pathfind(self: *Self, start: V3f, goal: V3f) !?std.ArrayList(PlayerActionItem) {
-        if (self.world.isLoaded(goal.toI()) == false) {
+        if (self.world.chunk_data.isLoaded(goal.toI()) == false) {
             return null;
         }
 
@@ -320,7 +273,7 @@ pub const AStarContext = struct {
         const gpz = @as(i32, @intFromFloat(@round(goal.z)));
 
         var i: u32 = 0;
-        const ITERATION_LIMIT = 1000;
+        const ITERATION_LIMIT = 3000;
         while (i < ITERATION_LIMIT) : (i += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
@@ -328,6 +281,10 @@ pub const AStarContext = struct {
             if (current_n.x == gpx and current_n.z == gpz and current_n.y == gpy) {
                 var parent: ?*AStarContext.Node = current_n;
                 while (parent != null) : (parent = parent.?.parent) {
+                    switch (parent.?.ntype) {
+                        .gap, .jump, .fall => try actions.append(.{ .wait_ms = 300 }),
+                        else => {},
+                    }
                     try actions.append(.{ .movement = .{
                         .kind = parent.?.ntype,
                         .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(
@@ -422,8 +379,9 @@ pub const AStarContext = struct {
         var lowest: u32 = std.math.maxInt(u32);
         var lowest_index: ?usize = null;
         for (self.open.items, 0..) |node, i| {
-            if (node.G + (node.H * 10) < lowest) {
-                lowest = node.G + (node.H * 10);
+            const fac = 20;
+            if (node.G + (node.H * fac) < lowest) {
+                lowest = node.G + (node.H * fac);
                 lowest_index = i;
             }
         }
@@ -438,7 +396,7 @@ pub const AStarContext = struct {
     }
 
     pub fn addAdjNodes(self: *Self, node: *Node, goal: V3f, override_h: ?u32) !void {
-        const block_above = self.world.getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse return error.fucked;
+        const block_above = self.world.chunk_data.getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse return error.fucked;
         const direct_adj = [_]u32{ 1, 3, 5, 7 };
         const diag_adj = [_]u32{ 0, 2, 4, 6 };
         var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
@@ -463,58 +421,40 @@ pub const AStarContext = struct {
             const avec = ADJ[i];
             const abs = std.math.absInt;
             const h = if (override_h != null) override_h.? else @as(u32, @intCast(try abs(@as(i32, @intFromFloat(goal.x)) - (node.x + avec.x)) +
-                try abs(@as(i32, @intFromFloat(goal.z)) - (node.z + avec.y))));
+                try abs(@as(i32, @intFromFloat(goal.z)) - (node.z + avec.y)) + try abs(@as(i32, @intFromFloat(goal.y)) - node.y)));
             if (cat.cat == .blocked)
                 continue;
-            if (cat.cat == .jump and block_above != 0)
+            if (cat.cat == .jump and (block_above != 0 or i % 2 == 0))
                 continue;
+
+            if (cat.cat == .gap) {
+                try self.addNode(.{
+                    .ntype = cat.cat,
+                    .x = node.x + avec.x * cat.gap,
+                    .z = node.z + avec.y * cat.gap,
+                    .y = node.y + cat.y_offset,
+                    .G = node.G + 20,
+                    .H = h,
+                }, node);
+                continue;
+            }
 
             try self.addNode(.{
                 .ntype = cat.cat,
-                //.x = node.x + avec.x * if (cat.cat == .gap) cat.gap else 1,
-                //.z = node.z + avec.y * if (cat.cat == .gap) cat.gap else 1,
                 .x = node.x + avec.x,
                 .z = node.z + avec.y,
                 .y = node.y + cat.y_offset,
-                //.G = if (cat.cat == .jump) 1 else ADJ_COST[i] + node.G + @intCast(u32, (try std.math.absInt(cat.y_offset)) * 1),
-                .G = switch (cat.cat) {
+                .G = node.G + switch (cat.cat) {
                     .ladder => 10,
-                    .jump => 10,
-                    .gap => 0,
-                    else => ADJ_COST[i] + node.G + @as(u32, @intCast((try std.math.absInt(cat.y_offset)) * 1)),
+                    .fall => 40,
+                    .jump => 40,
+                    .gap => 30,
+                    else => ADJ_COST[i] + @as(u32, @intCast((try std.math.absInt(cat.y_offset)) * 1)),
                 },
-                //TODO fix the hurestic
-                //.H = @intCast(u32, try std.math.absInt(@floatToInt(i32, goal.x) - (node.x + avec.x)) +
-                //try std.math.absInt(@floatToInt(i32, goal.z) - (node.z + avec.y))),
                 .H = h,
             }, node);
         }
     }
-
-    //TYPES of movevment
-    //walk
-    //fall
-    //jump
-    //ladder
-
-    const walk_list = &.{
-        .walk_through, //Player Head
-        .walk_through, //player feet
-        .walk_on,
-    };
-
-    const jump_list = &.{
-        .walk_through,
-        .walk_through, //Player Head
-        .walk_on, //player feet
-    };
-
-    const fall_list = &.{
-        .walk_through, //Player Head
-        .walk_through, //player feet
-        .walk_through,
-        .walk_on,
-    };
 
     //z is the coordinate beneath players feet
     pub fn catagorizeAdjColumn(self: *Self, x: i32, y: i32, z: i32, head_blocked: bool, max_fall_dist: u32, adj_i: u32) ColumnHelper.Category {
@@ -543,7 +483,7 @@ pub const AStarContext = struct {
                         const jcol = ColumnHelper{ .x = x + (ADJ[adj_i].x * gi), .z = z + (ADJ[adj_i].y * gi), .y = y, .ctx = self };
                         if (jcol.canEnter(1) and jcol.canEnter(2) and jcol.canEnter(3)) {
                             if (jcol.walkable(0))
-                                return .{ .cat = .gap, .gap = gi };
+                                return .{ .cat = .gap, .gap = gi + 1 };
                         }
                     }
                 }
@@ -552,13 +492,22 @@ pub const AStarContext = struct {
         return .{ .cat = .blocked };
     }
 
+    pub fn hasAnyTagFrom(self: *const Self, namespace: []const u8, tags: []const []const u8, pos: V3i) bool {
+        const block = self.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false);
+        for (tags) |tag| {
+            if (self.tag_table.hasTag(block.id, namespace, tag))
+                return true;
+        }
+        return false;
+    }
+
     pub fn hasBlockTag(self: *const Self, tag: []const u8, pos: V3i) bool {
-        return (self.tag_table.hasTag(self.reg.getBlockFromState(self.world.getBlock(pos) orelse return false).id, "minecraft:block", tag));
+        return (self.tag_table.hasTag(self.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false).id, "minecraft:block", tag));
     }
 
     //TODO check if it is transparent block
     pub fn isWalkable(self: *Self, x: i32, y: i32, z: i32) bool {
-        return @as(bool, @bitCast(self.world.getBlock(x, y, z) != 0));
+        return @as(bool, @bitCast(self.world.chunk_data.getBlock(x, y, z) != 0));
     }
 
     pub fn hasWalkableAdj(self: *Self, x: i32, y: i32, z: i32) bool {
@@ -569,9 +518,9 @@ pub const AStarContext = struct {
             const bx = x + a_vec.x;
             const bz = z + a_vec.y;
             const by = y;
-            l_adj[i][0] = @as(bool, @bitCast((self.world.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
-            l_adj[i][1] = @as(bool, @bitCast((self.world.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
-            l_adj[i][2] = @as(bool, @bitCast((self.world.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
+            l_adj[i][0] = @as(bool, @bitCast((self.world.chunk_data.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
+            l_adj[i][1] = @as(bool, @bitCast((self.world.chunk_data.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
+            l_adj[i][2] = @as(bool, @bitCast((self.world.chunk_data.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
 
             if (l_adj[i][0] and !l_adj[i][1] and !l_adj[i][2]) {
                 return true;
