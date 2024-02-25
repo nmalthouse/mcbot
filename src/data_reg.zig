@@ -96,6 +96,13 @@ pub const BlocksJson = []const struct {
     transparent: bool,
 
     //filterLight: u8, not relevent
+        fn compareStateIds(ctx: u8, key: BlocksJson, actual: BlocksJson) std.math.Order {
+            _ = ctx;
+            if (key.minStateId >= actual.minStateId and key.minStateId <= actual.maxStateId) return .eq;
+            if (key.minStateId > actual.maxStateId) return .gt;
+            if (key.minStateId < actual.minStateId) return .lt;
+            return .eq;
+        }
 };
 
 pub const NewDataReg = struct {
@@ -106,6 +113,8 @@ pub const NewDataReg = struct {
     items: ItemsJson,
     blocks: BlocksJson,
     entities: EntitiesJson,
+
+    empty_block_ids: std.ArrayList(BlockId),
 
     item_j: std.json.Parsed(ItemsJson),
     block_j: std.json.Parsed(BlocksJson),
@@ -123,12 +132,20 @@ pub const NewDataReg = struct {
         const ent = try com.readJson(data_dir, "entities.json", alloc, EntitiesJson);
         const block = try com.readJson(data_dir, "blocks.json", alloc, BlocksJson);
 
+        var empty = std.ArrayList(BlockId).init(alloc);
+        for (block.value) |b| {
+            if (b.boundingBox == .empty)
+                try empty.append(b.id);
+        }
+        std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
+
         const ret = Self{
             .version_id = version_info.value.version,
             .alloc = alloc,
             .items = items.value,
             .entities = ent.value,
             .blocks = block.value,
+            .empty_block_ids = empty,
 
             .item_j = items,
             .block_j = block,
@@ -137,12 +154,29 @@ pub const NewDataReg = struct {
         return ret;
     }
 
-    //TODO ugly, we do this
-
     pub fn deinit(self: *const Self) void {
+        self.empty_block_ids.deinit();
         self.item_j.deinit();
         self.block_j.deinit();
         self.ent_j.deinit();
+    }
+
+    fn blockIdOrder(ctx: void, lhs: BlockId, rhs: BlockId) std.math.Order {
+        _ = ctx;
+        return std.math.order(lhs, rhs);
+    }
+
+    pub fn isBlockCollidable(self: *const Self, bid: BlockId) bool {
+        return std.sort.binarySearch(BlockId, bid, self.empty_block_ids.items, {}, blockIdOrder) == null;
+    }
+
+    pub fn getBlockFromState(self: *const Self, state_id: StateId) Block {
+        var block: Block = undefined;
+        block.min_state = state_id;
+        block.max_state = 0;
+
+        const index = std.sort.binarySearch(Block, block, self.blocks, @as(u8, 0), Block.compareStateIds) orelse unreachable;
+        return self.blocks[index];
     }
 };
 

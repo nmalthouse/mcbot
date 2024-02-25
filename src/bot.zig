@@ -162,36 +162,25 @@ pub const MovementState = struct {
             .gap => {
                 //if (mvec.magnitude() != 1) unreachable; //Only allow jumps in cardinal directions for now
                 //Once we have reached dy = +1 we don't worry about colliding with the block we are jumping on.
-                const at_y1_time = quadFL(gravity / 2, jumpV, -iv.y) orelse unreachable;
-                const jump_end_time = quadFR(gravity / 2, jumpV, -iv.y) orelse unreachable;
-                const lt_y1_v = if (at_y1_time == 0) 0 else (0.5 - (PlayerBounds / 2)) / at_y1_time;
-                const gt_y1_v = (0.5 + (PlayerBounds / 2)) / (jump_end_time - at_y1_time);
-                const at_y1_pos = self.init_pos.add(mvec.getUnitVec().smul(lt_y1_v * at_y1_time));
-                const max_t = jump_end_time;
+                const land_time = quadFR(gravity / 2, jumpV, 0) orelse unreachable;
+                const max_t = land_time;
+                const xz_speed = mvec.magnitude() / land_time;
 
                 if (max_t < self.time + dt) {
                     const r = (self.time + dt) - max_t;
                     self.time = max_t;
                     return MoveResult{ .remaining_dt = r, .move_complete = true, .new_pos = self.final_pos };
                 }
-
                 self.time += dt;
+
                 const dy = (gravity / 2) * std.math.pow(f64, self.time, 2) + (jumpV * self.time);
-                if (self.time < at_y1_time and at_y1_time != 0) {
-                    return MoveResult{
-                        .remaining_dt = 0,
-                        .grounded = false,
-                        .move_complete = false,
-                        .new_pos = self.init_pos.add(mvec.getUnitVec().smul(lt_y1_v * self.time).add(V3f.new(0, dy, 0))),
-                    };
-                } else if (self.time <= jump_end_time) {
-                    return MoveResult{
-                        .remaining_dt = 0,
-                        .grounded = false,
-                        .move_complete = false,
-                        .new_pos = at_y1_pos.add(mvec.getUnitVec().smul(gt_y1_v * (self.time - at_y1_time)).add(V3f.new(0, dy, 0))),
-                    };
-                }
+                const dx = mvec.getUnitVec().smul(xz_speed * self.time);
+                return MoveResult{
+                    .remaining_dt = 0,
+                    .grounded = false,
+                    .move_complete = false,
+                    .new_pos = self.init_pos.add(dx).add(V3f.new(0, dy, 0)),
+                };
             },
             .ladder => {
                 const climb_speed = 3;

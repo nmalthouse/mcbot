@@ -29,23 +29,9 @@ const c = @import("c.zig").c;
 
 const fbsT = std.io.FixedBufferStream([]const u8);
 
-pub fn RingBuf(comptime n: usize, comptime T: type) type {
-    return struct {
-        buf: [n]T,
-        index: usize = 0,
-
-        pub fn insert(self: *@This(), item: T) void {
-            self.index = @mod(self.index + 1, self.buf.len);
-            self.buf[self.index] = item;
-        }
-
-        pub fn init(val: T) @This() {
-            return .{
-                .buf = .{val} ** n,
-            };
-        }
-    };
-}
+const mcTypes = @import("mcContext.zig");
+const McWorld = mcTypes.McWorld;
+const Entity = mcTypes.Entity;
 
 pub const PacketCache = struct {};
 
@@ -117,43 +103,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
     return bot1;
 }
 
-pub const McWorld = struct {
-    const Self = @This();
-
-    chunk_data: mc.ChunkMap,
-
-    //TODO make entities and bots thread safe
-    entities: std.AutoHashMap(i32, Entity),
-    bots: std.AutoHashMap(i32, Bot),
-    tag_table: mc.TagRegistry,
-
-    packet_cache: struct {
-        chat_time_stamps: RingBuf(32, u64) = RingBuf(32, u64).init(0),
-    },
-
-    has_tag_table: bool = false,
-
-    master_id: ?i32,
-
-    pub fn init(alloc: std.mem.Allocator) Self {
-        return Self{
-            .packet_cache = .{},
-            .chunk_data = mc.ChunkMap.init(alloc),
-            .entities = std.AutoHashMap(i32, Entity).init(alloc),
-            .bots = std.AutoHashMap(i32, Bot).init(alloc),
-            .master_id = null,
-            .tag_table = mc.TagRegistry.init(alloc),
-        };
-    }
-
-    pub fn deinit(self: *Self) void {
-        self.chunk_data.deinit();
-        self.entities.deinit();
-        self.bots.deinit();
-        self.tag_table.deinit();
-    }
-};
-
 pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8, .scalar)) ?vector.V3f {
     var ret = V3f{
         .x = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
@@ -170,13 +119,6 @@ pub fn parseCoord(it: *std.mem.TokenIterator(u8, .scalar)) !vector.V3f {
         .z = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
     };
 }
-
-pub const Entity = struct {
-    uuid: u128,
-    pos: V3f,
-    yaw: f32,
-    pitch: f32,
-};
 
 const Queue = std.atomic.Queue;
 pub const QItem = struct {
@@ -883,9 +825,10 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
         V3f.new(-225, 68, 209),
         //V3f.new(-236, 69, 204),
         //V3f.new(-230, 75, 202),
-        V3f.new(-232, 72, 214),
-        V3f.new(-231, 72, 208),
-        V3f.new(-222, 72, 202),
+        //V3f.new(-232, 72, 214),
+        //V3f.new(-231, 72, 208),
+        //V3f.new(-222, 72, 202),
+        V3f.new(-216, 68, 184),
     };
     var location_index: usize = 0;
     var bot_command_index: u32 = 0;
@@ -905,7 +848,7 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
         //Fake a coroutine
         switch (bot_command_index) {
             1 => {
-                var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
+                var pathctx = astar.AStarContext.init(alloc, world, &world.tag_table, reg);
                 defer pathctx.deinit();
                 bo.modify_mutex.lock();
                 const found = try pathctx.pathfind(bo.pos.?, locations[location_index]);
@@ -914,7 +857,16 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
                     thread_data.setActions(actions.*, bo.pos.?);
                 bo.modify_mutex.unlock();
             },
-            2 => std.time.sleep(std.time.ns_per_s),
+            //2 => {
+            //    var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
+            //    defer pathctx.deinit();
+            //    bo.modify_mutex.lock();
+            //    const found = try pathctx.findTree(bo.pos.?);
+            //    if (found) |*actions|
+            //        thread_data.setActions(actions.*, bo.pos.?);
+            //    bo.modify_mutex.unlock();
+            //},
+            3 => std.time.sleep(std.time.ns_per_s),
             else => bot_command_index = 0,
         }
     }
@@ -933,6 +885,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
     const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world, reg });
     defer b1_thread.join();
 
+    var skip_ticks: i32 = 0;
+    const dt: f64 = 1.0 / 20.0;
     while (true) {
         if (exit_mutex.tryLock()) {
             std.debug.print("Stopping updateBots thread\n", .{});
@@ -941,8 +895,6 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
             b1_thread_data.unlock(.bot_thread);
             return;
         }
-
-        var skip_ticks: i32 = 0;
 
         //The scriptThread will be blocked whenever we are in this block until we notify we need more actions by unlocking
         if (b1_thread_data.trylock(.bot_thread)) {
@@ -953,7 +905,6 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
             if (!bo.handshake_complete)
                 continue;
 
-            const dt: f64 = 1.0 / 20.0;
             if (skip_ticks > 0) {
                 skip_ticks -= 1;
             } else {
@@ -980,7 +931,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                                             break;
                                         } else if (bt.actions.items[new_acc].movement.kind == .jump and move.kind == .jump) {
                                             bt.move_state.time = 0;
-                                            skip_ticks = 100;
+                                            //skip_ticks = 100;
                                             break;
                                         }
                                     } else {
@@ -996,6 +947,10 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
                             if (moved) {
                                 try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, grounded);
                             }
+                        },
+                        .wait_ms => |wms| {
+                            skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
+                            bt.nextAction(0, bo.pos.?);
                         },
                         .block_break => |bb| {
                             _ = bb;
@@ -1026,7 +981,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, reg: *const Reg.Dat
             }
         }
 
-        std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * (1.0 / 20.0))));
+        //std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * (1.0 / 20.0))));
+        std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * dt)));
     }
 }
 
@@ -1041,7 +997,7 @@ pub fn basicPathfindThread(
     return_ctx: *?astar.AStarContext,
 ) !void {
     std.debug.print("PATHFIND CALLED \n", .{});
-    var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
+    var pathctx = astar.AStarContext.init(alloc, world, &world.tag_table, reg);
     errdefer pathctx.deinit();
 
     const found = try pathctx.pathfind(start, goal);
@@ -1421,7 +1377,7 @@ pub fn main() !void {
     const epoll_fd = try std.os.epoll_create1(0);
     defer std.os.close(epoll_fd);
 
-    var world = McWorld.init(alloc);
+    var world = McWorld.init(alloc, &dr);
     defer world.deinit();
 
     var creg = try Reg.DataRegContainer.init(alloc, std.fs.cwd(), "mcproto/converted/all.json");
