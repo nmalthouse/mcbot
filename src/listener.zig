@@ -440,6 +440,14 @@ pub const Slot = struct {
     nbt_buffer: ?[]u8 = null,
 };
 
+pub const BlockEntityP = struct {
+    rel_x: u4,
+    rel_z: u4,
+    abs_y: i16,
+    type: i32,
+    nbt: nbt_zig.Entry,
+};
+
 const reader_type = std.net.Stream.Reader;
 
 pub fn packetParseCtx(comptime readerT: type) type {
@@ -461,7 +469,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return self.reader.readInt(intT, .Big) catch unreachable;
         }
 
-        pub fn blockEntity(self: *Self) u8 {
+        pub fn blockEntity(self: *Self) BlockEntityP {
             //TODO make this actually return something
             const pxz = self.int(u8);
             const y = self.int(i16);
@@ -469,15 +477,13 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
             var tracker = tr.init(self.alloc, self.reader);
             const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
-            std.debug.print("BID {d}\n", .{btype});
-            if (tracker.buffer.items.len > 1) {
-                std.debug.print("NBT: {s}\n", .{nbt.name.?});
-                nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
-            }
-            _ = pxz;
-            _ = y;
-            //_ = btype;
-            return 0;
+            return BlockEntityP{
+                .rel_x = @intCast(pxz >> 4),
+                .rel_z = @intCast(pxz & 0xf),
+                .abs_y = y,
+                .type = btype,
+                .nbt = nbt.entry,
+            };
         }
 
         pub fn slot(self: *Self) ?Slot {

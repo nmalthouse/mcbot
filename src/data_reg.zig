@@ -48,6 +48,50 @@ const VersionJson = struct {
 
 pub const MaterialsJson = J.ArrayHashMap(J.ArrayHashMap(f32));
 
+pub const Materials = struct {
+    pub const SetItem = struct {
+        id: ItemId,
+        mul: f32,
+    };
+    pub const Set = []const SetItem;
+
+    map: std.StringHashMap(Set),
+    alloc: std.mem.Allocator,
+
+    pub fn initFromJson(alloc: std.mem.Allocator, j: MaterialsJson) !@This() {
+        var nmap = std.StringHashMap(Set).init(alloc);
+        var m_it = j.map.iterator();
+        while (m_it.next()) |kv| {
+            var s_it = kv.value_ptr.map.iterator();
+            const new_set = try alloc.alloc(SetItem, kv.value_ptr.map.count());
+            var i: usize = 0;
+            while (s_it.next()) |si| {
+                defer i += 1;
+                //convert string to number
+                new_set[i] = .{
+                    .id = try std.fmt.parseInt(ItemId, si.key_ptr.*, 10),
+                    .mul = si.value_ptr.*,
+                };
+            }
+            try nmap.put(try alloc.dupe(u8, kv.key_ptr.*), new_set);
+        }
+
+        return @This(){
+            .map = nmap,
+            .alloc = alloc,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        var m_it = self.map.iterator();
+        while (m_it.next()) |kv| {
+            self.alloc.free(kv.key_ptr.*);
+            self.alloc.free(kv.value_ptr.*);
+        }
+        self.map.deinit();
+    }
+};
+
 pub const Item = struct {
     id: ItemId,
     name: []const u8,
@@ -136,16 +180,14 @@ pub const NewDataReg = struct {
     alloc: std.mem.Allocator,
     version_id: u32,
     items: ItemsJson,
-    blocks: BlocksJson,
+    blocks: []Block,
     entities: EntitiesJson,
-    materials: MaterialsJson,
+    materials: Materials,
 
     empty_block_ids: std.ArrayList(BlockId),
 
     item_j: std.json.Parsed(ItemsJson),
-    block_j: std.json.Parsed(BlocksJson),
     ent_j: std.json.Parsed(EntitiesJson),
-    mat_j: J.Parsed(MaterialsJson),
 
     pub fn init(alloc: std.mem.Allocator, comptime version: []const u8) !Self {
         var cwd = std.fs.cwd();
@@ -159,14 +201,20 @@ pub const NewDataReg = struct {
         const ent = try com.readJson(data_dir, "entities.json", alloc, EntitiesJson);
         const block = try com.readJson(data_dir, "blocks.json", alloc, BlocksJson);
         const mat = try com.readJson(data_dir, "materials.json", alloc, MaterialsJson);
+        defer mat.deinit();
+
+        const blocks = try alloc.alloc(Block, block.value.len);
 
         var empty = std.ArrayList(BlockId).init(alloc);
-        for (block.value) |b| {
+        for (block.value, 0..) |b, i| {
             if (b.boundingBox == .empty)
                 try empty.append(b.id);
+            blocks[i] = b;
+            blocks[i].name = try alloc.dupe(u8, b.name);
         }
         std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
-        std.sort.heap(Block, block.value, {}, Block.asc);
+        std.sort.heap(Block, blocks, {}, Block.asc);
+        block.deinit();
 
         //std.sort.heap(Entity, ent.value, {}, Entity.asc);
 
@@ -175,24 +223,29 @@ pub const NewDataReg = struct {
             .alloc = alloc,
             .items = items.value,
             .entities = ent.value,
-            .blocks = block.value,
-            .materials = mat.value,
+            .blocks = blocks,
+            .materials = try Materials.initFromJson(alloc, mat.value),
             .empty_block_ids = empty,
 
             .item_j = items,
-            .mat_j = mat,
-            .block_j = block,
             .ent_j = ent,
         };
         return ret;
     }
 
-    pub fn deinit(self: *const Self) void {
-        self.mat_j.deinit();
+    pub fn deinit(self: *Self) void {
+        for (self.blocks) |b| {
+            self.alloc.free(b.name);
+        }
+        self.alloc.free(self.blocks);
+        self.materials.deinit();
         self.empty_block_ids.deinit();
         self.item_j.deinit();
-        self.block_j.deinit();
         self.ent_j.deinit();
+    }
+
+    pub fn getMaterial(self: *const Self, material: []const u8) ?Materials.Set {
+        return self.materials.map.get(material);
     }
 
     fn blockIdOrder(ctx: void, lhs: BlockId, rhs: BlockId) std.math.Order {

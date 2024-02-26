@@ -93,6 +93,7 @@ pub const AStarContext = struct {
         movement: MoveItem,
         block_break: BreakBlock,
         wait_ms: u32,
+        hold_item: struct { slot_index: u16 },
     };
     //TODO create a struct that contains a list of playeractionitems.
     //Use this struct to manage all state regarding player actions:

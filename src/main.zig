@@ -36,7 +36,7 @@ const Entity = mcTypes.Entity;
 pub const PacketCache = struct {};
 
 pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
-    var bot1 = Bot.init(alloc, bot_name);
+    var bot1 = try Bot.init(alloc, bot_name);
     const s = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
     bot1.fd = s.handle;
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.fd_mutex };
@@ -283,7 +283,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             defer tracker.deinit();
 
             var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader());
-            std.debug.print("\n\n{}\n\n", .{nbt_data});
+            //std.debug.print("\n\n{}\n\n", .{nbt_data});
+            _ = nbt_data;
             _ = pos;
             _ = btype;
             //_ = nbt_data;
@@ -411,7 +412,25 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var ent_i: u32 = 0;
             while (ent_i < num_block_ent) : (ent_i += 1) {
                 const be = parse.blockEntity();
-                _ = be;
+                const coord = V3i.new(cx * 16 + be.rel_x, be.abs_y, cy * 16 + be.rel_z);
+                const id = world.chunk_data.getBlock(coord);
+                const b = world.reg.getBlockFromState(id orelse 0);
+                if (world.tag_table.hasTag(b.id, "minecraft:block", "minecraft:signs")) {
+                    if (be.nbt == .compound) {
+                        if (be.nbt.compound.get("Text1")) |e| {
+                            if (e == .string) {
+                                const j = try std.json.parseFromSlice(struct { text: []const u8 }, arena_alloc, e.string, .{});
+                                try world.putSignWaypoint(j.value.text, coord);
+                            }
+                        }
+                    }
+                } else {
+                    //std.debug.print("at {any}\n", .{coord});
+                    if (std.mem.eql(u8, "chest", b.name)) {
+                        //std.debug.print("t_ent {d} {d} {d}__{s}\n", .{ be.rel_x, be.rel_z, be.abs_y, b.name });
+                        be.nbt.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
+                    }
+                }
             }
         },
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
@@ -473,7 +492,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 bot1.held_item = data;
             } else if (win_id == 0) {
                 bot1.container_state = state_id;
-                bot1.inventory[@as(u16, @intCast(slot_i))] = data;
+                try bot1.inventory.setSlot(@intCast(slot_i), data);
                 std.debug.print("updating slot {any}\n", .{data});
             }
         },
@@ -494,7 +513,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 while (i < item_count) : (i += 1) {
                     bot1.container_state = state_id;
                     const s = parse.slot();
-                    bot1.inventory[i] = s;
+                    try bot1.inventory.setSlot(i, s);
                 }
             } else {
                 try bot1.interacted_inventory.setSize(item_count);
@@ -706,7 +725,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 //}
             } else if (eql(u8, key, "toggle")) {} else if (eql(u8, key, "inventory")) {
                 try m_wr.print("Items: ", .{});
-                for (bot1.inventory) |optslot| {
+                for (bot1.inventory.slots.items) |optslot| {
                     if (optslot) |slot| {
                         const itemd = world.reg.getItem(slot.item_id);
                         try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
@@ -820,18 +839,24 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 }
 
 pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
-    const disable = true;
+    const disable = false;
     const locations = [_]V3f{
-        V3f.new(-225, 68, 209),
-        //V3f.new(-236, 69, 204),
-        //V3f.new(-230, 75, 202),
-        //V3f.new(-232, 72, 214),
-        //V3f.new(-231, 72, 208),
-        //V3f.new(-222, 72, 202),
-        V3f.new(-216, 68, 184),
+        //V3f.new(-225, 68, 209),
+        V3f.new(-236, 69, 204),
+        //V3f.new(-216, 68, 184),
+        //V3f.new(-278, 69, 195),
+        //V3f.new(-326, 71, 115),
+        //V3f.new(-278, 69, 195),
     };
+
+    const waypoints = [_][]const u8{ "tools", "wood_drop", "mine1" };
+    var waypoint_index: usize = 0;
     var location_index: usize = 0;
     var bot_command_index: u32 = 0;
+
+    var pathctx = astar.AStarContext.init(alloc, world);
+    defer pathctx.deinit();
+
     while (true) {
         thread_data.lock(.script_thread);
         if (thread_data.u_status == .terminate_thread) {
@@ -848,14 +873,42 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
         //Fake a coroutine
         switch (bot_command_index) {
             1 => {
-                var pathctx = astar.AStarContext.init(alloc, world);
-                defer pathctx.deinit();
+                try pathctx.reset();
                 bo.modify_mutex.lock();
-                const found = try pathctx.pathfind(bo.pos.?, locations[location_index]);
+                const pos = bo.pos.?;
+                bo.modify_mutex.unlock();
+                const found = try pathctx.pathfind(pos, locations[location_index]);
                 location_index = (location_index + 1) % locations.len;
                 if (found) |*actions|
-                    thread_data.setActions(actions.*, bo.pos.?);
+                    thread_data.setActions(actions.*, pos);
+            },
+            2 => {
+                bo.modify_mutex.lock();
+                defer bo.modify_mutex.unlock();
+                if (bo.inventory.findToolForMaterial(world.reg, "mineable/pickaxe")) |index| {
+                    try thread_data.setActionSlice(alloc, &.{.{ .hold_item = .{ .slot_index = @as(u16, @intCast(index)) } }}, V3i.new(0, 0, 0).toF());
+                }
+            },
+            3 => {
+                try pathctx.reset();
+                bo.modify_mutex.lock();
+                const pos = bo.pos.?;
                 bo.modify_mutex.unlock();
+                const coord = world.getSignWaypoint(waypoints[waypoint_index]) orelse {
+                    std.debug.print("Cant find tools waypoint\n", .{});
+                    continue;
+                };
+                waypoint_index = (waypoint_index + 1) % waypoints.len;
+                const found = try pathctx.pathfind(pos, coord.toF());
+                if (found) |*actions|
+                    thread_data.setActions(actions.*, pos);
+            },
+            4 => {
+                bo.modify_mutex.lock();
+                defer bo.modify_mutex.unlock();
+                if (bo.inventory.findToolForMaterial(world.reg, "mineable/axe")) |index| {
+                    try thread_data.setActionSlice(alloc, &.{.{ .hold_item = .{ .slot_index = @as(u16, @intCast(index)) } }}, V3i.new(0, 0, 0).toF());
+                }
             },
             //2 => {
             //    var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
@@ -866,7 +919,7 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
             //        thread_data.setActions(actions.*, bo.pos.?);
             //    bo.modify_mutex.unlock();
             //},
-            3 => std.time.sleep(std.time.ns_per_s),
+            5 => std.time.sleep(std.time.ns_per_s),
             else => bot_command_index = 0,
         }
     }
@@ -950,6 +1003,11 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                         },
                         .wait_ms => |wms| {
                             skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
+                            bt.nextAction(0, bo.pos.?);
+                        },
+                        .hold_item => |si| {
+                            try bp.setHeldItem(0);
+                            try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
                             bt.nextAction(0, bo.pos.?);
                         },
                         .block_break => |bb| {
@@ -1328,7 +1386,7 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
-    const dr = try Reg.NewDataReg.init(alloc, "1.19.3");
+    var dr = try Reg.NewDataReg.init(alloc, "1.19.3");
     defer dr.deinit();
 
     var arg_it = try std.process.argsWithAllocator(alloc);

@@ -3,6 +3,8 @@ const vector = @import("vector.zig");
 const V3f = vector.V3f;
 const mc = @import("listener.zig");
 const astar = @import("astar.zig");
+const RegD = @import("data_reg.zig");
+const Reg = RegD.NewDataReg;
 
 //How to move?
 //Kinds of movment
@@ -209,56 +211,6 @@ pub const MovementState = struct {
     pub fn init(initp: V3f, final: V3f, dt: f64, move_type: astar.AStarContext.Node.Ntype) Self {
         return .{ .init_pos = initp, .final_pos = final, .time = dt, .move_type = move_type };
     }
-
-    pub fn ladder(self: *Self, climb_speed: f64, dt: f64) MoveResult {
-        const iv = self.final_pos.subtract(self.init_pos);
-        if (iv.x != 0 or iv.z != 0) unreachable;
-
-        const max_t = @fabs(iv.y / climb_speed);
-        if (self.time + dt > max_t) {
-            const r = (self.time + dt) - max_t;
-            self.time = max_t;
-            return MoveResult{
-                .remaining_dt = r,
-                .move_complete = true,
-                .new_pos = self.final_pos,
-            };
-        }
-
-        self.time += dt;
-        return MoveResult{
-            .remaining_dt = 0,
-            .move_complete = false,
-            .new_pos = self.init_pos.add(V3f.new(0, self.time * climb_speed * if (iv.y < 0) @as(f64, -1.0) else @as(f64, 1.0), 0)),
-        };
-    }
-
-    pub fn gap(self: *Self, dt: f64) MoveResult {
-        const G = 16;
-        const V = 9;
-        const end_of_jump_t = comptime quadFLess(-G, V, 0) orelse unreachable;
-
-        const mvec = self.final_pos.subtract(self.init_pos);
-        const walk_vec = V3f.new(mvec.x, 0, mvec.z);
-
-        if (self.time + dt > end_of_jump_t) {
-            var d = self.final_pos;
-
-            return MoveResult{ .remaining_dt = 0, .move_complete = true, .grounded = true, .new_pos = d };
-        }
-
-        self.time += dt;
-        const y = (-G * std.math.pow(f64, self.time, 2)) + (V * self.time);
-        var d = self.init_pos.add(walk_vec.smul(self.time / end_of_jump_t));
-        d.y = self.init_pos.y + y;
-
-        return MoveResult{
-            .remaining_dt = 0,
-            .move_complete = false,
-            .grounded = false,
-            .new_pos = d,
-        };
-    }
 };
 
 pub const Inventory = struct {
@@ -279,10 +231,16 @@ pub const Inventory = struct {
             }
         }
         try self.slots.resize(size);
+        for (self.slots.items) |*item| {
+            item.* = null;
+        }
     }
 
     pub fn setSlot(self: *Self, index: u32, slot: ?mc.Slot) !void {
-        //if (self.slots.items[index] != null) return error.slotNotCleared;
+        if (self.slots.items[index]) |old| {
+            if (old.nbt_buffer) |buf|
+                self.alloc.free(buf);
+        }
         self.slots.items[index] = slot;
         if (slot) |*s| {
             if (s.nbt_buffer) |buf| {
@@ -292,13 +250,29 @@ pub const Inventory = struct {
         }
     }
 
+    pub fn findToolForMaterial(self: *Self, reg: *const Reg, material: []const u8) ?usize {
+        const matching_item_ids = reg.getMaterial(material) orelse return null;
+        for (self.slots.items, 0..) |slot, i| {
+            for (matching_item_ids) |id| {
+                if (slot != null and id.id == slot.?.item_id) {
+                    return i;
+                }
+            }
+        }
+        return null;
+    }
+    //pub fn findItemMatching(self: *Self)void{ }
+
     pub fn init(alloc: std.mem.Allocator) Inventory {
         return .{ .slots = std.ArrayList(?mc.Slot).init(alloc), .alloc = alloc };
     }
+
     pub fn deinit(self: *@This()) void {
         for (self.slots.items) |*slot| {
-            if (slot.nbt_buffer) |buf| {
-                self.alloc.free(buf);
+            if (slot.*) |so| {
+                if (so.nbt_buffer) |buf| {
+                    self.alloc.free(buf);
+                }
             }
         }
         self.slots.deinit();
@@ -377,6 +351,12 @@ pub const BotScriptThreadData = struct {
         self.action_index = new_list.items.len;
         self.nextAction(0, pos);
     }
+
+    pub fn setActionSlice(self: *Self, alloc: std.mem.Allocator, new: []const astar.AStarContext.PlayerActionItem, pos: V3f) !void {
+        var new_s = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc);
+        try new_s.appendSlice(new);
+        self.setActions(new_s, pos);
+    }
 };
 
 //Stores info about a specific bot/player
@@ -404,14 +384,18 @@ pub const Bot = struct {
     action_index: ?usize = null,
 
     held_item: ?mc.Slot = null,
-    inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
+    inventory: Inventory,
+    //inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
     selected_slot: u8 = 0,
     container_state: i32 = 0,
 
     interacted_inventory: Inventory,
 
-    pub fn init(alloc: std.mem.Allocator, name_: []const u8) Bot {
+    pub fn init(alloc: std.mem.Allocator, name_: []const u8) !Bot {
+        var inv = Inventory.init(alloc);
+        try inv.setSize(46);
         return Bot{
+            .inventory = inv,
             .name = name_,
             .e_id = 0,
             .action_list = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
@@ -436,5 +420,6 @@ pub const Bot = struct {
     pub fn deinit(self: *Self) void {
         self.action_list.deinit();
         self.interacted_inventory.deinit();
+        self.inventory.deinit();
     }
 };
