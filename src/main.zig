@@ -1110,6 +1110,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             }
             kv.value_ptr.deinit();
         }
+        vert_map.deinit();
     }
 
     var font = try graph.Font.init(alloc, std.fs.cwd(), "dos.ttf", 16, 163, .{});
@@ -1139,6 +1140,14 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         if (astar_ctx) |*actx| {
             actx.deinit();
         }
+    }
+    {
+        try gctx.begin(0x263556ff);
+        win.pumpEvents();
+        graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
+        gctx.text(.{ .x = 40, .y = 30 }, "LOADING CHUNKS", &font, 72, 0xffffffff);
+        gctx.end(win.screen_width, win.screen_height, graph.za.Mat4.zero());
+        win.swap();
     }
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
