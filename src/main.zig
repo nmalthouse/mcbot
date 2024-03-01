@@ -32,6 +32,7 @@ const fbsT = std.io.FixedBufferStream([]const u8);
 const mcTypes = @import("mcContext.zig");
 const McWorld = mcTypes.McWorld;
 const Entity = mcTypes.Entity;
+const Lua = graph.Lua;
 
 pub const PacketCache = struct {};
 
@@ -428,7 +429,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     //std.debug.print("at {any}\n", .{coord});
                     if (std.mem.eql(u8, "chest", b.name)) {
                         //std.debug.print("t_ent {d} {d} {d}__{s}\n", .{ be.rel_x, be.rel_z, be.abs_y, b.name });
-                        be.nbt.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
+                        //be.nbt.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
                     }
                 }
             }
@@ -838,6 +839,154 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     }
 }
 
+threadlocal var lss: ?*LuaApi = null;
+pub const LuaApi = struct {
+    const Self = @This();
+    thread_data: *bot.BotScriptThreadData,
+    vm: *Lua,
+    pathctx: astar.AStarContext,
+    world: *McWorld,
+    bo: *Bot,
+
+    fn stripErrorUnion(comptime T: type) type {
+        const info = @typeInfo(T);
+        if (info != .ErrorUnion) @compileError("stripErrorUnion expects an error union!");
+        return info.ErrorUnion.payload;
+    }
+
+    fn errc(to_check: anytype) ?stripErrorUnion(@TypeOf(to_check)) {
+        return to_check catch |err| {
+            std.debug.print("{any}\n", .{err});
+            return null;
+        };
+    }
+
+    pub fn init(alloc: std.mem.Allocator, world: *McWorld, bo: *Bot, thread_data: *bot.BotScriptThreadData, vm: *Lua) Self {
+        vm.regN(&.{
+            .{ "gotoLandmark", api_gotoLandmark },
+            .{ "sleepms", api_sleepms },
+            .{ "gotoCoord", api_gotoCoord },
+            .{ "chopNearestTree", api_chopNearestTree },
+        });
+        return .{
+            .thread_data = thread_data,
+            .vm = vm,
+            .pathctx = astar.AStarContext.init(alloc, world),
+            .bo = bo,
+            .world = world,
+        };
+    }
+    pub fn deinit(self: *Self) void {
+        self.pathctx.deinit();
+    }
+
+    pub fn beginHalt(self: *Self) void {
+        self.thread_data.lock(.script_thread);
+        if (self.thread_data.u_status == .terminate_thread) {
+            std.debug.print("Stopping botScript thread\n", .{});
+            self.thread_data.unlock(.script_thread);
+            _ = Lua.c.luaL_error(self.vm.state, "TERMINATING LUA SCRIPT");
+            return;
+        }
+    }
+    pub fn endHalt(self: *Self) void {
+        self.thread_data.unlock(.script_thread);
+        std.time.sleep(std.time.ns_per_s / 10);
+    }
+
+    pub export fn api_sleepms(L: Lua.Ls) c_int {
+        const self = lss orelse return 0;
+        Lua.c.lua_settop(L, 1);
+        const n_ms = Lua.getArg(L, u32, 1);
+        self.beginHalt();
+        defer self.endHalt();
+        std.time.sleep(n_ms * std.time.ns_per_ms);
+        return 0;
+    }
+
+    pub export fn api_gotoLandmark(L: Lua.Ls) c_int {
+        const self = lss orelse return 0;
+        Lua.c.lua_settop(L, 1);
+        const str = Lua.getArg(L, []const u8, 1);
+        self.beginHalt();
+        defer self.endHalt();
+
+        self.pathctx.reset() catch unreachable;
+        self.bo.modify_mutex.lock();
+        const pos = self.bo.pos.?;
+        self.bo.modify_mutex.unlock();
+        const coord = self.world.getSignWaypoint(str) orelse {
+            std.debug.print("Cant find tools waypoint\n", .{});
+            return 0;
+        };
+        const found = self.pathctx.pathfind(pos, coord.toF()) catch unreachable;
+        if (found) |*actions|
+            self.thread_data.setActions(actions.*, pos);
+
+        return 0;
+    }
+
+    pub export fn api_gotoCoord(L: Lua.Ls) c_int {
+        const self = lss orelse return 0;
+        Lua.c.lua_settop(L, 1);
+        const x = Lua.getArg(L, f32, 1);
+        const y = Lua.getArg(L, f32, 2);
+        const z = Lua.getArg(L, f32, 3);
+        self.beginHalt();
+        defer self.endHalt();
+        errc(self.pathctx.reset()) orelse return 0;
+        self.bo.modify_mutex.lock();
+        const pos = self.bo.pos.?;
+        self.bo.modify_mutex.unlock();
+        const found = errc(self.pathctx.pathfind(pos, V3f.new(x, y, z))) orelse return 0;
+        if (found) |*actions|
+            self.thread_data.setActions(actions.*, pos);
+
+        return 0;
+    }
+
+    pub export fn api_chopNearestTree(L: Lua.Ls) c_int {
+        const self = lss orelse return 0;
+        Lua.c.lua_settop(L, 1);
+        self.beginHalt();
+        defer self.endHalt();
+        errc(self.pathctx.reset()) orelse return 0;
+        self.bo.modify_mutex.lock();
+        const pos = self.bo.pos.?;
+        if (self.bo.inventory.findToolForMaterial(self.world.reg, "mineable/axe")) |match| {
+            const wood_hardness = 2;
+            const btime = Reg.calculateBreakTime(match.mul, wood_hardness, .{});
+            //block hardness
+            //tool_multiplier
+            self.bo.modify_mutex.unlock();
+            const tree_o = errc(self.pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20)) orelse return 0;
+            if (tree_o) |*tree| {
+                self.thread_data.setActions(tree.*, pos);
+            }
+        } else {
+            self.bo.modify_mutex.unlock();
+        }
+
+        return 0;
+    }
+};
+pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
+    if (lss != null)
+        return error.lua_script_state_AlreadyInit;
+    var luavm = Lua.init();
+    var script_state = LuaApi.init(alloc, world, bo, thread_data, &luavm);
+    defer script_state.deinit();
+    lss = &script_state;
+    luavm.loadAndRunFile("bot.lua");
+    while (true) {
+        luavm.callLuaFunction("loop") catch |err| {
+            switch (err) {
+                error.luaError => break,
+            }
+        };
+    }
+}
+
 pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
     const disable = false;
     const locations = [_]V3f{
@@ -947,7 +1096,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
     var b1_thread_data = bot.BotScriptThreadData.init(alloc);
     defer b1_thread_data.deinit();
     b1_thread_data.lock(.bot_thread);
-    const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world });
+    //const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world });
+    const b1_thread = try std.Thread.spawn(.{}, luaBotScript, .{ bo, alloc, &b1_thread_data, world });
     defer b1_thread.join();
 
     var skip_ticks: i32 = 0;

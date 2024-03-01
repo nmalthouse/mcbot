@@ -500,8 +500,9 @@ pub fn packetParseCtx(comptime readerT: type) type {
                 const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
                 if (tracker.buffer.items.len > 1) {
                     s.nbt_buffer = tracker.buffer.items;
-                    std.debug.print("NBT: {s}\n", .{nbt.name.?});
-                    nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
+                    _ = nbt;
+                    //std.debug.print("NBT: {s}\n", .{nbt.name.?});
+                    //nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
                 }
 
                 return s;
