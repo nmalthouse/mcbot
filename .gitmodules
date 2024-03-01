@@ -7,3 +7,4 @@
 [submodule "faithfull_pack"]
 	path = res_pack
 	url = https://github.com/Faithful-Pack/Default-Java.git
+    branch = 1.19.3
