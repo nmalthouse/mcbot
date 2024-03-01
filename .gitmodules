@@ -4,3 +4,6 @@
 [submodule "minecraft-data"]
 	path = minecraft-data
 	url = https://github.com/PrismarineJS/minecraft-data.git
+[submodule "faithfull_pack"]
+	path = res_pack
+	url = https://github.com/Faithful-Pack/Default-Java.git

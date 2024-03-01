@@ -244,6 +244,10 @@ pub const NewDataReg = struct {
         self.ent_j.deinit();
     }
 
+    pub fn getBlockSlice(self: *const Self) []const Block {
+        return self.blocks;
+    }
+
     pub fn getMaterial(self: *const Self, material: []const u8) ?Materials.Set {
         return self.materials.map.get(material);
     }

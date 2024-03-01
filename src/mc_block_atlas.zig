@@ -1,0 +1,161 @@
+const std = @import("std");
+const graph = @import("graph");
+const dreg = @import("data_reg.zig");
+
+//For each block in blocks.json:
+//  read_file(pack/assets/minecraft/models/block/block_name.json
+//  extract texture name
+//  load_png(pack/assets/minecraft/textures/block/texture_name
+
+const BlockEntry = struct {
+    const State = struct {
+        name: []const u8,
+        type: []const u8,
+        num_values: u32,
+    };
+
+    id: u32,
+    displayName: []const u8,
+    name: []const u8,
+    //hardness: f32,
+    //resistance: f32,
+    //minStateId: u32,
+    //maxStateId: u32,
+    //states: []State,
+    //drops: []const u32,
+    //diggable: bool,
+    //transparent: bool,
+    //filterLight: u8,
+    //emitLight: u8,
+    //boundingBox: []const u8,
+    //stackSize: u32,
+    //material: []const u8,
+    //defaultState: u32,
+};
+
+pub fn readFileCwd(alloc: std.mem.Allocator, file_name: []const u8) ![]const u8 {
+    const cwd = std.fs.cwd();
+    var file = try cwd.openFile(file_name, .{});
+    defer file.close();
+    const r = file.reader();
+    const slice = try r.readAllAlloc(alloc, std.math.maxInt(usize));
+    return slice;
+}
+
+pub const McAtlas = struct {
+    texture: graph.Texture,
+    protocol_id_to_atlas_map: []const u16,
+    entry_w: usize,
+    entry_span: usize,
+
+    pub fn getTextureRec(self: *const @This(), protocol_id: u32) graph.Rect {
+        const atlas_id = self.protocol_id_to_atlas_map[protocol_id];
+        return graph.Rec(
+            @as(f32, @floatFromInt((atlas_id % self.entry_span) * self.entry_w)),
+            @as(f32, @floatFromInt((atlas_id / self.entry_span) * self.entry_w)),
+            @as(f32, @floatFromInt(self.entry_w)),
+            @as(f32, @floatFromInt(self.entry_w)),
+        );
+    }
+
+    pub fn deinit(self: *const McAtlas, alloc: std.mem.Allocator) void {
+        alloc.free(self.protocol_id_to_atlas_map);
+    }
+};
+
+pub fn buildAtlas(
+    alloc: std.mem.Allocator,
+    dir: std.fs.Dir,
+    texture_pack_filename: []const u8,
+    reg: *const dreg.NewDataReg,
+) !McAtlas {
+    const blocks = reg.getBlockSlice();
+    var pack_dir = try dir.openDir(texture_pack_filename, .{});
+    defer pack_dir.close();
+    const it_dir_path = "assets/minecraft/textures/block";
+    var itdir = try pack_dir.openIterableDir(it_dir_path, .{});
+    defer itdir.close();
+
+    var pngs = std.ArrayList([]const u8).init(alloc);
+    defer {
+        for (pngs.items) |png| {
+            alloc.free(png);
+        }
+        pngs.deinit();
+    }
+
+    var it = itdir.iterate();
+    var item = try it.next();
+    while (item != null) : (item = try it.next()) {
+        if (item.?.kind == .file) {
+            const slice = try alloc.alloc(u8, item.?.name.len);
+            std.mem.copy(u8, slice, item.?.name);
+            try pngs.append(slice);
+        }
+    }
+
+    const entry_w = 16;
+    const width = @as(u32, @intFromFloat(@ceil(@sqrt(@as(f32, @floatFromInt(pngs.items.len))))));
+    var atlas_bitmap = try graph.Bitmap.initBlank(alloc, width * entry_w, width * entry_w, .rgba_8);
+    defer atlas_bitmap.data.deinit();
+
+    var proto_map = std.ArrayList(u16).init(alloc);
+    try proto_map.appendNTimes(0, blocks.len);
+
+    const Match = struct {
+        pub fn ln(ctx: u8, a: @This(), b: @This()) bool {
+            _ = ctx;
+            return a.len < b.len;
+        }
+        index: usize,
+        len: usize,
+    };
+    var matches = std.ArrayList(Match).init(alloc);
+    defer matches.deinit();
+
+    var left_out_count: usize = 0;
+    var atlas_index: usize = 0;
+    for (blocks) |block| {
+        try matches.resize(0);
+        for (pngs.items, 0..) |png_file, pi| {
+            const idiff = std.mem.indexOfDiff(u8, png_file, block.name);
+            if (idiff == block.name.len)
+                try matches.append(.{ .index = pi, .len = png_file.len });
+        }
+
+        std.sort.insertion(Match, matches.items, @as(u8, 0), Match.ln);
+        if (matches.items.len > 0) {
+            var strcat = std.ArrayList(u8).init(alloc);
+            defer strcat.deinit();
+            try strcat.appendSlice(it_dir_path);
+            try strcat.append('/');
+            try strcat.appendSlice(pngs.items[matches.items[0].index]);
+
+            var bmp = try graph.Bitmap.initFromPngFile(alloc, itdir.dir, pngs.items[matches.items[0].index]);
+            //var bmp = try graph.loadPngBitmap(strcat.items, alloc);
+            defer bmp.data.deinit();
+            bmp.copySub(
+                0,
+                0,
+                entry_w,
+                entry_w,
+                &atlas_bitmap,
+                @as(u32, @intCast((atlas_index % width) * entry_w)),
+                @as(u32, @intCast((atlas_index / width) * entry_w)),
+            );
+            proto_map.items[block.id] = @as(u16, @intCast(atlas_index));
+
+            atlas_index += 1;
+        } else {
+            left_out_count += 1;
+        }
+    }
+    try atlas_bitmap.writeToBmpFile(alloc, std.fs.cwd(), "debug/mcatlas.bmp");
+    std.debug.print("left out: {d}\n", .{left_out_count});
+    return McAtlas{
+        .texture = graph.Texture.initFromBitmap(atlas_bitmap, .{ .mag_filter = graph.c.GL_NEAREST }),
+        .protocol_id_to_atlas_map = try proto_map.toOwnedSlice(),
+        .entry_w = entry_w,
+        .entry_span = width,
+    };
+}

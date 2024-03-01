@@ -1,8 +1,8 @@
 const std = @import("std");
 
 const graph = @import("graph");
-//const mcBlockAtlas = @import("mc_block_atlas.zig");
-const mcBlockAtlas = graph.mcblockatlas;
+const mcBlockAtlas = @import("mc_block_atlas.zig");
+//const mcBlockAtlas = graph.mcblockatlas;
 
 const mc = @import("listener.zig");
 const id_list = @import("list.zig");
@@ -1089,7 +1089,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var ctx = try graph.GraphicsContext.init(alloc, 163);
     defer ctx.deinit();
 
-    const mc_atlas = try mcBlockAtlas.buildAtlas(alloc);
+    const mc_atlas = try mcBlockAtlas.buildAtlas(alloc, std.fs.cwd(), "res_pack", world.reg);
     defer mc_atlas.deinit(alloc);
 
     var camera = graph.Camera3D{};
