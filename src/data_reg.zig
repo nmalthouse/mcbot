@@ -301,42 +301,50 @@ pub const NewDataReg = struct {
     }
 };
 
-//pub fn calculateBreakTime()
-//    if (isBestTool):
-//  speedMultiplier = toolMultiplier
-//
-//  if (not canHarvest):
-//    speedMultiplier = 1
-//
-//  else if (toolEfficiency):
-//    speedMultiplier += efficiencyLevel ^ 2 + 1
-//
-//
-//if (hasteEffect):
-//  speedMultiplier *= 0.2 * hasteLevel + 1
-//
-//if (miningFatigue):
-//  speedMultiplier *= 0.3 ^ min(miningFatigueLevel, 4)
-//
-//if (inWater and not hasAquaAffinity):
-//  speedMultiplier /= 5
-//
-//if (not onGround):
-//  speedMultiplier /= 5
-//
-//damage = speedMultiplier / blockHardness
-//
-//if (canHarvest):
-//  damage /= 30
-//else:
-//  damage /= 100
-//
-//# Instant breaking
-//if (damage > 1):
-//  return 0
-//
-//ticks = roundup(1 / damage)
-//
-//seconds = ticks / 20
-//
-//return seconds
+//Break time in ticks
+pub fn calculateBreakTime(tool_multiplier: f32, block_hardness: f32, params: struct {
+    best_tool: bool = true,
+    adequate_tool_level: bool = true,
+    efficiency_level: f32 = 0,
+    haste_level: f32 = 0,
+    mining_fatigue: f32 = 0,
+    in_water: bool = false,
+    has_aqua_affinity: bool = false,
+    on_ground: bool = true,
+}) u32 {
+    var s: f32 = 1;
+    if (params.best_tool) {
+        s = tool_multiplier;
+        if (!params.adequate_tool_level) {
+            s = 1;
+        } else if (params.efficiency_level > 0) {
+            s += std.math.pow(f32, params.efficiency_level, 2) + 1;
+        }
+    }
+
+    if (params.haste_level > 0)
+        s *= 0.2 * params.haste_level + 1;
+
+    if (params.mining_fatigue > 0)
+        s *= std.math.pow(f32, 0.3, @min(params.mining_fatigue, 4));
+
+    if (params.in_water and !params.has_aqua_affinity)
+        s /= 5;
+    if (!params.on_ground)
+        s /= 5;
+
+    var damage: f32 = s / block_hardness;
+    damage /= if (params.adequate_tool_level) 30 else 100;
+
+    if (damage > 1) //instant mine
+        return 0;
+
+    return @intFromFloat(@round(1 / damage));
+}
+
+test "block break time" {
+    const eql = std.testing.expectEqual;
+
+    const ticks = calculateBreakTime(2, 22.5, .{});
+    try eql(ticks, 338);
+}
