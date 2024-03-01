@@ -886,7 +886,7 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
                 bo.modify_mutex.lock();
                 defer bo.modify_mutex.unlock();
                 if (bo.inventory.findToolForMaterial(world.reg, "mineable/pickaxe")) |index| {
-                    try thread_data.setActionSlice(alloc, &.{.{ .hold_item = .{ .slot_index = @as(u16, @intCast(index)) } }}, V3i.new(0, 0, 0).toF());
+                    try thread_data.setActionSlice(alloc, &.{.{ .hold_item = .{ .slot_index = @as(u16, @intCast(index.slot_index)) } }}, V3i.new(0, 0, 0).toF());
                 }
             },
             3 => {
@@ -903,11 +903,23 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
                 if (found) |*actions|
                     thread_data.setActions(actions.*, pos);
             },
-            4 => {
+            4 => {},
+            5 => {
+                try pathctx.reset();
                 bo.modify_mutex.lock();
-                defer bo.modify_mutex.unlock();
-                if (bo.inventory.findToolForMaterial(world.reg, "mineable/axe")) |index| {
-                    try thread_data.setActionSlice(alloc, &.{.{ .hold_item = .{ .slot_index = @as(u16, @intCast(index)) } }}, V3i.new(0, 0, 0).toF());
+                const pos = bo.pos.?;
+                if (bo.inventory.findToolForMaterial(world.reg, "mineable/axe")) |match| {
+                    const wood_hardness = 2;
+                    const btime = Reg.calculateBreakTime(match.mul, wood_hardness, .{});
+                    //block hardness
+                    //tool_multiplier
+                    bo.modify_mutex.unlock();
+                    const tree_o = try pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20);
+                    if (tree_o) |*tree| {
+                        thread_data.setActions(tree.*, pos);
+                    }
+                } else {
+                    bo.modify_mutex.unlock();
                 }
             },
             //2 => {
@@ -919,7 +931,7 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
             //        thread_data.setActions(actions.*, bo.pos.?);
             //    bo.modify_mutex.unlock();
             //},
-            5 => std.time.sleep(std.time.ns_per_s),
+            6 => std.time.sleep(std.time.ns_per_s),
             else => bot_command_index = 0,
         }
     }
@@ -1011,26 +1023,19 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             bt.nextAction(0, bo.pos.?);
                         },
                         .block_break => |bb| {
-                            _ = bb;
-                            //if (block_break_timer == null) {
-                            //    const pw = mc.lookAtBlock(bot1.pos.?, bb.pos.toF());
-                            //    try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                            //    try bp.playerAction(.start_digging, bb.pos);
-                            //    block_break_timer = dt;
-                            //} else {
-                            //    block_break_timer.? += dt;
-                            //    if (block_break_timer.? >= 0.5) {
-                            //        block_break_timer = null;
-                            //        try bp.playerAction(.finish_digging, bb.pos);
-                            //        current_action = player_actions.popOrNull();
-                            //        if (current_action) |acc| {
-                            //            switch (acc) {
-                            //                .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
-                            //                .block_break => block_break_timer = null,
-                            //            }
-                            //        }
-                            //    }
-                            //}
+                            if (bt.block_break_timer == null) {
+                                const pw = mc.lookAtBlock(bo.pos.?, bb.pos.toF());
+                                try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                try bp.playerAction(.start_digging, bb.pos);
+                                bt.block_break_timer = dt;
+                            } else {
+                                bt.block_break_timer.? += dt;
+                                if (bt.block_break_timer.? >= bb.break_time) {
+                                    bt.block_break_timer = null;
+                                    try bp.playerAction(.finish_digging, bb.pos);
+                                    bt.nextAction(0, bo.pos.?);
+                                }
+                            }
                         },
                     }
                 } else {

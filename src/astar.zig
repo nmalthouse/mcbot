@@ -113,7 +113,6 @@ pub const AStarContext = struct {
     pub const BreakBlock = struct {
         pos: V3i,
         break_time: f64,
-        material_i: u8,
     };
 
     pub const MoveItem = struct {
@@ -192,7 +191,7 @@ pub const AStarContext = struct {
         self.closed.deinit();
     }
 
-    pub fn findTree(self: *Self, start: V3f) !?std.ArrayList(PlayerActionItem) {
+    pub fn findTree(self: *Self, start: V3f, axe_index: u32, wood_break_time: f64) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
         try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
 
@@ -211,7 +210,6 @@ pub const AStarContext = struct {
                     }
                 }
                 if (is_tree) {
-                    const block_info = self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse continue);
                     var parent: ?*AStarContext.Node = current_n;
                     //try move_vecs.resize(0);
                     var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
@@ -220,8 +218,7 @@ pub const AStarContext = struct {
                     while (n_logs >= 0) : (n_logs -= 1) {
                         try actions.append(.{ .block_break = .{
                             .pos = pv.add(V3i.new(avec.x, n_logs, avec.y)),
-                            .break_time = block_info.hardness,
-                            .material_i = block_info.material_i,
+                            .break_time = wood_break_time,
                         } });
                         if (n_logs == 2) { //Walk under the tree after breaking the first 2 blocks
                             try actions.append(.{ .movement = .{
@@ -230,6 +227,7 @@ pub const AStarContext = struct {
                             } });
                         }
                     }
+                    try actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(axe_index)) } });
 
                     while (parent.?.parent != null) : (parent = parent.?.parent) {
                         try actions.append(.{ .movement = .{

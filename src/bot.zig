@@ -250,12 +250,12 @@ pub const Inventory = struct {
         }
     }
 
-    pub fn findToolForMaterial(self: *Self, reg: *const Reg, material: []const u8) ?usize {
+    pub fn findToolForMaterial(self: *Self, reg: *const Reg, material: []const u8) ?struct { slot_index: u16, mul: f32 } {
         const matching_item_ids = reg.getMaterial(material) orelse return null;
         for (self.slots.items, 0..) |slot, i| {
             for (matching_item_ids) |id| {
                 if (slot != null and id.id == slot.?.item_id) {
-                    return i;
+                    return .{ .slot_index = @intCast(i), .mul = id.mul };
                 }
             }
         }
@@ -290,6 +290,7 @@ pub const BotScriptThreadData = struct {
     actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
     action_index: ?usize = null,
     move_state: MovementState = undefined,
+    block_break_timer: ?f64 = null,
 
     pub fn init(alloc: std.mem.Allocator) Self {
         return .{
@@ -332,6 +333,7 @@ pub const BotScriptThreadData = struct {
     }
 
     pub fn nextAction(self: *Self, init_dt: f64, pos: V3f) void {
+        self.block_break_timer = null;
         if (self.action_index == null)
             return;
         self.action_index = if (self.action_index.? == 0) null else self.action_index.? - 1;
