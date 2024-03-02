@@ -129,7 +129,7 @@ pub const MovementState = struct {
                 }
             },
             .fall => {
-                if (mvec.magnitude() != 1) unreachable; //Only allow falls in cardinal directions for now
+                //if (mvec.magnitude() != 1) unreachable; //Only allow falls in cardinal directions for now
                 const fall_time = quadFR(gravity / 2, 0, @fabs(iv.y)) orelse unreachable;
                 const fall_start = (0.5 + (PlayerBounds / 2)) / speed;
                 const max_t = fall_time + fall_start;

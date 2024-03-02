@@ -459,6 +459,9 @@ pub const AStarContext = struct {
             if (cat.cat == .jump and (block_above != 0 or i % 2 == 0))
                 continue;
 
+            if (i % 2 == 0 and cat.cat != .walk)
+                continue;
+
             if (cat.cat == .gap) {
                 try self.addNode(.{
                     .ntype = cat.cat,

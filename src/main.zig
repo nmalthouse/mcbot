@@ -871,13 +871,14 @@ pub const LuaApi = struct {
     }
 
     pub fn init(alloc: std.mem.Allocator, world: *McWorld, bo: *Bot, thread_data: *bot.BotScriptThreadData, vm: *Lua) Self {
-        vm.regN(&.{
-            .{ "gotoLandmark", api_gotoLandmark },
-            .{ "sleepms", api_sleepms },
-            .{ "gotoCoord", api_gotoCoord },
-            .{ "chopNearestTree", api_chopNearestTree },
-            .{ "blockinfo", api_blockinfo },
-        });
+        const info = @typeInfo(Api);
+        inline for (info.Struct.decls) |decl| {
+            var buf: [128]u8 = undefined;
+            @memcpy(buf[0..decl.name.len], decl.name);
+            buf[decl.name.len] = 0;
+            vm.reg(@as([*c]const u8, @ptrCast(&buf[0])), @field(Api, decl.name));
+        }
+
         return .{
             .thread_data = thread_data,
             .vm = vm,
@@ -904,103 +905,128 @@ pub const LuaApi = struct {
         std.time.sleep(std.time.ns_per_s / 10);
     }
 
-    pub export fn api_blockinfo(L: Lua.Ls) c_int {
-        const self = lss orelse return 0;
-        Lua.c.lua_settop(L, 3);
-        const x = Lua.getArg(L, i32, 1);
-        const y = Lua.getArg(L, i32, 2);
-        const z = Lua.getArg(L, i32, 3);
+    pub const Api = struct {
+        pub export fn blockinfo(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 3);
+            const x = Lua.getArg(L, i32, 1);
+            const y = Lua.getArg(L, i32, 2);
+            const z = Lua.getArg(L, i32, 3);
 
-        if (self.world.chunk_data.getBlock(V3i.new(x, y, z))) |id| {
-            const block = self.world.reg.getBlockFromState(id);
-            var buf: [6]Reg.Block.State = undefined;
-            if (block.getAllStates(id, &buf)) |states| {
-                std.debug.print("Block {s}\n\tstate {d}\n", .{ block.name, id });
-                for (states) |st|
-                    std.debug.print("\n\tlocal {s}: {any}\n", .{ @tagName(st.sub), st.sub });
-            }
-        }
-        return 0;
-    }
-
-    pub export fn api_sleepms(L: Lua.Ls) c_int {
-        const self = lss orelse return 0;
-        Lua.c.lua_settop(L, 1);
-        const n_ms = Lua.getArg(L, u64, 1);
-        self.beginHalt();
-        defer self.endHalt();
-        std.time.sleep(n_ms * std.time.ns_per_ms);
-        return 0;
-    }
-
-    pub export fn api_gotoLandmark(L: Lua.Ls) c_int {
-        const self = lss orelse return 0;
-        Lua.c.lua_settop(L, 1);
-        const str = Lua.getArg(L, []const u8, 1);
-        self.beginHalt();
-        defer self.endHalt();
-
-        self.pathctx.reset() catch unreachable;
-        self.bo.modify_mutex.lock();
-        const pos = self.bo.pos.?;
-        self.bo.modify_mutex.unlock();
-        const coord = self.world.getSignWaypoint(str) orelse {
-            std.debug.print("Cant find tools waypoint\n", .{});
-            return 0;
-        };
-        const found = self.pathctx.pathfind(pos, coord.toF()) catch unreachable;
-        if (found) |*actions|
-            self.thread_data.setActions(actions.*, pos);
-
-        return 0;
-    }
-
-    pub export fn api_gotoCoord(L: Lua.Ls) c_int {
-        const self = lss orelse return 0;
-        Lua.c.lua_settop(L, 3);
-        const x = Lua.getArg(L, f32, 1);
-        const y = Lua.getArg(L, f32, 2);
-        const z = Lua.getArg(L, f32, 3);
-        self.beginHalt();
-        defer self.endHalt();
-        errc(self.pathctx.reset()) orelse return 0;
-        self.bo.modify_mutex.lock();
-        const pos = self.bo.pos.?;
-        self.bo.modify_mutex.unlock();
-        const found = errc(self.pathctx.pathfind(pos, V3f.new(x, y, z))) orelse return 0;
-        if (found) |*actions|
-            self.thread_data.setActions(actions.*, pos);
-
-        return 0;
-    }
-
-    pub export fn api_chopNearestTree(L: Lua.Ls) c_int {
-        const self = lss orelse return 0;
-        Lua.c.lua_settop(L, 1);
-        self.beginHalt();
-        defer self.endHalt();
-        errc(self.pathctx.reset()) orelse return 0;
-        self.bo.modify_mutex.lock();
-        const pos = self.bo.pos.?;
-        if (self.bo.inventory.findToolForMaterial(self.world.reg, "mineable/axe")) |match| {
-            const wood_hardness = 2;
-            const btime = Reg.calculateBreakTime(match.mul, wood_hardness, .{});
-            //block hardness
-            //tool_multiplier
-            self.bo.modify_mutex.unlock();
-            const tree_o = errc(self.pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20)) orelse return 0;
-            if (tree_o) |*tree| {
-                self.thread_data.setActions(tree.*, pos);
-                for (tree.items) |item| {
-                    std.debug.print("{any}\n", .{item});
+            if (self.world.chunk_data.getBlock(V3i.new(x, y, z))) |id| {
+                const block = self.world.reg.getBlockFromState(id);
+                var buf: [6]Reg.Block.State = undefined;
+                if (block.getAllStates(id, &buf)) |states| {
+                    std.debug.print("Block {s}\n\tstate {d}\n", .{ block.name, id });
+                    for (states) |st|
+                        std.debug.print("\n\tlocal {s}: {any}\n", .{ @tagName(st.sub), st.sub });
                 }
             }
-        } else {
-            self.bo.modify_mutex.unlock();
+            return 0;
         }
 
-        return 0;
-    }
+        pub export fn sleepms(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const n_ms = Lua.getArg(L, u64, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            std.time.sleep(n_ms * std.time.ns_per_ms);
+            return 0;
+        }
+
+        pub export fn gotoLandmark(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const str = Lua.getArg(L, []const u8, 1);
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.pathctx.reset() catch unreachable;
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
+            const coord = self.world.getSignWaypoint(str) orelse {
+                std.debug.print("Cant find tools waypoint\n", .{});
+                return 0;
+            };
+            const found = self.pathctx.pathfind(pos, coord.toF()) catch unreachable;
+            if (found) |*actions|
+                self.thread_data.setActions(actions.*, pos);
+
+            return 0;
+        }
+
+        pub export fn gotoCoord(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 3);
+            const x = Lua.getArg(L, f32, 1);
+            const y = Lua.getArg(L, f32, 2);
+            const z = Lua.getArg(L, f32, 3);
+            self.beginHalt();
+            defer self.endHalt();
+            errc(self.pathctx.reset()) orelse return 0;
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
+            const found = errc(self.pathctx.pathfind(pos, V3f.new(x, y, z))) orelse return 0;
+            if (found) |*actions|
+                self.thread_data.setActions(actions.*, pos);
+
+            return 0;
+        }
+
+        pub export fn chopNearestTree(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            errc(self.pathctx.reset()) orelse return 0;
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            if (self.bo.inventory.findToolForMaterial(self.world.reg, "mineable/axe")) |match| {
+                const wood_hardness = 2;
+                const btime = Reg.calculateBreakTime(match.mul, wood_hardness, .{});
+                //block hardness
+                //tool_multiplier
+                self.bo.modify_mutex.unlock();
+                const tree_o = errc(self.pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20)) orelse return 0;
+                if (tree_o) |*tree| {
+                    self.thread_data.setActions(tree.*, pos);
+                    for (tree.items) |item| {
+                        std.debug.print("{any}\n", .{item});
+                    }
+                }
+            } else {
+                self.bo.modify_mutex.unlock();
+            }
+
+            return 0;
+        }
+
+        pub export fn getBlockId(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            const name = Lua.getArg(L, []const u8, 1);
+            const id = self.world.reg.getBlockFromName(name);
+            Lua.pushV(L, id);
+            return 1;
+        }
+
+        pub export fn getBlock(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            self.beginHalt();
+            defer self.endHalt();
+
+            const name = Lua.getArg(L, []const u8, 1);
+            const id = self.world.reg.getBlockFromNameI(name);
+            Lua.pushV(L, id);
+            return 1;
+        }
+    };
 };
 pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
     if (lss != null)

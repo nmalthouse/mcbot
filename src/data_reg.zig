@@ -416,6 +416,15 @@ pub const NewDataReg = struct {
         return self.blocks[id];
     }
 
+    pub fn getBlockFromNameI(self: *const Self, name: []const u8) ?Block {
+        for (self.blocks) |block| {
+            if (std.mem.eql(u8, block.name, name)) {
+                return block;
+            }
+        }
+        return null;
+    }
+
     pub fn getBlockFromName(self: *const Self, name: []const u8) ?BlockId {
         for (self.blocks) |block| {
             if (std.mem.eql(u8, block.name, name)) {
