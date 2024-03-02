@@ -94,6 +94,17 @@ pub const AStarContext = struct {
         block_break: BreakBlock,
         wait_ms: u32,
         hold_item: struct { slot_index: u16 },
+        place_block: struct {
+            pos: V3i,
+        },
+        open_chest: struct { pos: V3i },
+        close_chest: void,
+        inventory: union(enum) {
+            deposit: struct {
+                //kind: enum { all, one } = .one,
+                id: Reg.ItemId,
+            },
+        },
     };
     //TODO create a struct that contains a list of playeractionitems.
     //Use this struct to manage all state regarding player actions:
@@ -118,13 +129,6 @@ pub const AStarContext = struct {
     pub const MoveItem = struct {
         kind: AStarContext.Node.Ntype = .walk,
         pos: V3f,
-    };
-
-    pub const Direction = enum {
-        north,
-        south,
-        east,
-        west,
     };
 
     pub const ColumnHelper = struct {

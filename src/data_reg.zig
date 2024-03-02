@@ -1,4 +1,5 @@
 const std = @import("std");
+const vector = @import("vector.zig");
 const com = @import("common.zig");
 const J = std.json;
 
@@ -35,6 +36,30 @@ const J = std.json;
 // [F] version.json
 // [P] blocks.json
 
+pub const Direction = enum {
+    north,
+    south,
+    west,
+    east,
+
+    pub fn reverse(self: Direction) Direction {
+        return switch (self) {
+            .north => .south,
+            .south => .north,
+            .east => .west,
+            .west => .east,
+        };
+    }
+
+    pub fn toVec(self: Direction) vector.V3i {
+        return switch (self) {
+            .north => vector.V3i.new(0, 0, -1),
+            .south => vector.V3i.new(0, 0, 1),
+            .east => vector.V3i.new(1, 0, 0),
+            .west => vector.V3i.new(-1, 0, 0),
+        };
+    }
+};
 pub const ItemId = u16;
 pub const EntId = u8;
 pub const BlockId = u16; //TODO block id can be made much smaller
@@ -96,6 +121,11 @@ pub const Item = struct {
     id: ItemId,
     name: []const u8,
     stackSize: u8,
+
+    fn asc(ctx: void, lhs: @This(), rhs: @This()) bool {
+        _ = ctx;
+        return lhs.id < rhs.id;
+    }
     //displayName: []const u8,
 };
 pub const ItemsJson = []const Item;
@@ -145,40 +175,11 @@ pub const Block = struct {
         @"vine_or_glow_lichen;plant;mineable/axe",
     };
 
-    pub const State1 = struct {
-        name: enum(u8) {
-            unimplmented,
-            attached,
-            snowy,
-            age,
-
-            pub fn jsonParse(alloc: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
-                const str = try std.json.innerParse([]const u8, alloc, source, options);
-                const eql = std.mem.eql;
-                const tinfo = @typeInfo(@This());
-                inline for (tinfo.Enum.fields) |field| {
-                    if (eql(u8, field.name, str)) {
-                        return @enumFromInt(field.value);
-                    }
-                }
-                return .unimplmented;
-            }
-        },
-
-        type: struct {
-            pub fn jsonParse(alloc: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
-                const str = try std.json.innerParse([]const u8, alloc, source, options);
-                std.debug.print("{s}\n", .{str});
-                return .{};
-            }
-        },
-    };
-
     pub const State = struct {
         pub const SubState = union(enum) {
             unimplemented: u8,
             age: u8,
-            facing: enum { north, south, west, east },
+            facing: Direction,
             half: enum { top, bottom },
             shape: enum { straight, inner_left, inner_right, outer_left, outer_right },
             waterlogged: bool,
@@ -247,6 +248,7 @@ pub const Block = struct {
     stackSize: u8,
     defaultState: StateId,
     boundingBox: BoundingBox,
+    material: []const u8,
     //material: ?Material,
     diggable: bool,
     transparent: bool,
@@ -306,14 +308,14 @@ pub const NewDataReg = struct {
 
     alloc: std.mem.Allocator,
     version_id: u32,
-    items: ItemsJson,
+    item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[]. name strings are stored in items[]
+    items: []Item,
     blocks: []Block,
     entities: EntitiesJson,
     materials: Materials,
 
     empty_block_ids: std.ArrayList(BlockId),
 
-    item_j: std.json.Parsed(ItemsJson),
     ent_j: std.json.Parsed(EntitiesJson),
 
     pub fn init(alloc: std.mem.Allocator, comptime version: []const u8) !Self {
@@ -324,7 +326,19 @@ pub const NewDataReg = struct {
         var version_info = try com.readJson(data_dir, "version.json", alloc, VersionJson);
         defer version_info.deinit();
 
-        const items = try com.readJson(data_dir, "items.json", alloc, ItemsJson);
+        const jitems = try com.readJson(data_dir, "items.json", alloc, ItemsJson);
+        defer jitems.deinit();
+        var item_map = std.StringHashMap(u16).init(alloc);
+        var items = try alloc.alloc(Item, jitems.value.len);
+        for (jitems.value, 0..) |item, i| {
+            items[i] = item;
+            items[i].name = try alloc.dupe(u8, item.name);
+        }
+        std.sort.heap(Item, items, {}, Item.asc);
+        for (items, 0..) |item, i| {
+            try item_map.put(item.name, @intCast(i));
+        }
+
         const ent = try com.readJson(data_dir, "entities.json", alloc, EntitiesJson);
         const block = try com.readJson(data_dir, "blocks.json", alloc, BlocksJson);
         const mat = try com.readJson(data_dir, "materials.json", alloc, MaterialsJson);
@@ -338,6 +352,7 @@ pub const NewDataReg = struct {
                 try empty.append(b.id);
             blocks[i] = b;
             blocks[i].name = try alloc.dupe(u8, b.name);
+            blocks[i].material = try alloc.dupe(u8, b.material);
             blocks[i].states = try alloc.dupe(Block.State, b.states);
         }
         std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
@@ -349,13 +364,13 @@ pub const NewDataReg = struct {
         const ret = Self{
             .version_id = version_info.value.version,
             .alloc = alloc,
-            .items = items.value,
             .entities = ent.value,
+            .item_name_map = item_map,
+            .items = items,
             .blocks = blocks,
             .materials = try Materials.initFromJson(alloc, mat.value),
             .empty_block_ids = empty,
 
-            .item_j = items,
             .ent_j = ent,
         };
         return ret;
@@ -365,11 +380,16 @@ pub const NewDataReg = struct {
         for (self.blocks) |b| {
             self.alloc.free(b.name);
             self.alloc.free(b.states);
+            self.alloc.free(b.material);
         }
         self.alloc.free(self.blocks);
+        for (self.items) |item| {
+            self.alloc.free(item.name);
+        }
+        self.alloc.free(self.items);
+        self.item_name_map.deinit();
         self.materials.deinit();
         self.empty_block_ids.deinit();
-        self.item_j.deinit();
         self.ent_j.deinit();
     }
 
@@ -410,6 +430,13 @@ pub const NewDataReg = struct {
 
     pub fn getItem(self: *const Self, id: ItemId) Item {
         return self.items[id];
+    }
+
+    pub fn getItemFromName(self: *const Self, name: []const u8) ?Item {
+        if (self.item_name_map.get(name)) |item_index| {
+            return self.items[item_index];
+        }
+        return null;
     }
 
     pub fn getBlock(self: *const Self, id: BlockId) Block {
