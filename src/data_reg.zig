@@ -145,6 +145,99 @@ pub const Block = struct {
         @"vine_or_glow_lichen;plant;mineable/axe",
     };
 
+    pub const State1 = struct {
+        name: enum(u8) {
+            unimplmented,
+            attached,
+            snowy,
+            age,
+
+            pub fn jsonParse(alloc: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
+                const str = try std.json.innerParse([]const u8, alloc, source, options);
+                const eql = std.mem.eql;
+                const tinfo = @typeInfo(@This());
+                inline for (tinfo.Enum.fields) |field| {
+                    if (eql(u8, field.name, str)) {
+                        return @enumFromInt(field.value);
+                    }
+                }
+                return .unimplmented;
+            }
+        },
+
+        type: struct {
+            pub fn jsonParse(alloc: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
+                const str = try std.json.innerParse([]const u8, alloc, source, options);
+                std.debug.print("{s}\n", .{str});
+                return .{};
+            }
+        },
+    };
+
+    pub const State = struct {
+        pub const SubState = union(enum) {
+            unimplemented: u8,
+            age: u8,
+            facing: enum { north, south, west, east },
+            half: enum { top, bottom },
+            shape: enum { straight, inner_left, inner_right, outer_left, outer_right },
+            waterlogged: bool,
+        };
+        pub const SubStateTag = @typeInfo(SubState).Union.tag_type.?;
+
+        num_values: u8,
+        sub: SubState,
+
+        pub const JsonDummyState = struct {
+            name: []const u8,
+            type: []const u8,
+            num_values: u8,
+            values: ?[]const []const u8 = null,
+        };
+
+        pub fn jsonParse(alloc: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
+            const eql = std.mem.eql;
+            const dummy = try std.json.innerParse(JsonDummyState, alloc, source, options);
+            const info = @typeInfo(SubState);
+            var ret: State = .{ .num_values = dummy.num_values, .sub = .{ .unimplemented = 0 } };
+            inline for (info.Union.fields) |f| {
+                if (eql(u8, f.name, dummy.name)) {
+                    const finfo = @typeInfo(f.type);
+                    ret.sub = @unionInit(SubState, f.name, switch (finfo) {
+                        .Int => 0,
+                        .Enum => @enumFromInt(0),
+                        .Void => {},
+                        .Bool => false,
+                        else => @compileError("not supported"),
+                    });
+                    return ret;
+                }
+            }
+            return ret;
+        }
+
+        pub fn initWithInt(num_values: u8, sub: SubStateTag, val: usize) @This() {
+            const info = @typeInfo(SubState);
+            inline for (info.Union.fields, 0..) |f, i| {
+                if (i == @intFromEnum(sub)) {
+                    const T = f.type;
+                    const finfo = @typeInfo(T);
+                    return .{
+                        .num_values = num_values,
+                        .sub = @unionInit(SubState, f.name, switch (finfo) {
+                            .Int => @intCast(val),
+                            .Enum => @enumFromInt(val),
+                            .Void => {},
+                            .Bool => val == 0, //bools are reversed in minecraft data
+                            else => @compileError("not supported"),
+                        }),
+                    };
+                }
+            }
+            unreachable;
+        }
+    };
+
     id: BlockId,
     name: []const u8,
     hardness: ?f32,
@@ -158,6 +251,8 @@ pub const Block = struct {
     diggable: bool,
     transparent: bool,
 
+    states: []State,
+
     //filterLight: u8, not relevent
     fn compareStateIds(ctx: u8, key: Block, actual: Block) std.math.Order {
         _ = ctx;
@@ -170,6 +265,38 @@ pub const Block = struct {
     fn asc(ctx: void, lhs: @This(), rhs: @This()) bool {
         _ = ctx;
         return lhs.id < rhs.id;
+    }
+
+    pub fn getState(self: @This(), stateid: StateId, sub: Block.State.SubStateTag) ?State {
+
+        //Formula for n states [a,b,c,d,e]
+        //
+        // to find what state d is:
+        // ( id /(a * b * c) ) % d
+
+        var divisor: usize = 1;
+        var i = self.states.len;
+        while (i > 0) : (i -= 1) {
+            const state = self.states[i - 1];
+            defer divisor *= state.num_values;
+            if (state.sub == sub) {
+                const local_id = @divFloor(stateid - self.minStateId, divisor) % state.num_values;
+                return Block.State.initWithInt(state.num_values, sub, local_id);
+            }
+        }
+
+        return null;
+    }
+
+    pub fn getAllStates(self: *const @This(), stateid: StateId, buf: []State) ?[]State {
+        var count: usize = 0;
+        for (self.states) |state| {
+            defer count += 1;
+            if (count >= buf.len)
+                return buf[0..count];
+            buf[count] = self.getState(stateid, state.sub) orelse return null;
+        }
+        return buf[0..count];
     }
 };
 pub const BlocksJson = []Block;
@@ -211,6 +338,7 @@ pub const NewDataReg = struct {
                 try empty.append(b.id);
             blocks[i] = b;
             blocks[i].name = try alloc.dupe(u8, b.name);
+            blocks[i].states = try alloc.dupe(Block.State, b.states);
         }
         std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
         std.sort.heap(Block, blocks, {}, Block.asc);
@@ -236,6 +364,7 @@ pub const NewDataReg = struct {
     pub fn deinit(self: *Self) void {
         for (self.blocks) |b| {
             self.alloc.free(b.name);
+            self.alloc.free(b.states);
         }
         self.alloc.free(self.blocks);
         self.materials.deinit();

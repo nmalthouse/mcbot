@@ -1,6 +1,6 @@
 const std = @import("std");
 const mc = @import("listener.zig");
-const Reg = @import("data_reg.zig").DataReg;
+const Reg = @import("data_reg.zig");
 const mcTypes = @import("mcContext.zig");
 const McWorld = mcTypes.McWorld;
 
@@ -191,6 +191,41 @@ pub const AStarContext = struct {
         self.closed.deinit();
     }
 
+    pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId) !?std.ArrayList(V3i) {
+        try self.reset();
+        try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
+        var iterations: usize = 0;
+        while (true) : (iterations += 1) {
+            const current_n = self.popLowestFOpen() orelse break;
+            const pv = V3i.new(current_n.x, current_n.y, current_n.z);
+            const direct_adj = [_]u32{ 1, 3, 5, 7 };
+            for (direct_adj) |di| {
+                const avec = ADJ[di];
+                const coord = V3i.new(pv.x + avec.x, pv.y, pv.z + avec.y);
+                if (self.world.chunk_data.getBlock(coord)) |id| {
+                    if (self.world.reg.getBlockIdFromState(id) == blockid) {
+                        try self.addNode(.{
+                            .ntype = .walk,
+                            .x = coord.x,
+                            .y = coord.y,
+                            .z = coord.z,
+                            .G = 0,
+                            .H = 0,
+                        }, current_n);
+                    }
+                }
+            }
+            if (self.open.items.len == 0) {
+                var tiles = std.ArrayList(V3i).init(self.alloc);
+                for (self.closed.items) |p| {
+                    try tiles.append(V3i.new(p.x, p.y, p.z));
+                }
+                return tiles;
+            }
+        }
+        return null;
+    }
+
     pub fn findTree(self: *Self, start: V3f, axe_index: u32, wood_break_time: f64) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
         try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
@@ -230,6 +265,10 @@ pub const AStarContext = struct {
                     try actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(axe_index)) } });
 
                     while (parent.?.parent != null) : (parent = parent.?.parent) {
+                        switch (parent.?.ntype) {
+                            .gap, .jump, .fall => try actions.append(.{ .wait_ms = 300 }),
+                            else => {},
+                        }
                         try actions.append(.{ .movement = .{
                             .kind = parent.?.ntype,
                             .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(-0.5, 0, -0.5)),

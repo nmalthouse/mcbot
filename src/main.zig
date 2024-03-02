@@ -683,6 +683,15 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     }
                     const pw = mc.lookAtBlock(cbot.pos.?, player_info.?.pos.add(V3f.new(-0.3, 1, -0.3)));
                     try bp.setPlayerPositionRot(cbot.pos.?, pw.yaw, pw.pitch, true);
+                } else if (eql(u8, com, "inspect")) {
+                    if (parseCoordOpt(&it)) |coord| {
+                        if (world.chunk_data.getBlock(coord.toI())) |id| {
+                            const block = world.reg.getBlockFromState(id);
+                            //_ = block.getState(id, .age);
+                            try m_wr.print("Block: {s} {d}", .{ block.name, id });
+                            try bp.sendChat(ret_msg_buf.items);
+                        }
+                    }
                 } else if (eql(u8, com, "say")) {
                     var ite = it.next();
                     while (ite != null) : (ite = it.next()) {
@@ -867,6 +876,7 @@ pub const LuaApi = struct {
             .{ "sleepms", api_sleepms },
             .{ "gotoCoord", api_gotoCoord },
             .{ "chopNearestTree", api_chopNearestTree },
+            .{ "blockinfo", api_blockinfo },
         });
         return .{
             .thread_data = thread_data,
@@ -894,10 +904,29 @@ pub const LuaApi = struct {
         std.time.sleep(std.time.ns_per_s / 10);
     }
 
+    pub export fn api_blockinfo(L: Lua.Ls) c_int {
+        const self = lss orelse return 0;
+        Lua.c.lua_settop(L, 3);
+        const x = Lua.getArg(L, i32, 1);
+        const y = Lua.getArg(L, i32, 2);
+        const z = Lua.getArg(L, i32, 3);
+
+        if (self.world.chunk_data.getBlock(V3i.new(x, y, z))) |id| {
+            const block = self.world.reg.getBlockFromState(id);
+            var buf: [6]Reg.Block.State = undefined;
+            if (block.getAllStates(id, &buf)) |states| {
+                std.debug.print("Block {s}\n\tstate {d}\n", .{ block.name, id });
+                for (states) |st|
+                    std.debug.print("\n\tlocal {s}: {any}\n", .{ @tagName(st.sub), st.sub });
+            }
+        }
+        return 0;
+    }
+
     pub export fn api_sleepms(L: Lua.Ls) c_int {
         const self = lss orelse return 0;
         Lua.c.lua_settop(L, 1);
-        const n_ms = Lua.getArg(L, u32, 1);
+        const n_ms = Lua.getArg(L, u64, 1);
         self.beginHalt();
         defer self.endHalt();
         std.time.sleep(n_ms * std.time.ns_per_ms);
@@ -928,7 +957,7 @@ pub const LuaApi = struct {
 
     pub export fn api_gotoCoord(L: Lua.Ls) c_int {
         const self = lss orelse return 0;
-        Lua.c.lua_settop(L, 1);
+        Lua.c.lua_settop(L, 3);
         const x = Lua.getArg(L, f32, 1);
         const y = Lua.getArg(L, f32, 2);
         const z = Lua.getArg(L, f32, 3);
@@ -962,6 +991,9 @@ pub const LuaApi = struct {
             const tree_o = errc(self.pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20)) orelse return 0;
             if (tree_o) |*tree| {
                 self.thread_data.setActions(tree.*, pos);
+                for (tree.items) |item| {
+                    std.debug.print("{any}\n", .{item});
+                }
             }
         } else {
             self.bo.modify_mutex.unlock();
@@ -1268,6 +1300,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         vert_map.deinit();
     }
 
+    var position_synced = false;
+
     var font = try graph.Font.init(alloc, std.fs.cwd(), "dos.ttf", 16, 163, .{});
     defer font.deinit();
 
@@ -1303,6 +1337,12 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         gctx.text(.{ .x = 40, .y = 30 }, "LOADING CHUNKS", &font, 72, 0xffffffff);
         gctx.end(win.screen_width, win.screen_height, graph.za.Mat4.zero());
         win.swap();
+    }
+    const wheat_id = world.reg.getBlockFromName("wheat") orelse 0;
+    var wheat_pos: ?std.ArrayList(V3i) = null;
+    defer {
+        if (wheat_pos) |wh|
+            wh.deinit();
     }
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
@@ -1348,6 +1388,21 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 }
             }
             astar_ctx_mutex.unlock();
+        }
+
+        if (wheat_pos) |wh| {
+            for (wh.items) |pos| {
+                try cubes.cube(
+                    @as(f32, @floatFromInt(pos.x)),
+                    @as(f32, @floatFromInt(pos.y)) + 2,
+                    @as(f32, @floatFromInt(pos.z)),
+                    0.7,
+                    0.2,
+                    0.6,
+                    mc_atlas.getTextureRec(1),
+                    &[_]graph.CharColor{graph.itc(0xfffff0ff)} ** 6,
+                );
+            }
         }
 
         if (world.chunk_data.rw_lock.tryLockShared()) {
@@ -1400,6 +1455,13 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
                                 _ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, bot1.pos.?, pi.toF().add(V3f.new(0, 1, 0)), bot1.fd, &astar_ctx_mutex, &astar_ctx });
                                 bot1.modify_mutex.unlock();
+                            }
+                            if (win.mouse.right == .rising) {
+                                std.debug.print("DOING THE FLOOD\n", .{});
+                                if (wheat_pos) |wh| {
+                                    wh.deinit();
+                                }
+                                wheat_pos = try astar_ctx.?.floodfillCommonBlock(pi.toF(), wheat_id);
                             }
 
                             break;
@@ -1480,6 +1542,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         {
             bot1.modify_mutex.lock();
             if (bot1.pos) |bpos| {
+                if (!position_synced) {
+                    position_synced = true;
+                    camera.pos = graph.za.Vec3.new(@floatCast(bpos.x), @floatCast(bpos.y), @floatCast(bpos.z));
+                }
                 const p = bpos.toRay();
                 try cubes.cube(
                     p.x - 0.3,

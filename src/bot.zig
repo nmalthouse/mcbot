@@ -95,7 +95,7 @@ pub const MovementState = struct {
                 };
             },
             .jump => {
-                if (mvec.magnitude() != 1) unreachable; //Only allow jumps in cardinal directions for now
+                //if (mvec.magnitude() != 1) unreachable; //Only allow jumps in cardinal directions for now
                 //Once we have reached dy = +1 we don't worry about colliding with the block we are jumping on.
                 const at_y1_time = quadFL(gravity / 2, jumpV, -1) orelse unreachable;
                 const jump_end_time = quadFR(gravity / 2, jumpV, -1) orelse unreachable;
