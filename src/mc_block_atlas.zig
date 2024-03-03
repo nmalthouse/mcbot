@@ -43,13 +43,16 @@ pub fn readFileCwd(alloc: std.mem.Allocator, file_name: []const u8) ![]const u8 
 }
 
 pub const McAtlas = struct {
+    const left_out_sentinal = std.math.maxInt(u16);
     texture: graph.Texture,
     protocol_id_to_atlas_map: []const u16,
     entry_w: usize,
     entry_span: usize,
 
     pub fn getTextureRec(self: *const @This(), protocol_id: u32) graph.Rect {
-        const atlas_id = self.protocol_id_to_atlas_map[protocol_id];
+        const atlas_id_o = self.protocol_id_to_atlas_map[protocol_id];
+        const atlas_id = if (atlas_id_o == left_out_sentinal) 0 else atlas_id_o;
+
         return graph.Rec(
             @as(f32, @floatFromInt((atlas_id % self.entry_span) * self.entry_w)),
             @as(f32, @floatFromInt((atlas_id / self.entry_span) * self.entry_w)),
@@ -58,22 +61,29 @@ pub const McAtlas = struct {
         );
     }
 
+    pub fn getTextureRecO(self: *const @This(), protocol_id: u32) ?graph.Rect {
+        const atlas_id_o = self.protocol_id_to_atlas_map[protocol_id];
+        if (atlas_id_o == left_out_sentinal) return null;
+        return self.getTextureRec(protocol_id);
+    }
+
     pub fn deinit(self: *const McAtlas, alloc: std.mem.Allocator) void {
         alloc.free(self.protocol_id_to_atlas_map);
     }
 };
 
-pub fn buildAtlas(
+pub fn buildAtlasGeneric(
     alloc: std.mem.Allocator,
     dir: std.fs.Dir,
     texture_pack_filename: []const u8,
-    reg: *const dreg.NewDataReg,
+    name_id_slice: anytype,
+    res_path: []const u8, //Path to folder containing all the pngs we will atlas. Relative to the pack folder we pass in
+    debug_img_path: []const u8,
 ) !McAtlas {
-    const blocks = reg.getBlockSlice();
+    const blocks = name_id_slice;
     var pack_dir = try dir.openDir(texture_pack_filename, .{});
     defer pack_dir.close();
-    const it_dir_path = "assets/minecraft/textures/block";
-    var itdir = try pack_dir.openIterableDir(it_dir_path, .{});
+    var itdir = try pack_dir.openIterableDir(res_path, .{});
     defer itdir.close();
 
     var pngs = std.ArrayList([]const u8).init(alloc);
@@ -100,7 +110,7 @@ pub fn buildAtlas(
     defer atlas_bitmap.data.deinit();
 
     var proto_map = std.ArrayList(u16).init(alloc);
-    try proto_map.appendNTimes(0, blocks.len);
+    try proto_map.appendNTimes(McAtlas.left_out_sentinal, blocks.len);
 
     const Match = struct {
         pub fn ln(ctx: u8, a: @This(), b: @This()) bool {
@@ -127,7 +137,7 @@ pub fn buildAtlas(
         if (matches.items.len > 0) {
             var strcat = std.ArrayList(u8).init(alloc);
             defer strcat.deinit();
-            try strcat.appendSlice(it_dir_path);
+            try strcat.appendSlice(res_path);
             try strcat.append('/');
             try strcat.appendSlice(pngs.items[matches.items[0].index]);
 
@@ -150,7 +160,8 @@ pub fn buildAtlas(
             left_out_count += 1;
         }
     }
-    try atlas_bitmap.writeToBmpFile(alloc, std.fs.cwd(), "debug/mcatlas.bmp");
+    //try atlas_bitmap.writeToBmpFile(alloc, std.fs.cwd(), debug_img_path);
+    try atlas_bitmap.writeToPngFile(std.fs.cwd(), debug_img_path);
     std.debug.print("left out: {d}\n", .{left_out_count});
     return McAtlas{
         .texture = graph.Texture.initFromBitmap(atlas_bitmap, .{ .mag_filter = graph.c.GL_NEAREST }),

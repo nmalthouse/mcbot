@@ -517,6 +517,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 bot1.container_state = state_id;
                 try bot1.inventory.setSlot(@intCast(slot_i), data);
                 std.debug.print("updating slot {any}\n", .{data});
+            } else if (bot1.interacted_inventory.win_id != null and win_id == bot1.interacted_inventory.win_id.?) {
+                bot1.container_state = state_id;
+                try bot1.interacted_inventory.setSlot(@intCast(slot_i), data);
             }
         },
         .Open_Screen => {
@@ -824,7 +827,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             } else if (eql(u8, key, "close_chest")) {
                 try pctx.sendChat("Trying to close chest");
                 try pctx.closeContainer(bot1.interacted_inventory.win_id.?);
-                bot1.interacted_inventory.win_id = null;
+                //bot1.interacted_inventory.win_id = null;
             } else if (eql(u8, key, "open_chest")) {
                 try pctx.sendChat("Trying to open chest");
                 const v = try parseCoord(&it);
@@ -1174,6 +1177,7 @@ pub const LuaApi = struct {
             const pos = self.bo.pos.?;
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
+            errc(actions.append(.{ .wait_ms = 5000 })) orelse return 0;
             for (to_move) |ac| {
                 errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
                 switch (ac) {
@@ -1427,7 +1431,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                         },
                         .close_chest => {
                             try bp.closeContainer(bo.interacted_inventory.win_id.?);
-                            bo.interacted_inventory.win_id = null;
+                            //bo.interacted_inventory.win_id = null;
                             bt.nextAction(0, bo.pos.?);
                         },
                         .block_break => |bb| {
@@ -1502,8 +1506,25 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var ctx = try graph.GraphicsContext.init(alloc, 163);
     defer ctx.deinit();
 
-    const mc_atlas = try mcBlockAtlas.buildAtlas(alloc, std.fs.cwd(), "res_pack", world.reg);
+    const mc_atlas = try mcBlockAtlas.buildAtlasGeneric(
+        alloc,
+        std.fs.cwd(),
+        "res_pack",
+        world.reg.blocks,
+        "assets/minecraft/textures/block",
+        "debug/mc_atlas.png",
+    );
     defer mc_atlas.deinit(alloc);
+
+    const item_atlas = try mcBlockAtlas.buildAtlasGeneric(
+        alloc,
+        std.fs.cwd(),
+        "res_pack",
+        world.reg.items,
+        "assets/minecraft/textures/item",
+        "debug/mc_itematlas.bmp",
+    );
+    defer item_atlas.deinit(alloc);
 
     var camera = graph.Camera3D{};
     camera.pos.data = [_]f32{ -2.20040695e+02, 6.80385284e+01, 1.00785331e+02 };
@@ -1570,6 +1591,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         if (wheat_pos) |wh|
             wh.deinit();
     }
+    var draw_inventory = true;
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
@@ -1767,6 +1789,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
         {
             bot1.modify_mutex.lock();
+            defer bot1.modify_mutex.unlock();
             if (bot1.pos) |bpos| {
                 if (!position_synced) {
                     position_synced = true;
@@ -1818,7 +1841,6 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     }
                 }
             }
-            bot1.modify_mutex.unlock();
         }
 
         cubes.setData();
@@ -1827,12 +1849,55 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         camera.update(&win);
 
         graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
+        if (draw_inventory) {
+            bot1.modify_mutex.lock();
+            defer bot1.modify_mutex.unlock();
+            const area = graph.Rec(0, 0, @divTrunc(win.screen_width, 4), @divTrunc(win.screen_width, 4));
+            drawInventory(&gctx, &item_atlas, world.reg, &font, area, &bot1.inventory);
+
+            if (bot1.interacted_inventory.win_id != null) {
+                drawInventory(&gctx, &item_atlas, world.reg, &font, area.addV(area.w + 20, 0), &bot1.interacted_inventory);
+            }
+        }
         gctx.rect(graph.Rec(@divTrunc(win.screen_width, 2), @divTrunc(win.screen_height, 2), 10, 10), 0xffffffff);
         gctx.end(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
         //try ctx.beginDraw(graph.itc(0x2f2f2fff));
         //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
         //ctx.endDraw(win.screen_width, win.screen_height);
         win.swap();
+    }
+}
+
+fn drawInventory(
+    gctx: *graph.NewCtx,
+    item_atlas: *const mcBlockAtlas.McAtlas,
+    reg: *const Reg.NewDataReg,
+    font: *graph.Font,
+    area: graph.Rect,
+    inventory: *const bot.Inventory,
+) void {
+    const w = area.w;
+    const icx = 9;
+    const padding = 4;
+    const iw: f32 = w / icx;
+    //const h = w;
+    for (inventory.slots.items, 0..) |slot, i| {
+        const rr = graph.Rec(
+            area.x + @as(f32, @floatFromInt(i % icx)) * iw,
+            area.y + @as(f32, @floatFromInt(i / icx)) * iw,
+            iw - padding,
+            iw - padding,
+        );
+        gctx.rect(rr, 0xffffffff);
+        if (slot) |s| {
+            if (item_atlas.getTextureRecO(s.item_id)) |tr| {
+                gctx.rectTex(rr, tr, 0xffffffff, item_atlas.texture);
+            } else {
+                const item = reg.getItem(s.item_id);
+                gctx.text(rr.pos(), item.name, font, 12, 0xff);
+            }
+            gctx.textFmt(rr.pos().add(.{ .x = 0, .y = rr.h / 2 }), "{d}", .{s.count}, font, 20, 0xff);
+        }
     }
 }
 
