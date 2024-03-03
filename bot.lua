@@ -18,27 +18,6 @@ function old()
     chopNearestTree()
 end
 
-function loop2()
-    sleepms(100)
-end
-
-
-function loop1()
-    sleepms(1000)
-    blockinfo(-207, 67, 186)
-    blockinfo(-207, 67, 185)
-    blockinfo(-207, 67, 187)
-
-    blockinfo(-216, 72,218)
-    blockinfo(-215, 72,218)
-    blockinfo(-214, 72,218)
-
-    print("STAIRS")
-        for i = 0, 7 do
-            blockinfo(-212 + i, 72, 214)
-        end
-    sleepms(1000);
-end
 
 function loop()
     sleepms(1000);
@@ -61,4 +40,7 @@ function loop()
     gotoLandmark("wheat_drop")
     local table = {{deposit={name="wheat"}}}
     interactChest("wheat_drop_chest", table)
+
+    gotoLandmark("seeds")
+    interactChest("seeds_chest",{{withdraw={name="wheat_seeds"}}, {deposit={name="wheat_seeds"}}})
 end

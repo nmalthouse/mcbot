@@ -1182,6 +1182,7 @@ pub const LuaApi = struct {
             const name = self.vm.getArg(L, []const u8, 1);
             const to_move = self.vm.getArg(L, []const union(enum) {
                 deposit: struct { name: []const u8 },
+                withdraw: struct { name: []const u8 },
             }, 2);
             self.beginHalt();
             defer self.endHalt();
@@ -1196,9 +1197,12 @@ pub const LuaApi = struct {
                 errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
                 switch (ac) {
                     .deposit => |d| {
-                        if (self.world.reg.getItemFromName(d.name)) |id| {
+                        if (self.world.reg.getItemFromName(d.name)) |id|
                             errc(actions.append(.{ .inventory = .{ .deposit = .{ .id = id.id, .kind = .all } } })) orelse break;
-                        }
+                    },
+                    .withdraw => |w| {
+                        if (self.world.reg.getItemFromName(w.name)) |id|
+                            errc(actions.append(.{ .inventory = .{ .withdraw = .{ .id = id.id } } })) orelse break;
                     },
                 }
             }
@@ -1412,9 +1416,24 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             bt.nextAction(0, bo.pos.?);
                         },
                         .inventory => |ii| {
+                            const magic_num = 35;
                             switch (ii) {
+                                .withdraw => |w| {
+                                    if (bo.interacted_inventory.win_id) |wid| {
+                                        const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
+                                        for (bo.interacted_inventory.slots.items[0..player_inv_start], 0..) |slot, i| {
+                                            if (slot) |s| {
+                                                if (s.item_id == w.id) {
+                                                    try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
+                                                    break;
+                                                    //if (d.kind == .one)
+                                                    //    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                },
                                 .deposit => |d| {
-                                    const magic_num = 35;
                                     if (bo.interacted_inventory.win_id) |wid| {
                                         const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
                                         for (bo.interacted_inventory.slots.items[player_inv_start..], player_inv_start..) |slot, i| {
@@ -1517,6 +1536,7 @@ pub fn basicPathfindThread(
 pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void {
     const InvMap = struct {
         default: []const [2]f32,
+        generic_9x3: []const [2]f32,
     };
     const inv_map = try common.readJson(std.fs.cwd(), "inv_map.json", alloc, InvMap);
     defer inv_map.deinit();
@@ -1546,8 +1566,11 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     );
     defer item_atlas.deinit(alloc);
 
-    var invtex = try graph.Texture.initFromImgFile(alloc, std.fs.cwd(), "res_pack/assets/minecraft/textures/gui/container/inventory.png", .{});
+    var invtex = try graph.Texture.initFromImgFile(alloc, std.fs.cwd(), "res_pack/assets/minecraft/textures/gui/container/inventory.png", .{ .mag_filter = graph.c.GL_NEAREST });
     defer invtex.deinit();
+
+    var invtex2 = try graph.Texture.initFromImgFile(alloc, std.fs.cwd(), "res_pack/assets/minecraft/textures/gui/container/shulker_box.png", .{});
+    defer invtex2.deinit();
 
     var camera = graph.Camera3D{};
     camera.pos.data = [_]f32{ -2.20040695e+02, 6.80385284e+01, 1.00785331e+02 };
@@ -1578,6 +1601,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var testmap = graph.Bind(&.{
         .{ "print_coord", "c" },
         .{ "toggle_draw_nodes", "t" },
+        .{ "toggle_inventory", "e" },
     }).init();
 
     var draw_nodes: bool = false;
@@ -1627,6 +1651,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             switch (testmap.get(key.scancode)) {
                 .print_coord => std.debug.print("Camera pos: {any}\n", .{camera.pos}),
                 .toggle_draw_nodes => draw_nodes = !draw_nodes,
+                .toggle_inventory => draw_inventory = !draw_inventory,
                 else => {},
             }
         }

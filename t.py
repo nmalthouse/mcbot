@@ -1,11 +1,8 @@
-
-w = 9
-h = 3
-sw = 16
-pad = 2
-
-xi = 8
-yi = 84
+def printRows(xi, yi, nx, ny, first =False):
+    for y in range(0,ny):
+        for x in range(0 , nx):
+            print("{comma}[{xv},{yv}]".format(comma= ' ' if first else ',', xv = xi + x * 18, yv = yi + y * 18))
+            first = False
 
 print("{\"default\": [")
 print("""
@@ -20,15 +17,17 @@ print("""
 [8,62]
       """)
 
-for y in range(0,h):
-    for x in range(0,w):
-        print(",[" , str(xi + x * (pad + sw)) , "," , str(yi + y * (pad + sw)) ,"]")
-
-xi = 8
-yi = 142
-for i in range(0,9):
-    print(",[" , str(xi + i * (pad + sw)), ",", str(yi), "]")
-
+printRows(8,84, 9,3)
+printRows(8,142, 9,1)
 
 print(",[0,0]")#shield slot
-print("]}")
+print("],")
+
+print("\"generic_9x3\":[")
+printRows(8,18, 9, 3, first = True)
+printRows(8,84, 9,3)
+printRows(8,142, 9,1)
+
+print("]")
+print("}")
+

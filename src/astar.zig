@@ -104,6 +104,9 @@ pub const AStarContext = struct {
                 kind: enum { all, one } = .one,
                 id: Reg.ItemId,
             },
+            withdraw: struct {
+                id: Reg.ItemId,
+            },
         },
     };
     //TODO create a struct that contains a list of playeractionitems.
