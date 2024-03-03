@@ -55,7 +55,7 @@ function loop()
 
     sleepms(1000)
     gotoLandmark("other")
-    interactChest("other_chest", {{deposit= {name="stone"}} })
+    interactChest("other_dropper", {{deposit= {name="stone"}}, {deposit = {name="birch_log"}} })
     sleepms(100);
 
     gotoLandmark("wheat_drop")

@@ -24,6 +24,7 @@ const V3i = vector.V3i;
 const V2i = vector.V2i;
 
 const Parse = @import("parser.zig");
+const common = @import("common.zig");
 
 const c = @import("c.zig").c;
 
@@ -439,6 +440,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                         const bi = world.reg.getBlockFromState(bid);
                                         if (std.mem.eql(u8, "chest", bi.name)) {
                                             const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_chest" });
+                                            try world.putSignWaypoint(name, behind);
+                                        } else if (std.mem.eql(u8, "dropper", bi.name)) {
+                                            const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_dropper" });
                                             try world.putSignWaypoint(name, behind);
                                         }
                                     }
@@ -1511,6 +1515,12 @@ pub fn basicPathfindThread(
 }
 
 pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void {
+    const InvMap = struct {
+        default: []const [2]f32,
+    };
+    const inv_map = try common.readJson(std.fs.cwd(), "inv_map.json", alloc, InvMap);
+    defer inv_map.deinit();
+
     var win = try graph.SDL.Window.createWindow("Debug mcbot Window", .{});
     defer win.destroyWindow();
     var ctx = try graph.GraphicsContext.init(alloc, 163);
@@ -1535,6 +1545,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         "debug/mc_itematlas.bmp",
     );
     defer item_atlas.deinit(alloc);
+
+    var invtex = try graph.Texture.initFromImgFile(alloc, std.fs.cwd(), "res_pack/assets/minecraft/textures/gui/container/inventory.png", .{});
+    defer invtex.deinit();
 
     var camera = graph.Camera3D{};
     camera.pos.data = [_]f32{ -2.20040695e+02, 6.80385284e+01, 1.00785331e+02 };
@@ -1803,7 +1816,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             if (bot1.pos) |bpos| {
                 if (!position_synced) {
                     position_synced = true;
-                    camera.pos = graph.za.Vec3.new(@floatCast(bpos.x), @floatCast(bpos.y), @floatCast(bpos.z));
+                    camera.pos = graph.za.Vec3.new(@floatCast(bpos.x), @floatCast(bpos.y + 3), @floatCast(bpos.z));
                 }
                 const p = bpos.toRay();
                 try cubes.cube(
@@ -1862,8 +1875,23 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         if (draw_inventory) {
             bot1.modify_mutex.lock();
             defer bot1.modify_mutex.unlock();
-            const area = graph.Rec(0, 0, @divTrunc(win.screen_width, 4), @divTrunc(win.screen_width, 4));
-            drawInventory(&gctx, &item_atlas, world.reg, &font, area, &bot1.inventory);
+            const area = graph.Rec(0, 0, @divTrunc(win.screen_width, 3), @divTrunc(win.screen_width, 3));
+            const sx = area.w / @as(f32, @floatFromInt(invtex.w));
+            const sy = area.h / @as(f32, @floatFromInt(invtex.h));
+            gctx.rectTex(area, invtex.rect(), 0xffffffff, invtex);
+            for (bot1.inventory.slots.items, 0..) |slot, i| {
+                const rr = inv_map.value.default[i];
+                const rect = graph.Rec(area.x + rr[0] * sx, area.y + rr[1] * sy, 16 * sx, 16 * sy);
+                if (slot) |s| {
+                    if (item_atlas.getTextureRecO(s.item_id)) |tr| {
+                        gctx.rectTex(rect, tr, 0xffffffff, item_atlas.texture);
+                    } else {
+                        const item = world.reg.getItem(s.item_id);
+                        gctx.text(rect.pos(), item.name, &font, 14, 0xff);
+                    }
+                    gctx.textFmt(rect.pos().add(.{ .x = 0, .y = rect.h / 2 }), "{d}", .{s.count}, &font, 15, 0xff);
+                }
+            }
 
             if (bot1.interacted_inventory.win_id != null) {
                 drawInventory(&gctx, &item_atlas, world.reg, &font, area.addV(area.w + 20, 0), &bot1.interacted_inventory);
