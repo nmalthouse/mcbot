@@ -52,6 +52,12 @@ function loop()
         end
     end
 
+
+    sleepms(1000)
+    gotoLandmark("other")
+    interactChest("other_chest", {{deposit= {name="stone"}} })
+    sleepms(100);
+
     gotoLandmark("wheat_drop")
     local table = {{deposit={name="wheat"}}}
     interactChest("wheat_drop_chest", table)

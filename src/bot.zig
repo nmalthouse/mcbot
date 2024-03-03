@@ -217,7 +217,6 @@ pub const Inventory = struct {
     const Self = @This();
     slots: std.ArrayList(?mc.Slot),
     win_id: ?u8 = null,
-    state_id: i32 = 0,
     win_type: u32 = 0,
 
     alloc: std.mem.Allocator,
@@ -400,9 +399,9 @@ pub const Bot = struct {
     inventory: Inventory,
     //inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
     selected_slot: u8 = 0,
-    container_state: i32 = 0,
 
     interacted_inventory: Inventory,
+    container_state: i32 = 0,
 
     pub fn init(alloc: std.mem.Allocator, name_: []const u8) !Bot {
         var inv = Inventory.init(alloc);

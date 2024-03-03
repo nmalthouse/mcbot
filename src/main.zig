@@ -516,10 +516,14 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             } else if (win_id == 0) {
                 bot1.container_state = state_id;
                 try bot1.inventory.setSlot(@intCast(slot_i), data);
-                std.debug.print("updating slot {any}\n", .{data});
+                std.debug.print("SET CONTAINER SLOT slot {any}\n", .{data});
             } else if (bot1.interacted_inventory.win_id != null and win_id == bot1.interacted_inventory.win_id.?) {
                 bot1.container_state = state_id;
                 try bot1.interacted_inventory.setSlot(@intCast(slot_i), data);
+
+                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 35);
+                if (slot_i >= player_inv_start)
+                    try bot1.inventory.setSlot(@intCast(slot_i - player_inv_start + 9), data);
             }
         },
         .Open_Screen => {
@@ -531,6 +535,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             std.debug.print("open window: {d} {d}: {s}\n", .{ win_id, win_type, win_title });
         },
         .Set_Container_Content => {
+            std.debug.print("SET CONT CONTENT\n", .{});
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
             const item_count = @as(u32, @intCast(parse.varInt()));
@@ -544,9 +549,14 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             } else {
                 try bot1.interacted_inventory.setSize(item_count);
                 bot1.interacted_inventory.win_id = win_id;
-                bot1.interacted_inventory.state_id = state_id;
+                bot1.container_state = state_id;
+                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 35);
                 while (i < item_count) : (i += 1) {
-                    try bot1.interacted_inventory.setSlot(i, parse.slot());
+                    const s = parse.slot();
+                    try bot1.interacted_inventory.setSlot(i, s);
+                    const ii: i16 = @intCast(i);
+                    if (i >= player_inv_start)
+                        try bot1.inventory.setSlot(@intCast(ii - player_inv_start + 9), s);
                 }
             }
         },
@@ -815,8 +825,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                         if (inv.slots.items[i] != null) {
                             num_null -= 1;
-                            try pctx.clickContainer(inv.win_id.?, inv.state_id, i, 0, 0, &.{.{ .sloti = i, .slot = null }}, inv.slots.items[i].?);
-                            try pctx.clickContainer(inv.win_id.?, inv.state_id, first_null_i, 0, 0, &.{.{ .sloti = first_null_i, .slot = inv.slots.items[i].? }}, null);
+                            try pctx.clickContainer(inv.win_id.?, bot1.container_state, i, 0, 0, &.{.{ .sloti = i, .slot = null }}, inv.slots.items[i].?);
+                            try pctx.clickContainer(inv.win_id.?, bot1.container_state, first_null_i, 0, 0, &.{.{ .sloti = first_null_i, .slot = inv.slots.items[i].? }}, null);
                             break;
                         }
                     }
@@ -1177,7 +1187,7 @@ pub const LuaApi = struct {
             const pos = self.bo.pos.?;
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
-            errc(actions.append(.{ .wait_ms = 5000 })) orelse return 0;
+            errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
             for (to_move) |ac| {
                 errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
                 switch (ac) {
