@@ -92,11 +92,11 @@ pub const V3f = struct {
         };
     }
 
-    pub fn toRay(a: @This()) c.Vector3 {
+    pub fn toF32(self: @This()) struct { x: f32, y: f32, z: f32 } {
         return .{
-            .x = @as(f32, @floatCast(a.x)),
-            .y = @as(f32, @floatCast(a.y)),
-            .z = @as(f32, @floatCast(a.z)),
+            .x = @floatCast(self.x),
+            .y = @floatCast(self.y),
+            .z = @floatCast(self.z),
         };
     }
 

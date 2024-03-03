@@ -1,8 +1,6 @@
 massif*
 zig-out
 zig-cache
-std
-lib
 callgrind*
 debug
 

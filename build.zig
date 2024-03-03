@@ -21,18 +21,9 @@ pub fn build(b: *std.build.Builder) void {
     });
     b.installArtifact(exe);
     exe.linkSystemLibrary("event");
-    exe.addIncludePath(.{ .path = "lib" });
-    //exe.addIncludePath("/usr/include");
 
     const module = ziglib.module(b, exe);
     exe.addModule("graph", module);
-
-    //exe.addCSourceFiles(&.{
-    //    "lib/libnbt/nbt_build.c",
-    //    "lib/libnbt/nbt_find.c",
-    //    "lib/libnbt/nbt_tok.c",
-    //    "lib/libnbt/nbt_utils.c",
-    //}, &.{"-Wall"});
 
     const run_cmd = b.addRunArtifact(exe);
     run_cmd.step.dependOn(b.getInstallStep());

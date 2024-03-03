@@ -1845,7 +1845,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     position_synced = true;
                     camera.pos = graph.za.Vec3.new(@floatCast(bpos.x), @floatCast(bpos.y + 3), @floatCast(bpos.z));
                 }
-                const p = bpos.toRay();
+                const p = bpos.toF32();
                 try cubes.cube(
                     p.x - 0.3,
                     p.y,
@@ -1872,8 +1872,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 .gap => 0x00ff00ff,
                                 else => 0x000000ff,
                             };
-                            const p = move.pos.toRay();
-                            const lp = last_pos.toRay();
+                            const p = move.pos.toF32();
+                            const lp = last_pos.toF32();
                             gctx.line3D(graph.Vec3f.new(lp.x, lp.y + 1, lp.z), graph.Vec3f.new(p.x, p.y + 1, p.z), 0xffffffff);
                             last_pos = move.pos;
                             try cubes.cube(
