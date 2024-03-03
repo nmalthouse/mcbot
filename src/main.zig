@@ -2023,10 +2023,6 @@ pub fn main() !void {
     var world = McWorld.init(alloc, &dr);
     defer world.deinit();
 
-    //var creg = try Reg.DataRegContainer.init(alloc, std.fs.cwd(), "mcproto/converted/all.json");
-    //defer creg.deinit();
-    //const reg = creg.reg;
-
     var event_structs: [bot_names.len]std.os.linux.epoll_event = undefined;
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
