@@ -103,6 +103,7 @@ pub const AStarContext = struct {
             deposit: struct {
                 kind: enum { all, one } = .one,
                 id: Reg.ItemId,
+                match_any: bool = false,
             },
             withdraw: struct {
                 id: Reg.ItemId,

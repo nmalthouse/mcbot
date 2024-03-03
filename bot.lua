@@ -19,7 +19,18 @@ function old()
 end
 
 
+local is_init = true
 function loop()
+    sleepms(1000);
+    if is_init == true then
+        is_init = false
+        gotoLandmark("tools")
+        interactChest("tools_chest", { {withdraw={name="diamond_axe"}}, {deposit={name="*"}} })
+    end
+
+    gotoLandmark("seeds")
+    interactChest("seeds_chest",{{withdraw={name="wheat_seeds"}}, {deposit={name="wheat_seeds"}}})
+
     sleepms(1000);
     local t = getFieldFlood("wheat_farm", "wheat")
     for i,f in pairs(t) do
@@ -32,6 +43,7 @@ function loop()
     end
 
 
+
     sleepms(1000)
     gotoLandmark("other")
     interactChest("other_dropper", {{deposit= {name="stone"}}, {deposit = {name="birch_log"}} })
@@ -41,6 +53,4 @@ function loop()
     local table = {{deposit={name="wheat"}}}
     interactChest("wheat_drop_chest", table)
 
-    gotoLandmark("seeds")
-    interactChest("seeds_chest",{{withdraw={name="wheat_seeds"}}, {deposit={name="wheat_seeds"}}})
 end

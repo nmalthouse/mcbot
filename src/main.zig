@@ -1197,8 +1197,11 @@ pub const LuaApi = struct {
                 errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
                 switch (ac) {
                     .deposit => |d| {
-                        if (self.world.reg.getItemFromName(d.name)) |id|
+                        if (self.world.reg.getItemFromName(d.name)) |id| {
                             errc(actions.append(.{ .inventory = .{ .deposit = .{ .id = id.id, .kind = .all } } })) orelse break;
+                        } else if (d.name.len > 0 and d.name[0] == '*') {
+                            errc(actions.append(.{ .inventory = .{ .deposit = .{ .id = 0, .kind = .all, .match_any = true } } })) orelse break;
+                        }
                     },
                     .withdraw => |w| {
                         if (self.world.reg.getItemFromName(w.name)) |id|
@@ -1438,7 +1441,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
                                         for (bo.interacted_inventory.slots.items[player_inv_start..], player_inv_start..) |slot, i| {
                                             if (slot) |s| {
-                                                if (s.item_id == d.id) {
+                                                if (s.item_id == d.id or d.match_any) {
                                                     try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
                                                     if (d.kind == .one)
                                                         break;
