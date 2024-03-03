@@ -2,7 +2,6 @@ const std = @import("std");
 
 const graph = @import("graph");
 const mcBlockAtlas = @import("mc_block_atlas.zig");
-//const mcBlockAtlas = graph.mcblockatlas;
 
 const mc = @import("listener.zig");
 const id_list = @import("list.zig");
@@ -23,12 +22,12 @@ const V3f = vector.V3f;
 const V3i = vector.V3i;
 const V2i = vector.V2i;
 
-const Parse = @import("parser.zig");
 const common = @import("common.zig");
 
 const c = @import("c.zig").c;
 
 const fbsT = std.io.FixedBufferStream([]const u8);
+const AutoParse = mc.AutoParse;
 
 const mcTypes = @import("mcContext.zig");
 const McWorld = mcTypes.McWorld;
@@ -155,8 +154,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     const parseT = mc.packetParseCtx(fbsT.Reader);
     var parse = parseT.init(fbs_.reader(), arena_alloc);
 
-    const parseTr = Parse.packetParseCtx(fbsT.Reader);
-    var parser = parseTr.init(fbs_.reader(), arena_alloc);
+    //const parseTr = Parse.packetParseCtx(fbsT.Reader);
+    //var parser = parseTr.init(fbs_.reader(), arena_alloc);
 
     const plen = parse.varInt();
     _ = plen;
@@ -165,8 +164,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     //if (plen > 4096)
     //std.debug.print("{d} over len: {s}\n", .{ plen, id_list.packet_ids[@intCast(u32, pid)] });
 
-    const P = Parse.P;
-    const PT = Parse.parseType;
+    const P = AutoParse.P;
+    const PT = AutoParse.parseType;
 
     const server_stream = std.net.Stream{ .handle = bot1.fd };
 
@@ -203,7 +202,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .Spawn_Player => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.uuid, "ent_uuid"),
                 P(.V3f, "pos"),
@@ -218,7 +217,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             });
         },
         .Spawn_Entity => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.uuid, "ent_uuid"),
                 P(.varInt, "ent_type"),
@@ -246,7 +245,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .Update_Entity_Rotation => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.angle, "yaw"),
                 P(.angle, "pitch"),
@@ -258,7 +257,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .Update_Entity_Position_and_Rotation => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.shortV3i, "del"),
                 P(.angle, "yaw"),
@@ -272,7 +271,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .Entity_Effect => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.varInt, "effect_id"),
                 P(.byte, "amplifier"),
@@ -283,7 +282,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //if (data.id == bot1.e_id) {}
         },
         .Update_Entity_Position => {
-            const data = parser.parse(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
+            const data = parse.auto(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
             if (world.entities.getPtr(data.ent_id)) |e| {
                 e.pos = vector.deltaPosToV3f(e.pos, data.del);
             }
@@ -303,7 +302,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //_ = nbt_data;
         },
         .Teleport_Entity => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.V3f, "pos"),
                 P(.angle, "yaw"),
@@ -326,7 +325,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             std.debug.print("GAME EVENT: {d} {d}\n", .{ event, value });
         },
         .Update_Section_Blocks => {
-            const chunk_pos = parse.cposition();
+            const chunk_pos = parse.chunk_position();
             const sup_light = parse.boolean();
             _ = sup_light;
             const n_blocks = parse.varInt();
@@ -462,17 +461,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
         .Unload_Chunk => {
-            const data = parser.parse(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
+            const data = parse.auto(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
             try world.chunk_data.removeChunkColumn(data.cx, data.cz);
         },
         //BOT specific packets
         .Keep_Alive => {
-            const data = parser.parse(PT(&.{P(.long, "keep_alive_id")}));
+            const data = parse.auto(PT(&.{P(.long, "keep_alive_id")}));
 
             try pctx.keepAlive(data.keep_alive_id);
         },
         .Login => {
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.int, "ent_id"),
                 P(.boolean, "is_hardcore"),
                 P(.ubyte, "gamemode"),
@@ -572,7 +571,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 Y_ROT = 0x08,
                 x_ROT = 0x10,
             };
-            const data = parser.parse(PT(&.{
+            const data = parse.auto(PT(&.{
                 P(.V3f, "pos"),
                 P(.float, "yaw"),
                 P(.float, "pitch"),

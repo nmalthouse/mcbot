@@ -250,8 +250,6 @@ pub fn getBitMask(num_bits: usize) u64 {
     //For biomes the given value is always used, and will be <= 3
 }
 
-pub const PacketReader = struct {};
-
 pub const Packet = struct {
     const Self = @This();
     //const RESERVED_BYTE_COUNT: usize = 5;
@@ -449,6 +447,94 @@ pub const BlockEntityP = struct {
 };
 
 const reader_type = std.net.Stream.Reader;
+pub const AutoParse = struct {
+    ///Defines names of types we can parse, the .Type indicates what this field will be in the returned struct
+    const TypeItem = struct { name: []const u8, Type: type };
+    pub const TypeList = [_]TypeItem{
+        .{ .name = "boolean", .Type = bool },
+
+        .{ .name = "long", .Type = i64 },
+        .{ .name = "byte", .Type = i8 },
+        .{ .name = "ubyte", .Type = u8 },
+        .{ .name = "short", .Type = i16 },
+        .{ .name = "ushort", .Type = u16 },
+        .{ .name = "int", .Type = i32 },
+        .{ .name = "uuid", .Type = u128 },
+
+        .{ .name = "string", .Type = []const u8 },
+        .{ .name = "chat", .Type = []const u8 },
+        .{ .name = "identifier", .Type = []const u8 },
+
+        .{ .name = "float", .Type = f32 },
+        .{ .name = "double", .Type = f64 },
+
+        .{ .name = "varInt", .Type = i32 },
+        .{ .name = "varLong", .Type = i64 },
+
+        .{ .name = "entityMetadata", .Type = u0 },
+        .{ .name = "slot", .Type = u0 },
+        .{ .name = "nbtTag", .Type = u0 },
+
+        .{ .name = "position", .Type = V3i },
+        .{ .name = "angle", .Type = f32 },
+
+        .{ .name = "V3f", .Type = V3f },
+        .{ .name = "shortV3i", .Type = vector.shortV3i },
+
+        .{ .name = "stringList", .Type = [][]const u8 },
+    };
+
+    ///Generate an enum where the enum values map to the original list so types can be retrieved,
+    ///needed instead of a union so that instatiation is not needed when specifing a struct by listing fields, see fn parseType
+    fn genTypeListEnum(comptime list: []const TypeItem) type {
+        var enum_fields: [list.len]std.builtin.Type.EnumField = undefined;
+        for (list, 0..) |it, i| {
+            enum_fields[i] = .{ .name = it.name, .value = i };
+        }
+        return @Type(std.builtin.Type{
+            .Enum = .{
+                .tag_type = usize,
+                .fields = &enum_fields,
+                .is_exhaustive = true,
+                .decls = &.{},
+            },
+        });
+    }
+
+    pub const Types = genTypeListEnum(&TypeList);
+
+    pub const ParseItem = struct {
+        type_: Types,
+        name: []const u8,
+    };
+
+    pub fn P(comptime type_: Types, comptime name: []const u8) ParseItem {
+        return .{ .type_ = type_, .name = name };
+    }
+
+    const parseTypeReturnType = struct { t: type, list: []const ParseItem };
+    pub fn parseType(comptime parse_items: []const ParseItem) parseTypeReturnType {
+        var struct_fields: [parse_items.len]std.builtin.Type.StructField = undefined;
+        for (parse_items, 0..) |item, i| {
+            struct_fields[i] = .{
+                .name = item.name,
+                .type = TypeList[@intFromEnum(item.type_)].Type,
+                .is_comptime = false,
+                .default_value = null,
+                .alignment = 0,
+            };
+        }
+        return .{ .t = @Type(std.builtin.Type{
+            .Struct = .{
+                .layout = .Auto,
+                .backing_integer = null,
+                .fields = &struct_fields,
+                .decls = &.{},
+                .is_tuple = false,
+            },
+        }), .list = parse_items };
+    }
+};
 
 pub fn packetParseCtx(comptime readerT: type) type {
     return struct {
@@ -458,6 +544,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         //This structure makes no attempt to keep track of memory it allocates, as much of what is parsed is
         //garbage
         //use an arena allocator and copy over values that you need
+        //TODO internally use an arena
         pub fn init(reader: readerT, alloc: std.mem.Allocator) Self {
             return .{
                 .alloc = alloc,
@@ -465,8 +552,65 @@ pub fn packetParseCtx(comptime readerT: type) type {
             };
         }
 
+        pub fn float(self: *Self, comptime fT: type) fT {
+            if (fT == f32) {
+                return @as(f32, @bitCast(self.int(u32)));
+            }
+            if (fT == f64) {
+                return @as(f64, @bitCast(self.int(u64)));
+            }
+            unreachable;
+        }
+
+        pub fn chunk_position(self: *Self) vector.V3i {
+            const pos = self.int(i64);
+            return .{
+                .x = @as(i32, @intCast(pos >> 42)),
+                .y = @as(i32, @intCast(pos << 44 >> 44)),
+                .z = @as(i32, @intCast(pos << 22 >> 42)),
+            };
+        }
+
+        pub fn position(self: *Self) vector.V3i {
+            const pos = self.int(i64);
+            return .{
+                .x = @as(i32, @intCast(pos >> 38)),
+                .y = @as(i32, @intCast(pos << 52 >> 52)),
+                .z = @as(i32, @intCast(pos << 26 >> 38)),
+            };
+        }
+
+        pub fn v3f(self: *Self) V3f {
+            return .{
+                .x = self.float(f64),
+                .y = self.float(f64),
+                .z = self.float(f64),
+            };
+        }
+
         pub fn int(self: *Self, comptime intT: type) intT {
             return self.reader.readInt(intT, .Big) catch unreachable;
+        }
+
+        pub fn string(self: *Self, max_len: ?usize) ![]const u8 {
+            const len = @as(u32, @intCast(readVarInt(self.reader)));
+            if (max_len) |l|
+                if (len > l) return error.StringExceedsMaxLen;
+            const slice = try self.alloc.alloc(u8, len);
+            try self.reader.readNoEof(slice);
+            return slice;
+        }
+
+        pub fn boolean(self: *Self) bool {
+            return (self.int(u8) == 1);
+        }
+
+        pub fn varInt(self: *Self) i32 {
+            return readVarInt(self.reader);
+        }
+
+        pub fn varLong(self: *Self) i64 {
+            return readVarLong(self.reader);
         }
 
         pub fn blockEntity(self: *Self) BlockEntityP {
@@ -510,61 +654,53 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return null;
         }
 
-        pub fn float(self: *Self, comptime fT: type) fT {
-            if (fT == f32) {
-                return @as(f32, @bitCast(self.int(u32)));
+        pub fn auto(self: *Self, comptime p_type: AutoParse.parseTypeReturnType) p_type.t {
+            const r = self.reader;
+            var ret: p_type.t = undefined;
+            const info = @typeInfo(p_type.t).Struct.fields;
+            inline for (p_type.list, 0..) |item, i| {
+                @field(ret, info[i].name) = blk: {
+                    switch (item.type_) {
+                        .long, .byte, .ubyte, .short, .ushort, .int, .uuid => {
+                            break :blk self.reader.readInt(info[i].type, .Big) catch unreachable;
+                        },
+                        .boolean => break :blk (r.readInt(u8, .Big) catch unreachable == 0x1),
+                        .string, .chat, .identifier => break :blk self.string(null) catch unreachable,
+                        .float, .double => break :blk self.float(info[i].type),
+                        .varInt => break :blk readVarInt(r),
+                        .position => break :blk self.position,
+                        .V3f => break :blk self.v3f(),
+                        .angle => break :blk @as(f32, @floatFromInt(self.int(u8))) / (256.0 / 360.0),
+                        .shortV3i => {
+                            break :blk .{
+                                .x = self.int(i16),
+                                .y = self.int(i16),
+                                .z = self.int(i16),
+                            };
+                        },
+
+                        .stringList => {
+                            const len = readVarInt(r);
+                            var strs = self.alloc.alloc([]const u8, @as(u32, @intCast(len))) catch unreachable;
+                            var n: u32 = 0;
+                            while (n < len) : (n += 1) {
+                                strs[n] = self.string(null) catch unreachable;
+                            }
+                            break :blk strs;
+                        },
+                        .nbtTag => {
+                            const nbt = nbt_zig.parse(self.alloc, r) catch unreachable;
+                            _ = nbt;
+                            break :blk 0;
+                        },
+                        else => {
+                            std.debug.print("{}\n", .{item.type_});
+                            @compileError("Type not supported");
+                        },
+                    }
+                };
             }
-            if (fT == f64) {
-                return @as(f64, @bitCast(self.int(u64)));
-            }
-            unreachable;
-        }
-
-        pub fn v3f(self: *Self) V3f {
-            return .{
-                .x = self.float(f64),
-                .y = self.float(f64),
-                .z = self.float(f64),
-            };
-        }
-
-        pub fn cposition(self: *Self) vector.V3i {
-            const pos = self.int(i64);
-            return .{
-                .x = @as(i32, @intCast(pos >> 42)),
-                .y = @as(i32, @intCast(pos << 44 >> 44)),
-                .z = @as(i32, @intCast(pos << 22 >> 42)),
-            };
-        }
-
-        pub fn position(self: *Self) vector.V3i {
-            const pos = self.int(i64);
-            return .{
-                .x = @as(i32, @intCast(pos >> 38)),
-                .y = @as(i32, @intCast(pos << 52 >> 52)),
-                .z = @as(i32, @intCast(pos << 26 >> 38)),
-            };
-        }
-
-        pub fn varInt(self: *Self) i32 {
-            return readVarInt(self.reader);
-        }
-
-        pub fn varLong(self: *Self) i64 {
-            return readVarLong(self.reader);
-        }
-
-        pub fn boolean(self: *Self) bool {
-            return (self.int(u8) == 1);
-        }
-
-        pub fn string(self: *Self, max_len: ?usize) ![]const u8 {
-            const len = @as(u32, @intCast(readVarInt(self.reader)));
-            if (max_len) |l|
-                if (len > l) return error.StringExceedsMaxLen;
-            const slice = try self.alloc.alloc(u8, len);
-            try self.reader.readNoEof(slice);
-            return slice;
+            return ret;
         }
 
         reader: readerT,
@@ -790,57 +926,6 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     }
     return buf;
 }
-
-pub const ServerListener = struct {
-    pub const PacketStateUncompressed = enum {
-        parsing_length,
-        parsing_id,
-        parsing_data,
-        invalid,
-    };
-
-    pub const PacketStateCompressed = enum {
-        complete,
-        parsing_packet_length,
-        parsing_uncompressed_length,
-        parsing_compressed_id,
-        parsing_compressed_data,
-        invalid,
-    };
-
-    pub fn parserThread(
-        alloc: std.mem.Allocator,
-        reader: std.net.Stream.Reader,
-        queue: *PacketQueueType,
-        q_cond: *std.Thread.Condition,
-        comp_thresh: i32,
-    ) void {
-        var parsed = PacketData.init(alloc);
-        //defer parsed.deinit();
-
-        const value = blk: {
-            while (true) {
-                const pd = recvPacket(alloc, reader, comp_thresh) catch |err| break :blk err;
-                parsed.buffer.appendSlice(pd) catch unreachable;
-                alloc.free(pd);
-                const node = alloc.create(PacketQueueType.Node) catch unreachable;
-                node.* = .{ .prev = null, .next = null, .data = parsed };
-                queue.put(node);
-                parsed = PacketData.init(alloc);
-                q_cond.signal();
-            }
-        };
-        switch (value) {
-            error.NotOpenForReading => {
-                return;
-            },
-            else => {
-                std.debug.print("Value {}\n", .{value});
-                unreachable;
-            },
-        }
-    }
-};
 
 pub const NUM_CHUNK_SECTION = 16; //TODO There are more than 16 vertical chunks in 1.18+. Limits are from -64 -> 319
 pub const Chunk = [NUM_CHUNK_SECTION]ChunkSection;
