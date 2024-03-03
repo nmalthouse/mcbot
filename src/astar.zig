@@ -101,7 +101,7 @@ pub const AStarContext = struct {
         close_chest: void,
         inventory: union(enum) {
             deposit: struct {
-                //kind: enum { all, one } = .one,
+                kind: enum { all, one } = .one,
                 id: Reg.ItemId,
             },
         },

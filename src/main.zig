@@ -942,13 +942,14 @@ pub const LuaApi = struct {
 
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
-
-        //pub export fn testf(L:Lua.Ls)c_int{
-        //    const self = lss orelse return 0;
-        //    Lua.c.lua_settop(L, 1);
-        //    _ = Lua.getArg(L, []const f32, )
-
-        //}
+        pub export fn testff(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const ret = self.vm.getArg(L, []const f32, 1);
+            std.debug.print("{any}\n", .{ret});
+            return 0;
+        }
 
         ///Args: x, y, z
         ///returns nothing
@@ -1022,14 +1023,11 @@ pub const LuaApi = struct {
         //Arg x y z, item_name
         pub export fn placeBlock(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 4);
-            const x = self.vm.getArg(L, i32, 1);
-            const y = self.vm.getArg(L, i32, 2);
-            const z = self.vm.getArg(L, i32, 3);
-            const item_name = self.vm.getArg(L, []const u8, 4);
+            Lua.c.lua_settop(L, 2);
+            const bpos = self.vm.getArg(L, V3i, 1);
+            const item_name = self.vm.getArg(L, []const u8, 2);
             self.beginHalt();
             defer self.endHalt();
-            const bpos = V3i.new(x, y, z);
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
             defer self.bo.modify_mutex.unlock();
@@ -1045,13 +1043,10 @@ pub const LuaApi = struct {
 
         pub export fn breakBlock(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 3);
-            const x = self.vm.getArg(L, i32, 1);
-            const y = self.vm.getArg(L, i32, 2);
-            const z = self.vm.getArg(L, i32, 3);
+            Lua.c.lua_settop(L, 1);
+            const bpos = self.vm.getArg(L, V3i, 1);
             self.beginHalt();
             defer self.endHalt();
-            const bpos = V3i.new(x, y, z);
 
             const sid = self.world.chunk_data.getBlock(bpos) orelse return 0;
             const block = self.world.reg.getBlockFromState(sid);
@@ -1072,17 +1067,15 @@ pub const LuaApi = struct {
 
         pub export fn gotoCoord(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 3);
-            const x = self.vm.getArg(L, f32, 1);
-            const y = self.vm.getArg(L, f32, 2);
-            const z = self.vm.getArg(L, f32, 3);
+            Lua.c.lua_settop(L, 1);
+            const p = self.vm.getArg(L, V3f, 1);
             self.beginHalt();
             defer self.endHalt();
             errc(self.pathctx.reset()) orelse return 0;
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
-            const found = errc(self.pathctx.pathfind(pos, V3f.new(x, y, z))) orelse return 0;
+            const found = errc(self.pathctx.pathfind(pos, p)) orelse return 0;
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
 
@@ -1140,14 +1133,6 @@ pub const LuaApi = struct {
             return 1;
         }
 
-        pub export fn getListTest(L: Lua.Ls) c_int {
-            Lua.c.lua_settop(L, 0);
-            const crass = [_]u8{ 0xff, 0x20, 19, 99 };
-            Lua.pushV(L, crass);
-
-            return 1;
-        }
-
         ///Args: landmarkName, blockname to search
         ///Returns, array of v3i
         pub export fn getFieldFlood(L: Lua.Ls) c_int {
@@ -1175,12 +1160,12 @@ pub const LuaApi = struct {
         //Arg chest_waypoint_name
         pub export fn interactChest(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 1);
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 2);
             const name = self.vm.getArg(L, []const u8, 1);
-            //const to_move = Lua.getArg(L, []const union {
-            //    deposit: struct { name: []const u8 },
-            //}, 2);
-            //_ = to_move;
+            const to_move = self.vm.getArg(L, []const union(enum) {
+                deposit: struct { name: []const u8 },
+            }, 2);
             self.beginHalt();
             defer self.endHalt();
             const coord = self.world.getSignWaypoint(name) orelse return 0;
@@ -1189,7 +1174,16 @@ pub const LuaApi = struct {
             const pos = self.bo.pos.?;
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
-            errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
+            for (to_move) |ac| {
+                errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
+                switch (ac) {
+                    .deposit => |d| {
+                        if (self.world.reg.getItemFromName(d.name)) |id| {
+                            errc(actions.append(.{ .inventory = .{ .deposit = .{ .id = id.id, .kind = .all } } })) orelse break;
+                        }
+                    },
+                }
+            }
             errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
             self.thread_data.setActions(actions, pos);
             std.debug.print("interct with chest\n", .{});
@@ -1402,18 +1396,22 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                         .inventory => |ii| {
                             switch (ii) {
                                 .deposit => |d| {
-                                    if (bo.interacted_inventory.win_id != null) {
-                                        for (bo.inventory.slots.items, 0..) |slot, i| {
+                                    const magic_num = 35;
+                                    if (bo.interacted_inventory.win_id) |wid| {
+                                        const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
+                                        for (bo.interacted_inventory.slots.items[player_inv_start..], player_inv_start..) |slot, i| {
                                             if (slot) |s| {
                                                 if (s.item_id == d.id) {
-                                                    try bp.clickContainer(0, bo.container_state, @intCast(i), 0, 1, &.{}, null);
-                                                    break;
+                                                    try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
+                                                    if (d.kind == .one)
+                                                        break;
                                                 }
                                             }
                                         }
                                     }
                                 },
                             }
+                            bt.nextAction(0, bo.pos.?);
                         },
                         .place_block => |pb| {
                             const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
