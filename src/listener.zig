@@ -252,7 +252,6 @@ pub fn getBitMask(num_bits: usize) u64 {
 
 pub const Packet = struct {
     const Self = @This();
-    //const RESERVED_BYTE_COUNT: usize = 5;
 
     buffer: std.ArrayList(u8),
     comp_thresh: i32 = -1,
@@ -261,13 +260,11 @@ pub const Packet = struct {
         var ret = Self{
             .buffer = std.ArrayList(u8).init(alloc),
         };
-        //try ret.buffer.resize(RESERVED_BYTE_COUNT);
 
         return ret;
     }
 
     pub fn clear(self: *Self) !void {
-        //try self.buffer.resize(RESERVED_BYTE_COUNT);
         try self.buffer.resize(0);
     }
 
@@ -446,7 +443,6 @@ pub const BlockEntityP = struct {
     nbt: nbt_zig.Entry,
 };
 
-const reader_type = std.net.Stream.Reader;
 pub const AutoParse = struct {
     ///Defines names of types we can parse, the .Type indicates what this field will be in the returned struct
     const TypeItem = struct { name: []const u8, Type: type };
@@ -866,37 +862,6 @@ pub const PacketData = struct {
 
 pub const PacketQueueType = Queue(PacketData);
 
-pub fn cmdThread(
-    alloc: std.mem.Allocator,
-    queue: *PacketQueueType,
-    q_cond: *std.Thread.Condition,
-) void {
-    const stdin = std.io.getStdIn();
-    const reader = stdin.reader();
-    var buf: [512]u8 = undefined;
-
-    while (true) {
-        const len = reader.read(&buf) catch unreachable;
-        const read = buf[0..len];
-        const node = alloc.create(PacketQueueType.Node) catch unreachable;
-        var msg = std.ArrayList(u8).init(alloc);
-        msg.appendSlice(read) catch unreachable;
-
-        if ((msg.items.len == 1 and msg.items[0] != '\n') or msg.items.len == 0) {
-            msg.resize(0) catch unreachable;
-            msg.appendSlice("exit\n") catch unreachable;
-        }
-
-        node.* = .{ .prev = null, .next = null, .data = .{ .buffer = msg, .msg_type = .local } };
-        queue.put(node);
-        q_cond.signal();
-
-        if (std.mem.eql(u8, "exit", msg.items[0 .. msg.items.len - 1])) {
-            return;
-        }
-    }
-}
-
 pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_threshold: i32) ![]const u8 {
     const comp_enabled = (comp_threshold > -1);
     const total_len = @as(u32, @intCast(readVarInt(reader)));
@@ -927,7 +892,7 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     return buf;
 }
 
-pub const NUM_CHUNK_SECTION = 16; //TODO There are more than 16 vertical chunks in 1.18+. Limits are from -64 -> 319
+pub const NUM_CHUNK_SECTION = 24; //TODO There are more than 16 vertical chunks in 1.18+. Limits are from -64 -> 319
 pub const Chunk = [NUM_CHUNK_SECTION]ChunkSection;
 pub const ChunkMapCoord = std.AutoHashMap(i32, Chunk);
 pub const ChunkMap = struct {

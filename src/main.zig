@@ -169,8 +169,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     const server_stream = std.net.Stream{ .handle = bot1.fd };
 
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
-    defer pctx.packet.deinit();
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
+    //defer pctx.packet.deinit();
 
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;
@@ -365,7 +365,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = chunk_data.items, .pos = 0 };
             const cr = chunk_fbs.reader();
             //TODO determine number of chunk sections some other way
-            while (chunk_i < 16) : (chunk_i += 1) {
+            while (chunk_i < mc.NUM_CHUNK_SECTION) : (chunk_i += 1) {
                 const block_count = try cr.readInt(i16, .Big);
                 _ = block_count;
                 chunk[chunk_i] = mc.ChunkSection.init(alloc);
@@ -1338,6 +1338,10 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
         return error.NoBotsToSpawnScriptsFor;
     const bo = bot1.?.value_ptr;
 
+    var arena_allocs = std.heap.ArenaAllocator.init(alloc);
+    defer arena_allocs.deinit();
+    const arena_alloc = arena_allocs.allocator();
+
     var b1_thread_data = bot.BotScriptThreadData.init(alloc);
     defer b1_thread_data.deinit();
     b1_thread_data.lock(.bot_thread);
@@ -1358,8 +1362,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
 
         //The scriptThread will be blocked whenever we are in this block until we notify we need more actions by unlocking
         if (b1_thread_data.trylock(.bot_thread)) {
-            var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
-            defer bp.deinit();
+            var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
             bo.modify_mutex.lock();
             defer bo.modify_mutex.unlock();
             if (!bo.handshake_complete)
@@ -1604,6 +1607,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         .{ "print_coord", "c" },
         .{ "toggle_draw_nodes", "t" },
         .{ "toggle_inventory", "e" },
+        .{ "toggle_caves", "f" },
     }).init();
 
     var draw_nodes: bool = false;
@@ -1641,6 +1645,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             wh.deinit();
     }
     var draw_inventory = true;
+    var display_caves = true;
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
@@ -1654,6 +1659,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 .print_coord => std.debug.print("Camera pos: {any}\n", .{camera.pos}),
                 .toggle_draw_nodes => draw_nodes = !draw_nodes,
                 .toggle_inventory => draw_inventory = !draw_inventory,
+                .toggle_caves => display_caves = !display_caves,
                 else => {},
             }
         }
@@ -1768,7 +1774,18 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 }
             }
 
-            for (world.chunk_data.rebuild_notify.items) |item| {
+            //const max_chunk_build_time = std.time.ns_per_s * (1 / 8); // don't block for more than 1/8 of a second
+            const max_chunk_build_time = std.time.ns_per_s / 8;
+            var chunk_build_timer = try std.time.Timer.start();
+            var num_removed: usize = 0;
+
+            for (world.chunk_data.rebuild_notify.items, 0..) |item, rebuild_i| {
+                if (chunk_build_timer.read() > max_chunk_build_time) {
+                    num_removed = rebuild_i;
+                    break;
+                }
+                defer num_removed += 1;
+
                 const vx = try vert_map.getOrPut(item.x);
                 if (!vx.found_existing) {
                     vx.value_ptr.* = std.AutoHashMap(i32, ChunkVerts).init(alloc);
@@ -1784,7 +1801,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 if (world.chunk_data.x.get(item.x)) |xx| {
                     if (xx.get(item.y)) |chunk| {
                         for (chunk, 0..) |sec, sec_i| {
-                            if (sec_i < 7) continue;
+                            if (!display_caves and sec_i < 7) continue;
                             if (sec.bits_per_entry == 0) continue;
                             //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
                             //var block = s_it.next();
@@ -1824,7 +1841,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     }
                 }
             }
-            try world.chunk_data.rebuild_notify.resize(0);
+            for (0..num_removed) |i| {
+                _ = i;
+                _ = world.chunk_data.rebuild_notify.orderedRemove(0);
+            }
         }
 
         { //Draw the chunks
