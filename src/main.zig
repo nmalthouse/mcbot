@@ -36,8 +36,41 @@ const Lua = graph.Lua;
 
 pub const PacketCache = struct {};
 
+pub const std_options = struct {
+    pub const log_level = .debug;
+    pub const logFn = myLogFn;
+};
+
+pub fn myLogFn(
+    comptime level: std.log.Level,
+    comptime scope: @TypeOf(.EnumLiteral),
+    comptime format: []const u8,
+    args: anytype,
+) void {
+    // Ignore all non-error logging from sources other than
+    // .my_project, .nice_library and the default
+    //const scope_prefix = "(" ++ switch (scope) {
+    //    .my_project, .nice_library, std.log.default_log_scope => @tagName(scope),
+    //    else => if (@intFromEnum(level) <= @intFromEnum(std.log.Level.err))
+    //        @tagName(scope)
+    //    else
+    //        return,
+    //} ++ "): ";
+    const scope_prefix = "(" ++ @tagName(scope) ++ "): ";
+
+    const prefix = "[" ++ comptime level.asText() ++ "] " ++ scope_prefix;
+
+    // Print the message to stderr, silently ignoring any errors
+    std.debug.getStderrMutex().lock();
+    defer std.debug.getStderrMutex().unlock();
+    const stderr = std.io.getStdErr().writer();
+    nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
+}
+
 pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
+    const log = std.log.scoped(.parsing);
     var bot1 = try Bot.init(alloc, bot_name);
+    errdefer bot1.deinit();
     const s = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
     bot1.fd = s.handle;
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.fd_mutex };
@@ -60,12 +93,12 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
         switch (@as(id_list.login_packet_enum, @enumFromInt(pid))) {
             .Disconnect => {
                 const reason = try parse.string(null);
-                std.debug.print("Disconnected: {s}\n", .{reason});
+                log.warn("Disconnected: {s}\n", .{reason});
             },
             .Set_Compression => {
                 const threshold = parse.varInt();
                 comp_thresh = threshold;
-                std.debug.print("Setting Compression threshhold: {d}\n", .{threshold});
+                log.info("Setting Compression threshhold: {d}\n", .{threshold});
                 if (threshold < 0) {
                     unreachable;
                 } else {
@@ -77,14 +110,14 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
                 const server_id = try parse.string(20);
                 const public_key = try parse.string(null);
                 const verify_token = try parse.string(null);
-                std.debug.print("Encryption_request: {any} {any} {any} EXITING\n", .{ server_id, public_key, verify_token });
-                unreachable;
+                log.err("Encryption_request: {any} {any} {any} EXITING\n", .{ server_id, public_key, verify_token });
+                return error.notImplemented;
             },
             .Login_Success => {
                 const uuid = parse.int(u128);
                 const username = try parse.string(16);
                 const n_props = @as(u32, @intCast(parse.varInt()));
-                std.debug.print("Login Success: {d}: {s}\nPropertes:\n", .{ uuid, username });
+                log.info("Login Success: {d}: {s}\nPropertes:\n", .{ uuid, username });
                 var n: u32 = 0;
                 while (n < n_props) : (n += 1) {
                     const prop_name = try parse.string(null);
@@ -93,7 +126,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
                         const sig = try parse.string(null);
                         _ = sig;
                     }
-                    std.debug.print("\t{s}: {s}\n", .{ prop_name, value });
+                    log.info("\t{s}: {s}\n", .{ prop_name, value });
                 }
 
                 bot1.connection_state = .play;
@@ -146,6 +179,7 @@ pub const PacketParse = struct {
 };
 
 pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
+    const log = std.log.scoped(.parsing);
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
@@ -154,15 +188,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     const parseT = mc.packetParseCtx(fbsT.Reader);
     var parse = parseT.init(fbs_.reader(), arena_alloc);
 
-    //const parseTr = Parse.packetParseCtx(fbsT.Reader);
-    //var parser = parseTr.init(fbs_.reader(), arena_alloc);
-
     const plen = parse.varInt();
     _ = plen;
     const pid = parse.varInt();
-
-    //if (plen > 4096)
-    //std.debug.print("{d} over len: {s}\n", .{ plen, id_list.packet_ids[@intCast(u32, pid)] });
 
     const P = AutoParse.P;
     const PT = AutoParse.parseType;
@@ -174,11 +202,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;
-    switch (@as(id_list.packet_enum, @enumFromInt(pid))) {
+    const penum = @as(id_list.packet_enum, @enumFromInt(pid));
+    switch (penum) {
         //WORLD specific packets
         .Plugin_Message => {
             const channel_name = try parse.string(null);
             std.debug.print("Plugin Message: {s}\n", .{channel_name});
+            log.info("{s}: {s}", .{ @tagName(penum), channel_name });
 
             try pctx.pluginMessage("tony:brand");
             try pctx.clientInfo("en_US", bot1.view_dist, 1);
@@ -209,6 +239,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.angle, "yaw"),
                 P(.angle, "pitch"),
             }));
+            std.debug.print("Spawn player {any}\n", .{data});
             try world.entities.put(data.ent_id, .{
                 .uuid = data.ent_uuid,
                 .pos = data.pos,
@@ -888,6 +919,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
 threadlocal var lss: ?*LuaApi = null;
 pub const LuaApi = struct {
+    const log = std.log.scoped(.lua);
     const Self = @This();
     thread_data: *bot.BotScriptThreadData,
     vm: *Lua,
@@ -899,10 +931,6 @@ pub const LuaApi = struct {
         const info = @typeInfo(T);
         if (info != .ErrorUnion) @compileError("stripErrorUnion expects an error union!");
         return info.ErrorUnion.payload;
-    }
-
-    fn log(comptime fmt: []const u8, args: anytype) void {
-        std.debug.print(fmt, args);
     }
 
     fn errc(to_check: anytype) ?stripErrorUnion(@TypeOf(to_check)) {
@@ -920,7 +948,7 @@ pub const LuaApi = struct {
                 @compileError("function name to long");
             @memcpy(buf[0..decl.name.len], decl.name);
             buf[decl.name.len] = 0;
-            log("Registering lua function: {s}\n", .{decl.name});
+            log.info("Registering lua function: {s}", .{decl.name});
             const tinfo = @typeInfo(@TypeOf(@field(Api, decl.name)));
             const lua_name = @as([*c]const u8, @ptrCast(&buf[0]));
             switch (tinfo) {
@@ -1645,7 +1673,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             wh.deinit();
     }
     var draw_inventory = true;
-    var display_caves = true;
+    var display_caves = false;
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
@@ -1774,7 +1802,6 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 }
             }
 
-            //const max_chunk_build_time = std.time.ns_per_s * (1 / 8); // don't block for more than 1/8 of a second
             const max_chunk_build_time = std.time.ns_per_s / 8;
             var chunk_build_timer = try std.time.Timer.start();
             var num_removed: usize = 0;
@@ -1943,8 +1970,25 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             if (bot1.interacted_inventory.win_id != null) {
                 drawInventory(&gctx, &item_atlas, world.reg, &font, area.addV(area.w + 20, 0), &bot1.interacted_inventory);
             }
+            const statsr = graph.Rec(0, area.y + area.h, 400, 300);
+            gctx.rect(statsr, 0xffffffff);
+            gctx.textFmt(
+                statsr.pos().add(.{ .x = 0, .y = 10 }),
+                "health :{d}/20\nhunger: {d}/20\nName: {s}\nSaturation: {d}\nEnt id: {d}",
+                .{
+                    bot1.health,
+                    bot1.food,
+                    bot1.name,
+                    bot1.food_saturation,
+                    bot1.e_id,
+                },
+                &font,
+                15,
+                0xff,
+            );
         }
         gctx.rect(graph.Rec(@divTrunc(win.screen_width, 2), @divTrunc(win.screen_height, 2), 10, 10), 0xffffffff);
+
         gctx.end(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
         //try ctx.beginDraw(graph.itc(0x2f2f2fff));
         //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
@@ -1956,7 +2000,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 fn drawInventory(
     gctx: *graph.NewCtx,
     item_atlas: *const mcBlockAtlas.McAtlas,
-    reg: *const Reg.NewDataReg,
+    reg: *const Reg.DataReg,
     font: *graph.Font,
     area: graph.Rect,
     inventory: *const bot.Inventory,
@@ -1992,7 +2036,7 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
-    var dr = try Reg.NewDataReg.init(alloc, "1.19.3");
+    var dr = try Reg.DataReg.init(alloc, "1.19.3");
     defer dr.deinit();
 
     var arg_it = try std.process.argsWithAllocator(alloc);

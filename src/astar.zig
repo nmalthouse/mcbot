@@ -37,35 +37,6 @@ const ADJ_COST = [8]u32{
     10,
 };
 
-//
-//     4
-//   0 3
-//   i 2  X
-//XXXXX1
-//     0
-//
-//Scan each adjacent block column
-//
-//Test masks in order
-//
-//level-walk-mask
-//jump-up-mask
-//jump-down-mask
-//
-//in order for the corners to be accesible nodes the two adjacent cardinals need to be open, complicated once you add jumping etc
-
-pub const Transparent = [_][]const u8{
-    "minecraft:flowers",
-    "minecraft:rails",
-    "minecraft:signs",
-    "minecraft:crops",
-    "minecraft:climbable",
-    "minecraft:buttons",
-    "minecraft:banners",
-    "minecraft:saplings",
-    "minecraft:grass",
-};
-
 pub const AStarContext = struct {
     const Self = @This();
     pub const Node = struct {
@@ -110,21 +81,7 @@ pub const AStarContext = struct {
             },
         },
     };
-    //TODO create a struct that contains a list of playeractionitems.
-    //Use this struct to manage all state regarding player actions:
-    //
-    //move_state
-    //block_break_state, we need to wait for the server to acknowledge block change
-    //
-    //This structure could house error stuff aswell
-    //If the bot get continuosly teleported, cancel our move and set an error state
-    //
-    //ideally each bot has a queue of action items that can be added to whenever
-    //grouping these together into units makes sense as we might want to remove entire sections at once
-    //have a queue of action lists
 
-    //TODO ensure we use the best tool for the block, Have another PlayerActionItem that switches to correct tool
-    //TODO how do we deal with unexpected changes to bot like inventory full etc, getting shot by skelton
     pub const BreakBlock = struct {
         pos: V3i,
         break_time: f64,
@@ -571,9 +528,4 @@ pub const AStarContext = struct {
         }
         return false;
     }
-
-    //pub fn addWalkableAdj(self: *Self )!void{
-
-    //}
-
 };

@@ -3,18 +3,6 @@ const vector = @import("vector.zig");
 const com = @import("common.zig");
 const J = std.json;
 
-//Parsing protocol.json to generate required code
-//At comptime json.parse protocol.json
-//Generate enums for the different states and clientBound serverBound
-//These enum values are used as packet ids
-//
-//Ideally generate parsing code for each packet
-//Only allocate when required for strings etc. Use an arena allocator
-//Allow early discard of packets
-//
-//At runtime in our packet parsing function
-//Don't do all that just use python and jinja to generate code!
-
 //Support Key F: full, P: partial
 // [ ] biomes.json
 // [ ] blockLoot.json
@@ -30,8 +18,8 @@ const J = std.json;
 // [ ] entityLoot.json
 // [ ] recipes.json
 // [ ] foods.json
-// [P] items.json
-// [ ] materials.json
+// [F] items.json
+// [F] materials.json
 // [ ] protocol.json
 // [F] version.json
 // [P] blocks.json
@@ -303,7 +291,7 @@ pub const Block = struct {
 };
 pub const BlocksJson = []Block;
 
-pub const NewDataReg = struct {
+pub const DataReg = struct {
     const Self = @This();
 
     alloc: std.mem.Allocator,

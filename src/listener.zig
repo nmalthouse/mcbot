@@ -892,7 +892,7 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     return buf;
 }
 
-pub const NUM_CHUNK_SECTION = 24; //TODO There are more than 16 vertical chunks in 1.18+. Limits are from -64 -> 319
+pub const NUM_CHUNK_SECTION = 24;
 pub const Chunk = [NUM_CHUNK_SECTION]ChunkSection;
 pub const ChunkMapCoord = std.AutoHashMap(i32, Chunk);
 pub const ChunkMap = struct {

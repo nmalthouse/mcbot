@@ -4,7 +4,7 @@ const V3f = vector.V3f;
 const mc = @import("listener.zig");
 const astar = @import("astar.zig");
 const RegD = @import("data_reg.zig");
-const Reg = RegD.NewDataReg;
+const Reg = RegD.DataReg;
 
 //How to move?
 //Kinds of movment

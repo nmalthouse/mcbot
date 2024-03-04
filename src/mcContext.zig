@@ -30,6 +30,8 @@ pub const Entity = struct {
     pitch: f32,
 };
 
+const log = std.log.scoped(.world);
+
 pub const McWorld = struct {
     const Self = @This();
 
@@ -43,7 +45,7 @@ pub const McWorld = struct {
     entities: std.AutoHashMap(i32, Entity),
     bots: std.AutoHashMap(i32, Bot),
     tag_table: mc.TagRegistry,
-    reg: *const Reg.NewDataReg,
+    reg: *const Reg.DataReg,
 
     packet_cache: struct {
         chat_time_stamps: RingBuf(32, u64) = RingBuf(32, u64).init(0),
@@ -53,7 +55,7 @@ pub const McWorld = struct {
 
     master_id: ?i32,
 
-    pub fn init(alloc: std.mem.Allocator, reg: *const Reg.NewDataReg) Self {
+    pub fn init(alloc: std.mem.Allocator, reg: *const Reg.DataReg) Self {
         return Self{
             .alloc = alloc,
             .sign_waypoints = std.StringHashMap(vector.V3i).init(alloc),
