@@ -17,12 +17,19 @@ const J = std.json;
 // [ ] blockCollisionShapes.json
 // [ ] entityLoot.json
 // [ ] recipes.json
-// [ ] foods.json
+// [P] foods.json
 // [F] items.json
 // [F] materials.json
 // [ ] protocol.json
 // [F] version.json
 // [P] blocks.json
+
+pub const Food = struct {
+    id: ItemId,
+    foodPoints: f32,
+};
+
+pub const FoodJson = []const Food;
 
 pub const Direction = enum {
     north,
@@ -298,6 +305,7 @@ pub const DataReg = struct {
     version_id: u32,
     item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[]. name strings are stored in items[]
     items: []Item,
+    foods: []Food,
     blocks: []Block,
     entities: EntitiesJson,
     materials: Materials,
@@ -347,12 +355,19 @@ pub const DataReg = struct {
         std.sort.heap(Block, blocks, {}, Block.asc);
         block.deinit();
 
+        const foodj = try com.readJson(data_dir, "foods.json", alloc, FoodJson);
+        defer foodj.deinit();
+        const foods = try alloc.alloc(Food, foodj.value.len);
+        for (foodj.value, 0..) |f, i| {
+            foods[i] = f;
+        }
         //std.sort.heap(Entity, ent.value, {}, Entity.asc);
 
         const ret = Self{
             .version_id = version_info.value.version,
             .alloc = alloc,
             .entities = ent.value,
+            .foods = foods,
             .item_name_map = item_map,
             .items = items,
             .blocks = blocks,
@@ -379,6 +394,7 @@ pub const DataReg = struct {
         self.materials.deinit();
         self.empty_block_ids.deinit();
         self.ent_j.deinit();
+        self.alloc.free(self.foods);
     }
 
     pub fn getBlockSlice(self: *const Self) []const Block {

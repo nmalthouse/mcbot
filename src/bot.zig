@@ -215,6 +215,7 @@ pub const MovementState = struct {
 
 pub const Inventory = struct {
     const Self = @This();
+    pub const FoundSlot = struct { slot: mc.Slot, index: u16 };
     slots: std.ArrayList(?mc.Slot),
     win_id: ?u8 = null,
     win_type: u32 = 0,
@@ -249,12 +250,25 @@ pub const Inventory = struct {
         }
     }
 
-    pub fn findItem(self: *Self, reg: *const Reg, item_name: []const u8) ?struct { slot: mc.Slot, index: u16 } {
+    pub fn findItem(self: *Self, reg: *const Reg, item_name: []const u8) ?FoundSlot {
         const q = reg.getItemFromName(item_name) orelse return null;
         for (self.slots.items, 0..) |o_slot, i| {
             if (o_slot) |slot| {
                 if (slot.item_id == q.id)
                     return .{ .slot = slot, .index = @intCast(i) };
+            }
+        }
+        return null;
+    }
+
+    pub fn findItemFromList(self: *Self, list: anytype, comptime list_field_name: ?[]const u8) ?FoundSlot {
+        for (self.slots.items, 0..) |slot, si| {
+            for (list) |li| {
+                if (slot) |s| {
+                    const id: RegD.ItemId = if (list_field_name) |lf| @field(li, lf) else li;
+                    if (s.item_id == id)
+                        return .{ .slot = s, .index = @intCast(si) };
+                }
             }
         }
         return null;
@@ -298,13 +312,15 @@ pub const BotScriptThreadData = struct {
     owner: Owner,
 
     actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
+    bot: *Bot,
     action_index: ?usize = null,
     move_state: MovementState = undefined,
     timer: ?f64 = null,
 
-    pub fn init(alloc: std.mem.Allocator) Self {
+    pub fn init(alloc: std.mem.Allocator, bot_ptr: *Bot) Self {
         return .{
             .u_status = .actions_empty,
+            .bot = bot_ptr,
             .mutex = .{},
             .actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
             .owner = .none,
@@ -381,6 +397,7 @@ pub const Bot = struct {
     handshake_complete: bool = false,
     compression_threshold: i32 = -1,
     connection_state: enum { play, login, none } = .none,
+    script_filename: ?[]const u8 = null,
     name: []const u8,
     health: f32 = 20,
     food: u8 = 20,
@@ -403,11 +420,15 @@ pub const Bot = struct {
     interacted_inventory: Inventory,
     container_state: i32 = 0,
 
-    pub fn init(alloc: std.mem.Allocator, name_: []const u8) !Bot {
+    alloc: std.mem.Allocator,
+
+    pub fn init(alloc: std.mem.Allocator, name_: []const u8, script_name: ?[]const u8) !Bot {
         var inv = Inventory.init(alloc);
         try inv.setSize(46);
         return Bot{
+            .alloc = alloc,
             .inventory = inv,
+            .script_filename = if (script_name) |sn| try alloc.dupe(u8, sn) else null,
             .name = name_,
             .e_id = 0,
             .action_list = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
@@ -430,6 +451,9 @@ pub const Bot = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        if (self.script_filename) |sn| {
+            self.alloc.free(sn);
+        }
         self.action_list.deinit();
         self.interacted_inventory.deinit();
         self.inventory.deinit();

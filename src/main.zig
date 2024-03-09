@@ -56,6 +56,16 @@ pub fn myLogFn(
     //    else
     //        return,
     //} ++ "): ";
+    if (level == .info) {
+        switch (scope) {
+            .inventory,
+            .world,
+            .lua,
+            .SDL,
+            => return,
+            else => {},
+        }
+    }
     const scope_prefix = "(" ++ @tagName(scope) ++ "): ";
 
     const prefix = "[" ++ comptime level.asText() ++ "] " ++ scope_prefix;
@@ -67,9 +77,9 @@ pub fn myLogFn(
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
 }
 
-pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
+pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8) !Bot {
     const log = std.log.scoped(.parsing);
-    var bot1 = try Bot.init(alloc, bot_name);
+    var bot1 = try Bot.init(alloc, bot_name, script_name);
     errdefer bot1.deinit();
     const s = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
     bot1.fd = s.handle;
@@ -117,7 +127,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
                 const uuid = parse.int(u128);
                 const username = try parse.string(16);
                 const n_props = @as(u32, @intCast(parse.varInt()));
-                log.info("Login Success: {d}: {s}\nPropertes:\n", .{ uuid, username });
+                log.info("Login Success: {d}: {s}", .{ uuid, username });
                 var n: u32 = 0;
                 while (n < n_props) : (n += 1) {
                     const prop_name = try parse.string(null);
@@ -126,7 +136,9 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8) !Bot {
                         const sig = try parse.string(null);
                         _ = sig;
                     }
-                    log.info("\t{s}: {s}\n", .{ prop_name, value });
+                    _ = prop_name;
+                    _ = value;
+                    //log.info("\t{s}: {s}\n", .{ prop_name, value });
                 }
 
                 bot1.connection_state = .play;
@@ -180,6 +192,7 @@ pub const PacketParse = struct {
 
 pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
     const log = std.log.scoped(.parsing);
+    const inv_log = std.log.scoped(.inventory);
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
@@ -207,7 +220,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //WORLD specific packets
         .Plugin_Message => {
             const channel_name = try parse.string(null);
-            std.debug.print("Plugin Message: {s}\n", .{channel_name});
             log.info("{s}: {s}", .{ @tagName(penum), channel_name });
 
             try pctx.pluginMessage("tony:brand");
@@ -216,19 +228,19 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .Change_Difficulty => {
             const diff = parse.int(u8);
             const locked = parse.int(u8);
-            std.debug.print("Set difficulty: {d}, Locked: {d}\n", .{ diff, locked });
+            log.info("Set difficulty: {d}, Locked: {d}", .{ diff, locked });
         },
         .Player_Abilities => {
-            std.debug.print("Player Abilities\n", .{});
+            log.info("Player Abilities packet", .{});
         },
         .Feature_Flags => {
             const num_feature = parse.varInt();
-            std.debug.print("Feature_Flags: \n", .{});
+            log.info("Feature_Flags:", .{});
 
             var i: u32 = 0;
             while (i < num_feature) : (i += 1) {
                 const feat = try parse.string(null);
-                std.debug.print("\t{s}\n", .{feat});
+                log.info("\t{s}", .{feat});
             }
         },
         .Spawn_Player => {
@@ -239,8 +251,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.angle, "yaw"),
                 P(.angle, "pitch"),
             }));
-            std.debug.print("Spawn player {any}\n", .{data});
-            try world.entities.put(data.ent_id, .{
+            //log.info("Spawn player: {any}", .{data});
+            try world.putEntity(data.ent_id, .{
                 .uuid = data.ent_uuid,
                 .pos = data.pos,
                 .pitch = data.pitch,
@@ -248,7 +260,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             });
         },
         .Spawn_Entity => {
-            const data = parse.auto(PT(&.{
+            const Lt = PT(&.{
                 P(.varInt, "ent_id"),
                 P(.uuid, "ent_uuid"),
                 P(.varInt, "ent_type"),
@@ -258,7 +270,12 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.angle, "head_yaw"),
                 P(.varInt, "data"),
                 P(.shortV3i, "vel"),
-            }));
+            });
+            const data = parse.auto(Lt);
+            //std.debug.print("Spawn ent {any}\n", .{data});
+            const ent_t = @as(id_list.entity_type_enum, @enumFromInt(data.ent_type));
+            _ = ent_t;
+            //std.debug.print("ent t: {s}\n", .{@tagName(ent_t)});
 
             try world.entities.put(data.ent_id, .{
                 .uuid = data.ent_uuid,
@@ -272,7 +289,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var n: u32 = 0;
             while (n < num_ent) : (n += 1) {
                 const e_id = parse.varInt();
-                _ = world.entities.remove(e_id);
+                world.removeEntity(e_id);
             }
         },
         .Update_Entity_Rotation => {
@@ -295,6 +312,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.angle, "pitch"),
                 P(.boolean, "grounded"),
             }));
+            world.entities_mutex.lock();
+            defer world.entities_mutex.unlock();
             if (world.entities.getPtr(data.ent_id)) |e| {
                 e.pos = vector.deltaPosToV3f(e.pos, data.del);
                 e.pitch = data.pitch;
@@ -314,6 +333,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .Update_Entity_Position => {
             const data = parse.auto(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
+            world.entities_mutex.lock();
+            defer world.entities_mutex.unlock();
             if (world.entities.getPtr(data.ent_id)) |e| {
                 e.pos = vector.deltaPosToV3f(e.pos, data.del);
             }
@@ -326,7 +347,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             defer tracker.deinit();
 
             var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader());
-            //std.debug.print("\n\n{}\n\n", .{nbt_data});
             _ = nbt_data;
             _ = pos;
             _ = btype;
@@ -340,6 +360,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.angle, "pitch"),
                 P(.boolean, "grounded"),
             }));
+            world.entities_mutex.lock();
+            defer world.entities_mutex.unlock();
             if (world.entities.getPtr(data.ent_id)) |e| {
                 e.pos = data.pos;
                 e.pitch = data.pitch;
@@ -353,7 +375,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .Game_Event => {
             const event = parse.int(u8);
             const value = parse.float(f32);
-            std.debug.print("GAME EVENT: {d} {d}\n", .{ event, value });
+            log.info("Game event: {d} {d}", .{ event, value });
         },
         .Update_Section_Blocks => {
             const chunk_pos = parse.chunk_position();
@@ -482,9 +504,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                         }
                     }
                 } else {
-                    //std.debug.print("at {any}\n", .{coord});
                     if (std.mem.eql(u8, "chest", b.name)) {
-                        //std.debug.print("t_ent {d} {d} {d}__{s}\n", .{ be.rel_x, be.rel_z, be.abs_y, b.name });
                         //be.nbt.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
                     }
                 }
@@ -527,14 +547,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const id = parse.varInt();
             const killer_id = parse.int(i32);
             const msg = try parse.string(null);
-            std.debug.print("You died lol {d} {d} {s}\n", .{ id, killer_id, msg });
+            log.warn("Combat death, id: {d}, killer_id: {d}, msg: {s}", .{ id, killer_id, msg });
 
             try pctx.clientCommand(0);
         },
         .Disconnect => {
             const reason = try parse.string(null);
-
-            std.debug.print("Disconnect: {s}\n", .{reason});
+            log.warn("Disconnected. Reason:  {s}", .{reason});
         },
         .Set_Held_Item => {
             bot1.selected_slot = parse.int(u8);
@@ -545,12 +564,12 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const state_id = parse.varInt();
             const slot_i = parse.int(i16);
             const data = parse.slot();
+            inv_log.info("set_slot: win_id: {d}, state: {d}: slot_i: {d}, data: {any}", .{ win_id, state_id, slot_i, data });
             if (win_id == -1 and slot_i == -1) {
                 bot1.held_item = data;
             } else if (win_id == 0) {
                 bot1.container_state = state_id;
                 try bot1.inventory.setSlot(@intCast(slot_i), data);
-                std.debug.print("SET CONTAINER SLOT slot {any}\n", .{data});
             } else if (bot1.interacted_inventory.win_id != null and win_id == bot1.interacted_inventory.win_id.?) {
                 bot1.container_state = state_id;
                 try bot1.interacted_inventory.setSlot(@intCast(slot_i), data);
@@ -566,10 +585,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             bot1.interacted_inventory.win_type = @as(u32, @intCast(win_type));
             //bot1.interacted_inventory.win_id = win_id;
             const win_title = try parse.string(null);
-            std.debug.print("open window: {d} {d}: {s}\n", .{ win_id, win_type, win_title });
+            inv_log.info("open_win: win_id: {d}, win_type: {d}, title: {s}", .{ win_id, win_type, win_title });
         },
         .Set_Container_Content => {
-            std.debug.print("SET CONT CONTENT\n", .{});
+            inv_log.info("set content packet", .{});
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
             const item_count = @as(u32, @intCast(parse.varInt()));
@@ -610,28 +629,16 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 P(.varInt, "tel_id"),
                 P(.boolean, "should_dismount"),
             }));
+            const Coord_fmt = "[{d:.2}, {d:.2}, {d:.2}]";
 
-            if (bot1.pos != null)
-                std.debug.print(
-                    "Sync pos: x: {d}, y: {d}, z: {d}, yaw {d}, pitch : {d} flags: {b}, tel_id: {}\n\told_pos: {any}\n\tDisc: {d} {d} {d}\n",
-                    .{
-                        data.pos.x,
-                        data.pos.y,
-                        data.pos.z,
-                        data.yaw,
-                        data.pitch,
-                        data.flags,
-                        data.tel_id,
-                        bot1.pos,
-                        bot1.pos.?.x - data.pos.x,
-                        bot1.pos.?.y - data.pos.y,
-                        bot1.pos.?.z - data.pos.z,
-                    },
-                );
-            //TODO use if relative flag
+            log.warn("Sync Pos: new: " ++ Coord_fmt ++ " tel_id: {d}", .{ data.pos.x, data.pos.y, data.pos.z, data.tel_id });
+            if (bot1.pos) |p|
+                log.warn("\told: " ++ Coord_fmt ++ " diff: " ++ Coord_fmt, .{
+                    p.x,              p.y,              p.z,
+                    p.x - data.pos.x, p.y - data.pos.y, p.z - data.pos.z,
+                });
             bot1.pos = data.pos;
             _ = FieldMask;
-            //bot1.action_index = null;
 
             try pctx.confirmTeleport(data.tel_id);
 
@@ -921,6 +928,7 @@ threadlocal var lss: ?*LuaApi = null;
 pub const LuaApi = struct {
     const log = std.log.scoped(.lua);
     const Self = @This();
+    const ActionListT = std.ArrayList(astar.AStarContext.PlayerActionItem);
     thread_data: *bot.BotScriptThreadData,
     vm: *Lua,
     pathctx: astar.AStarContext,
@@ -941,23 +949,7 @@ pub const LuaApi = struct {
     }
 
     pub fn init(alloc: std.mem.Allocator, world: *McWorld, bo: *Bot, thread_data: *bot.BotScriptThreadData, vm: *Lua) Self {
-        const info = @typeInfo(Api);
-        inline for (info.Struct.decls) |decl| {
-            var buf: [128]u8 = undefined;
-            if (buf.len <= decl.name.len)
-                @compileError("function name to long");
-            @memcpy(buf[0..decl.name.len], decl.name);
-            buf[decl.name.len] = 0;
-            log.info("Registering lua function: {s}", .{decl.name});
-            const tinfo = @typeInfo(@TypeOf(@field(Api, decl.name)));
-            const lua_name = @as([*c]const u8, @ptrCast(&buf[0]));
-            switch (tinfo) {
-                .Fn => vm.reg(lua_name, @field(Api, decl.name)),
-                else => vm.setGlobal(lua_name, @field(Api, decl.name)),
-                //else => @compileError("unsupported type for lua api: " ++ decl.name ++ " typeof: " ++ @typeName(@TypeOf(@field(Api, decl.name)))),
-            }
-        }
-
+        vm.registerAllStruct(Api);
         return .{
             .thread_data = thread_data,
             .vm = vm,
@@ -1054,7 +1046,7 @@ pub const LuaApi = struct {
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
             const coord = self.world.getSignWaypoint(str) orelse {
-                std.debug.print("Cant find tools waypoint\n", .{});
+                log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
             const found = self.pathctx.pathfind(pos, coord.toF()) catch unreachable;
@@ -1076,7 +1068,6 @@ pub const LuaApi = struct {
             const pos = self.bo.pos.?;
             defer self.bo.modify_mutex.unlock();
             if (self.bo.inventory.findItem(self.world.reg, item_name)) |found| {
-                std.debug.print("Found item {s} {any}\n", .{ item_name, found });
                 var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
                 errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
                 errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(found.index)) } })) orelse return 0;
@@ -1144,7 +1135,8 @@ pub const LuaApi = struct {
                 if (tree_o) |*tree| {
                     self.thread_data.setActions(tree.*, pos);
                     for (tree.items) |item| {
-                        std.debug.print("{any}\n", .{item});
+                        _ = item;
+                        //std.debug.print("{any}\n", .{item});
                     }
                 }
             } else {
@@ -1238,19 +1230,52 @@ pub const LuaApi = struct {
             }
             errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
             self.thread_data.setActions(actions, pos);
-            std.debug.print("interct with chest\n", .{});
+            //std.debug.print("interct with chest\n", .{});
             return 0;
+        }
+
+        pub export fn getHunger(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 0);
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+
+            Lua.pushV(L, self.bo.food);
+            return 0;
+        }
+
+        pub export fn eatFood(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 0);
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            defer self.bo.modify_mutex.unlock();
+            if (self.bo.inventory.findItemFromList(self.world.reg.foods, "id")) |food_slot| {
+                var actions = ActionListT.init(self.world.alloc);
+                errc(actions.append(.{ .eat = {} })) orelse return 0;
+                errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(food_slot.index)) } })) orelse return 0;
+                self.thread_data.setActions(actions, pos);
+                Lua.pushV(L, true);
+                return 1;
+            }
+            Lua.pushV(L, false);
+            return 1;
         }
     };
 };
-pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
+pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld, filename: []const u8) !void {
     if (lss != null)
         return error.lua_script_state_AlreadyInit;
     var luavm = Lua.init();
     var script_state = LuaApi.init(alloc, world, bo, thread_data, &luavm);
     defer script_state.deinit();
     lss = &script_state;
-    luavm.loadAndRunFile("bot.lua");
+    luavm.loadAndRunFile(filename);
     while (true) {
         luavm.callLuaFunction("loop") catch |err| {
             switch (err) {
@@ -1360,164 +1385,212 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
 }
 
 pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Thread.Mutex) !void {
-    var bot_it_1 = world.bots.iterator();
-    const bot1 = bot_it_1.next();
-    if (bot1 == null)
-        return error.NoBotsToSpawnScriptsFor;
-    const bo = bot1.?.value_ptr;
+    //var bot_it_1 = world.bots.iterator();
+    //const bot1 = bot_it_1.next();
+    //if (bot1 == null)
+    //    return error.NoBotsToSpawnScriptsFor;
+    //const bo = bot1.?.value_ptr;
 
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
 
-    var b1_thread_data = bot.BotScriptThreadData.init(alloc);
-    defer b1_thread_data.deinit();
-    b1_thread_data.lock(.bot_thread);
-    //const b1_thread = try std.Thread.spawn(.{}, simpleBotScript, .{ bo, alloc, &b1_thread_data, world });
-    const b1_thread = try std.Thread.spawn(.{}, luaBotScript, .{ bo, alloc, &b1_thread_data, world });
-    defer b1_thread.join();
+    var bot_threads = std.ArrayList(std.Thread).init(alloc);
+    var bot_threads_data = std.ArrayList(*bot.BotScriptThreadData).init(alloc);
+    defer {
+        for (bot_threads.items) |th|
+            th.join();
+        bot_threads.deinit();
+
+        for (bot_threads_data.items) |btd| {
+            btd.deinit();
+            alloc.destroy(btd);
+        }
+        bot_threads_data.deinit();
+    }
+
+    var bots_it = world.bots.iterator();
+    while (bots_it.next()) |b| {
+        b.value_ptr.modify_mutex.lock();
+        defer b.value_ptr.modify_mutex.unlock();
+        if (b.value_ptr.script_filename) |sn| {
+            const btd = try alloc.create(bot.BotScriptThreadData);
+            btd.* = bot.BotScriptThreadData.init(alloc, b.value_ptr);
+            btd.lock(.bot_thread);
+            try bot_threads_data.append(btd);
+            try bot_threads.append(try std.Thread.spawn(.{}, luaBotScript, .{
+                b.value_ptr,
+                alloc,
+                btd,
+                world,
+                sn,
+            }));
+        }
+    }
+
+    //var b1_thread_data = bot.BotScriptThreadData.init(alloc);
+    //defer b1_thread_data.deinit();
+    //b1_thread_data.lock(.bot_thread);
+    //const b1_thread = try std.Thread.spawn(.{}, luaBotScript, .{ bo, alloc, &b1_thread_data, world });
+    //defer b1_thread.join();
 
     var skip_ticks: i32 = 0;
     const dt: f64 = 1.0 / 20.0;
     while (true) {
         if (exit_mutex.tryLock()) {
             std.debug.print("Stopping updateBots thread\n", .{});
-            b1_thread_data.lock(.bot_thread);
-            b1_thread_data.u_status = .terminate_thread;
-            b1_thread_data.unlock(.bot_thread);
+            for (bot_threads_data.items) |th_d| {
+                th_d.lock(.bot_thread);
+                defer th_d.unlock(.bot_thread);
+                th_d.u_status = .terminate_thread;
+            }
             return;
         }
 
-        //The scriptThread will be blocked whenever we are in this block until we notify we need more actions by unlocking
-        if (b1_thread_data.trylock(.bot_thread)) {
-            var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
-            bo.modify_mutex.lock();
-            defer bo.modify_mutex.unlock();
-            if (!bo.handshake_complete)
-                continue;
+        for (bot_threads_data.items) |th_d| {
+            if (th_d.trylock(.bot_thread)) {
+                const bo = th_d.bot;
+                var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
+                bo.modify_mutex.lock();
+                defer bo.modify_mutex.unlock();
+                if (!bo.handshake_complete)
+                    continue;
 
-            if (skip_ticks > 0) {
-                skip_ticks -= 1;
-            } else {
-                const bt = &b1_thread_data;
-                if (bt.action_index) |action| {
-                    switch (bt.actions.items[action]) {
-                        .movement => |move_| {
-                            var move = move_;
-                            var adt = dt;
-                            var grounded = true;
-                            var moved = false;
-                            var pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
-                            while (true) {
-                                var move_vec = bt.move_state.update(adt);
-                                grounded = move_vec.grounded;
+                if (skip_ticks > 0) {
+                    skip_ticks -= 1;
+                } else {
+                    if (th_d.action_index) |action| {
+                        switch (th_d.actions.items[action]) {
+                            .movement => |move_| {
+                                var move = move_;
+                                var adt = dt;
+                                var grounded = true;
+                                var moved = false;
+                                var pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
+                                while (true) {
+                                    var move_vec = th_d.move_state.update(adt);
+                                    grounded = move_vec.grounded;
 
-                                bo.pos = move_vec.new_pos;
-                                moved = true;
+                                    bo.pos = move_vec.new_pos;
+                                    moved = true;
 
-                                if (move_vec.move_complete) {
-                                    bt.nextAction(move_vec.remaining_dt, bo.pos.?);
-                                    if (bt.action_index) |new_acc| {
-                                        if (bt.actions.items[new_acc] != .movement) {
-                                            break;
-                                        } else if (bt.actions.items[new_acc].movement.kind == .jump and move.kind == .jump) {
-                                            bt.move_state.time = 0;
-                                            //skip_ticks = 100;
+                                    if (move_vec.move_complete) {
+                                        th_d.nextAction(move_vec.remaining_dt, bo.pos.?);
+                                        if (th_d.action_index) |new_acc| {
+                                            if (th_d.actions.items[new_acc] != .movement) {
+                                                break;
+                                            } else if (th_d.actions.items[new_acc].movement.kind == .jump and move.kind == .jump) {
+                                                th_d.move_state.time = 0;
+                                                //skip_ticks = 100;
+                                                break;
+                                            }
+                                        } else {
+                                            th_d.unlock(.bot_thread); //We have no more left so notify
                                             break;
                                         }
                                     } else {
-                                        bt.unlock(.bot_thread); //We have no more left so notify
+                                        //TODO signal error
                                         break;
                                     }
+                                    //move_vec = //above switch statement
+                                }
+                                if (moved) {
+                                    try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, grounded);
+                                }
+                            },
+                            .eat => {
+                                const EATING_TIME_S = 1.61;
+                                if (th_d.timer == null) {
+                                    try bp.useItem(.main, 0);
+                                    th_d.timer = dt;
                                 } else {
-                                    //TODO signal error
-                                    break;
-                                }
-                                //move_vec = //above switch statement
-                            }
-                            if (moved) {
-                                try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, grounded);
-                            }
-                        },
-                        .wait_ms => |wms| {
-                            skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
-                            bt.nextAction(0, bo.pos.?);
-                        },
-                        .hold_item => |si| {
-                            try bp.setHeldItem(0);
-                            try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
-                            bt.nextAction(0, bo.pos.?);
-                        },
-                        .inventory => |ii| {
-                            const magic_num = 35;
-                            switch (ii) {
-                                .withdraw => |w| {
-                                    if (bo.interacted_inventory.win_id) |wid| {
-                                        const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
-                                        for (bo.interacted_inventory.slots.items[0..player_inv_start], 0..) |slot, i| {
-                                            if (slot) |s| {
-                                                if (s.item_id == w.id) {
-                                                    try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
-                                                    break;
-                                                    //if (d.kind == .one)
-                                                    //    break;
-                                                }
-                                            }
-                                        }
+                                    th_d.timer.? += dt;
+                                    if (th_d.timer.? >= EATING_TIME_S) {
+                                        try bp.playerAction(.shoot_arrowEat, .{ .x = 0, .y = 0, .z = 0 });
+                                        th_d.nextAction(0, bo.pos.?);
                                     }
-                                },
-                                .deposit => |d| {
-                                    if (bo.interacted_inventory.win_id) |wid| {
-                                        const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
-                                        for (bo.interacted_inventory.slots.items[player_inv_start..], player_inv_start..) |slot, i| {
-                                            if (slot) |s| {
-                                                if (s.item_id == d.id or d.match_any) {
-                                                    try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
-                                                    if (d.kind == .one)
+                                }
+                            },
+                            .wait_ms => |wms| {
+                                skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
+                                th_d.nextAction(0, bo.pos.?);
+                            },
+                            .hold_item => |si| {
+                                try bp.setHeldItem(0);
+                                try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
+                                th_d.nextAction(0, bo.pos.?);
+                            },
+                            .inventory => |ii| {
+                                const magic_num = 35;
+                                switch (ii) {
+                                    .withdraw => |w| {
+                                        if (bo.interacted_inventory.win_id) |wid| {
+                                            const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
+                                            for (bo.interacted_inventory.slots.items[0..player_inv_start], 0..) |slot, i| {
+                                                if (slot) |s| {
+                                                    if (s.item_id == w.id) {
+                                                        try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
                                                         break;
+                                                        //if (d.kind == .one)
+                                                        //    break;
+                                                    }
                                                 }
                                             }
                                         }
-                                    }
-                                },
-                            }
-                            bt.nextAction(0, bo.pos.?);
-                        },
-                        .place_block => |pb| {
-                            const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
-                            try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                            try bp.useItemOn(.main, pb.pos, .bottom, 0, 0, 0, false, 0);
-                            bt.nextAction(0, bo.pos.?);
-                        },
-                        .open_chest => |ii| {
-                            const pw = mc.lookAtBlock(bo.pos.?, ii.pos.toF());
-                            try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                            try bp.useItemOn(.main, ii.pos, .bottom, 0, 0, 0, false, 0);
-                            bt.nextAction(0, bo.pos.?);
-                        },
-                        .close_chest => {
-                            try bp.closeContainer(bo.interacted_inventory.win_id.?);
-                            //bo.interacted_inventory.win_id = null;
-                            bt.nextAction(0, bo.pos.?);
-                        },
-                        .block_break => |bb| {
-                            if (bt.timer == null) {
-                                const pw = mc.lookAtBlock(bo.pos.?, bb.pos.toF());
-                                try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                                try bp.playerAction(.start_digging, bb.pos);
-                                bt.timer = dt;
-                            } else {
-                                bt.timer.? += dt;
-                                if (bt.timer.? >= bb.break_time) {
-                                    bt.timer = null;
-                                    try bp.playerAction(.finish_digging, bb.pos);
-                                    bt.nextAction(0, bo.pos.?);
+                                    },
+                                    .deposit => |d| {
+                                        if (bo.interacted_inventory.win_id) |wid| {
+                                            const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
+                                            for (bo.interacted_inventory.slots.items[player_inv_start..], player_inv_start..) |slot, i| {
+                                                if (slot) |s| {
+                                                    if (s.item_id == d.id or d.match_any) {
+                                                        try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
+                                                        if (d.kind == .one)
+                                                            break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    },
                                 }
-                            }
-                        },
+                                th_d.nextAction(0, bo.pos.?);
+                            },
+                            .place_block => |pb| {
+                                const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
+                                try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                try bp.useItemOn(.main, pb.pos, .bottom, 0, 0, 0, false, 0);
+                                th_d.nextAction(0, bo.pos.?);
+                            },
+                            .open_chest => |ii| {
+                                const pw = mc.lookAtBlock(bo.pos.?, ii.pos.toF());
+                                try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                try bp.useItemOn(.main, ii.pos, .bottom, 0, 0, 0, false, 0);
+                                th_d.nextAction(0, bo.pos.?);
+                            },
+                            .close_chest => {
+                                try bp.closeContainer(bo.interacted_inventory.win_id.?);
+                                //bo.interacted_inventory.win_id = null;
+                                th_d.nextAction(0, bo.pos.?);
+                            },
+                            .block_break => |bb| {
+                                if (th_d.timer == null) {
+                                    const pw = mc.lookAtBlock(bo.pos.?, bb.pos.toF());
+                                    try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                    try bp.playerAction(.start_digging, bb.pos);
+                                    th_d.timer = dt;
+                                } else {
+                                    th_d.timer.? += dt;
+                                    if (th_d.timer.? >= bb.break_time) {
+                                        th_d.timer = null;
+                                        try bp.playerAction(.finish_digging, bb.pos);
+                                        th_d.nextAction(0, bo.pos.?);
+                                    }
+                                }
+                            },
+                        }
+                    } else {
+                        th_d.unlock(.bot_thread);
                     }
-                } else {
-                    bt.unlock(.bot_thread);
                 }
             }
         }
@@ -1659,11 +1732,11 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         }
     }
     {
-        try gctx.begin(0x263556ff);
+        try gctx.begin(0x263556ff, win.screen_dimensions.toF());
         win.pumpEvents();
         graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
         gctx.text(.{ .x = 40, .y = 30 }, "LOADING CHUNKS", &font, 72, 0xffffffff);
-        gctx.end(win.screen_width, win.screen_height, graph.za.Mat4.zero());
+        try gctx.end();
         win.swap();
     }
     const wheat_id = world.reg.getBlockFromName("wheat") orelse 0;
@@ -1677,7 +1750,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
-        try gctx.begin(0x2f2f2fff);
+        try gctx.begin(0x2f2f2fff, win.screen_dimensions.toF());
         try cubes.indicies.resize(0);
         try cubes.vertices.resize(0);
         win.pumpEvents(); //Important that this is called after beginDraw for input lag reasons
@@ -1879,7 +1952,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             while (it.next()) |kv| {
                 var zit = kv.value_ptr.iterator();
                 while (zit.next()) |kv2| {
-                    kv2.value_ptr.cubes.draw(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+                    kv2.value_ptr.cubes.draw(win.screen_dimensions, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
                 }
             }
         }
@@ -1941,7 +2014,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         }
 
         cubes.setData();
-        cubes.draw(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+        cubes.draw(win.screen_dimensions, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
 
         camera.update(&win);
 
@@ -1949,7 +2022,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         if (draw_inventory) {
             bot1.modify_mutex.lock();
             defer bot1.modify_mutex.unlock();
-            const area = graph.Rec(0, 0, @divTrunc(win.screen_width, 3), @divTrunc(win.screen_width, 3));
+            world.entities_mutex.lock();
+            defer world.entities_mutex.unlock();
+            const area = graph.Rec(0, 0, @divTrunc(win.screen_dimensions.x, 3), @divTrunc(win.screen_dimensions.x, 3));
             const sx = area.w / @as(f32, @floatFromInt(invtex.w));
             const sy = area.h / @as(f32, @floatFromInt(invtex.h));
             gctx.rectTex(area, invtex.rect(), 0xffffffff, invtex);
@@ -1974,22 +2049,23 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             gctx.rect(statsr, 0xffffffff);
             gctx.textFmt(
                 statsr.pos().add(.{ .x = 0, .y = 10 }),
-                "health :{d}/20\nhunger: {d}/20\nName: {s}\nSaturation: {d}\nEnt id: {d}",
+                "health :{d}/20\nhunger: {d}/20\nName: {s}\nSaturation: {d}\nEnt id: {d}\nent count: {d}",
                 .{
                     bot1.health,
                     bot1.food,
                     bot1.name,
                     bot1.food_saturation,
                     bot1.e_id,
+                    world.entities.count(),
                 },
                 &font,
                 15,
                 0xff,
             );
         }
-        gctx.rect(graph.Rec(@divTrunc(win.screen_width, 2), @divTrunc(win.screen_height, 2), 10, 10), 0xffffffff);
+        gctx.rect(graph.Rec(@divTrunc(win.screen_dimensions.x, 2), @divTrunc(win.screen_dimensions.x, 2), 10, 10), 0xffffffff);
 
-        gctx.end(win.screen_width, win.screen_height, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+        try gctx.end();
         //try ctx.beginDraw(graph.itc(0x2f2f2fff));
         //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
         //ctx.endDraw(win.screen_width, win.screen_height);
@@ -2058,8 +2134,8 @@ pub fn main() !void {
         }
     }
 
-    const bot_names = [_]struct { name: []const u8, sex: enum { male, female } }{
-        .{ .name = "John", .sex = .male },
+    const bot_names = [_]struct { name: []const u8, sex: enum { male, female }, script_name: ?[]const u8 = null }{
+        .{ .name = "John", .sex = .male, .script_name = "bot.lua" },
         //.{ .name = "James", .sex = .male },
         //.{ .name = "Charles", .sex = .male },
         //.{ .name = "George", .sex = .male },
@@ -2079,7 +2155,7 @@ pub fn main() !void {
         //.{ .name = "Annie", .sex = .female },
         //.{ .name = "Laura", .sex = .female },
         //.{ .name = "Rose", .sex = .female },
-        //.{ .name = "Ethel", .sex = .female },
+        .{ .name = "Ethel", .sex = .female },
     };
     const epoll_fd = try std.os.epoll_create1(0);
     defer std.os.close(epoll_fd);
@@ -2093,7 +2169,7 @@ pub fn main() !void {
 
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
-        const mb = try botJoin(alloc, bn.name);
+        const mb = try botJoin(alloc, bn.name, bn.script_name);
         event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
         try world.bots.put(mb.fd, mb);

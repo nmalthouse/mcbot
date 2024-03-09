@@ -43,6 +43,8 @@ pub const McWorld = struct {
 
     //TODO make entities and bots thread safe
     entities: std.AutoHashMap(i32, Entity),
+    entities_mutex: std.Thread.Mutex = .{},
+
     bots: std.AutoHashMap(i32, Bot),
     tag_table: mc.TagRegistry,
     reg: *const Reg.DataReg,
@@ -73,7 +75,7 @@ pub const McWorld = struct {
         self.sign_waypoints_mutex.lock();
         defer self.sign_waypoints_mutex.unlock();
         const name = try self.alloc.dupe(u8, sign_name);
-        std.debug.print("Putting waypoint \"{s}\"\n", .{name});
+        log.info("Putting waypoint \"{s}\"", .{name});
         errdefer self.alloc.free(name);
         try self.sign_waypoints.put(name, pos);
     }
@@ -82,6 +84,18 @@ pub const McWorld = struct {
         self.sign_waypoints_mutex.lock();
         defer self.sign_waypoints_mutex.unlock();
         return self.sign_waypoints.get(sign_name);
+    }
+
+    pub fn putEntity(self: *Self, ent_id: i32, ent: Entity) !void {
+        self.entities_mutex.lock();
+        defer self.entities_mutex.unlock();
+        try self.entities.put(ent_id, ent);
+    }
+
+    pub fn removeEntity(self: *Self, ent_id: i32) void {
+        self.entities_mutex.lock();
+        defer self.entities_mutex.unlock();
+        _ = self.entities.remove(ent_id);
     }
 
     pub fn deinit(self: *Self) void {

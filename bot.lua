@@ -20,7 +20,7 @@ end
 
 
 local is_init = true
-function loop()
+function wheatLoop()
     sleepms(1000);
     if is_init == true then
         is_init = false
@@ -38,7 +38,9 @@ function loop()
         if b.name == "wheat" and b.state.age == 7 then
             gotoCoord(f)
             breakBlock(f)
+            sleepms(300);
             placeBlock(f, "wheat_seeds")
+            sleepms(300);
         end
     end
 
@@ -53,4 +55,13 @@ function loop()
     local table = {{deposit={name="wheat"}}}
     interactChest("wheat_drop_chest", table)
 
+end
+
+function loop()
+    sleepms(1000)
+    wheatLoop()
+
+    while getHunger() < 20 do
+        if not eatFood() then break end
+    end
 end

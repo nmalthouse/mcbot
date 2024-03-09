@@ -61,6 +61,7 @@ pub const AStarContext = struct {
     };
 
     pub const PlayerActionItem = union(enum) {
+        eat: void,
         movement: MoveItem,
         block_break: BreakBlock,
         wait_ms: u32,

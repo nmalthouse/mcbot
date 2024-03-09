@@ -38,6 +38,14 @@ pub const PacketCtx = struct {
         try self.packet.writeToServer(self.server, self.mutex);
     }
 
+    pub fn useItem(self: *@This(), hand: enum { main, off_hand }, sequence: i32) !void {
+        try self.packet.clear();
+        try self.packet.varInt(0x32);
+        try self.packet.varInt(@intFromEnum(hand));
+        try self.packet.varInt(sequence);
+        try self.wr();
+    }
+
     pub fn useItemOn(
         self: *@This(),
         hand: enum { main, off_hand },
@@ -508,7 +516,10 @@ pub const AutoParse = struct {
         return .{ .type_ = type_, .name = name };
     }
 
-    const parseTypeReturnType = struct { t: type, list: []const ParseItem };
+    const parseTypeReturnType = struct {
+        t: type,
+        list: []const ParseItem,
+    };
     pub fn parseType(comptime parse_items: []const ParseItem) parseTypeReturnType {
         var struct_fields: [parse_items.len]std.builtin.Type.StructField = undefined;
         for (parse_items, 0..) |item, i| {
