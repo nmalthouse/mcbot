@@ -904,7 +904,27 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
 }
 
 pub const NUM_CHUNK_SECTION = 24;
-pub const Chunk = [NUM_CHUNK_SECTION]ChunkSection;
+pub const Chunk = struct {
+    sections: [NUM_CHUNK_SECTION]ChunkSection,
+    owners: std.AutoHashMap(u128, void),
+
+    pub fn init(alloc: std.mem.Allocator) @This() {
+        var sec: [NUM_CHUNK_SECTION]ChunkSection = undefined;
+        for (&sec) |*s|
+            s.* = ChunkSection.init(alloc);
+        return .{
+            .sections = sec,
+            .owners = std.AutoHashMap(u128, void).init(alloc),
+        };
+    }
+
+    pub fn deinit(self: *Chunk) void {
+        for (&self.sections) |*sec| {
+            sec.deinit();
+        }
+        self.owners.deinit();
+    }
+};
 pub const ChunkMapCoord = std.AutoHashMap(i32, Chunk);
 pub const ChunkMap = struct {
     const Self = @This();
@@ -932,7 +952,11 @@ pub const ChunkMap = struct {
     }
 
     pub fn init(alloc: std.mem.Allocator) Self {
-        return .{ .x = XTYPE.init(alloc), .alloc = alloc, .rebuild_notify = std.ArrayList(vector.V2i).init(alloc) };
+        return .{
+            .x = XTYPE.init(alloc),
+            .alloc = alloc,
+            .rebuild_notify = std.ArrayList(vector.V2i).init(alloc),
+        };
     }
 
     pub fn deinit(self: *Self) void {
@@ -940,9 +964,7 @@ pub const ChunkMap = struct {
         while (it.next()) |kv| {
             var zit = kv.value_ptr.iterator();
             while (zit.next()) |kv2| {
-                for (kv2.value_ptr) |*section| {
-                    section.deinit();
-                }
+                kv2.value_ptr.deinit();
             }
             kv.value_ptr.deinit();
         }
@@ -951,24 +973,41 @@ pub const ChunkMap = struct {
         self.x.deinit();
     }
 
-    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32) !void {
+    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32, owner: u128) !void {
         self.rw_lock.lock();
-        try self.addNotify(cx, cz);
         if (self.x.getPtr(cx)) |zw| {
-            if (zw.getPtr(cz)) |*cc| {
-                for (cc.*) |*section| {
-                    section.deinit();
+            if (zw.getPtr(cz)) |cc| {
+                _ = cc.owners.remove(owner);
+                if (cc.owners.count() == 0) {
+                    try self.addNotify(cx, cz);
+                    cc.deinit();
+                    _ = zw.remove(cz);
                 }
-                _ = zw.remove(cz);
             }
         }
         self.rw_lock.unlock();
     }
 
+    /// Tests if the current chunk is loaded and owned
+    /// adds the "owner" to the chunk
+    /// returns true if we own this chunk
+    pub fn tryOwn(self: *Self, cx: i32, cz: i32, owner: u128) !bool {
+        self.rw_lock.lockShared();
+        defer self.rw_lock.unlockShared();
+        if (self.getChunkColumnPtr(cx, cz)) |col| {
+            try col.owners.put(owner, {});
+            if (col.owners.count() == 1) //We are the only owner
+                return true;
+            return false;
+        }
+        return true;
+    }
+
     pub fn isLoaded(self: *Self, pos: V3i) bool {
         self.rw_lock.lockShared();
         defer self.rw_lock.unlockShared();
-        return (self.getChunkSectionPtr(pos) != null);
+        const ch = ChunkMap.getChunkCoord(pos);
+        return self.getChunkColumnPtr(ch.x, ch.z) != null;
     }
 
     pub fn getChunkCoord(pos: V3i) V3i {
@@ -978,12 +1017,17 @@ pub const ChunkMap = struct {
         return .{ .x = cx, .y = cy, .z = cz };
     }
 
+    fn getChunkColumnPtr(self: *Self, cx: i32, cz: i32) ?*Chunk {
+        const world_z = self.x.getPtr(cx) orelse return null;
+        return world_z.getPtr(cz);
+    }
+
     fn getChunkSectionPtr(self: *Self, pos: V3i) ?*ChunkSection {
         const ch = ChunkMap.getChunkCoord(pos);
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
         const column = world_z.getPtr(ch.z) orelse return null;
-        return &column[@as(u32, @intCast(ch.y))];
+        return &column.sections[@as(u32, @intCast(ch.y))];
     }
 
     pub fn isOccluded(self: *Self, pos: V3i) bool {
@@ -1014,7 +1058,7 @@ pub const ChunkMap = struct {
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
         const column = world_z.getPtr(ch.z) orelse return null;
-        const section = column[@as(u32, @intCast(if (ch.y >= NUM_CHUNK_SECTION) return null else ch.y))];
+        const section = column.sections[@as(u32, @intCast(if (ch.y >= NUM_CHUNK_SECTION) return null else ch.y))];
         switch (section.bits_per_entry) {
             0 => {
                 return section.mapping.items[0];
@@ -1044,7 +1088,7 @@ pub const ChunkMap = struct {
         try self.addNotify(chunk_pos.x, chunk_pos.z);
         const world_z = self.x.getPtr(chunk_pos.x) orelse unreachable;
         const column = world_z.getPtr(chunk_pos.z) orelse unreachable;
-        const section = &column[@as(u32, @intCast(chunk_pos.y + 4))];
+        const section = &column.sections[@as(u32, @intCast(chunk_pos.y + 4))];
 
         try section.setBlock(
             @as(u32, @intCast(rel_pos.x)),
@@ -1083,9 +1127,7 @@ pub const ChunkMap = struct {
 
         const chunk_entry = try zmap.value_ptr.getOrPut(cz);
         if (chunk_entry.found_existing) {
-            for (chunk_entry.value_ptr) |*cs| {
-                cs.deinit();
-            }
+            chunk_entry.value_ptr.deinit();
         }
         chunk_entry.value_ptr.* = chunk;
     }

@@ -398,6 +398,7 @@ pub const Bot = struct {
     compression_threshold: i32 = -1,
     connection_state: enum { play, login, none } = .none,
     script_filename: ?[]const u8 = null,
+    uuid: u128 = 0,
     name: []const u8,
     health: f32 = 20,
     food: u8 = 20,

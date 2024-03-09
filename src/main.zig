@@ -141,6 +141,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                     //log.info("\t{s}: {s}\n", .{ prop_name, value });
                 }
 
+                bot1.uuid = uuid;
                 bot1.connection_state = .play;
             },
             else => {},
@@ -400,8 +401,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .Chunk_Data_and_Update_Light => {
             const cx = parse.int(i32);
             const cy = parse.int(i32);
-            if (world.chunk_data.isLoaded(V3i.new(cx * 16, 0, cy * 16))) {
-                //TODO may cause desyncs
+            if (!try world.chunk_data.tryOwn(cx, cy, bot1.uuid)) {
+                //TODO keep track of owners better
                 return;
             }
 
@@ -413,16 +414,15 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             try chunk_data.resize(@as(usize, @intCast(data_size)));
             try parse.reader.readNoEof(chunk_data.items);
 
-            var chunk: mc.Chunk = undefined;
+            var chunk = mc.Chunk.init(alloc);
+            try chunk.owners.put(bot1.uuid, {});
             var chunk_i: u32 = 0;
             var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = chunk_data.items, .pos = 0 };
             const cr = chunk_fbs.reader();
-            //TODO determine number of chunk sections some other way
             while (chunk_i < mc.NUM_CHUNK_SECTION) : (chunk_i += 1) {
                 const block_count = try cr.readInt(i16, .Big);
                 _ = block_count;
-                chunk[chunk_i] = mc.ChunkSection.init(alloc);
-                const chunk_section = &chunk[chunk_i];
+                const chunk_section = &chunk.sections[chunk_i];
 
                 { //BLOCK STATES palated container
                     const bp_entry = try cr.readInt(u8, .Big);
@@ -513,7 +513,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
         .Unload_Chunk => {
             const data = parse.auto(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
-            try world.chunk_data.removeChunkColumn(data.cx, data.cz);
+            try world.chunk_data.removeChunkColumn(data.cx, data.cz, bot1.uuid);
         },
         //BOT specific packets
         .Keep_Alive => {
@@ -976,6 +976,11 @@ pub const LuaApi = struct {
         std.time.sleep(std.time.ns_per_s / 10);
     }
 
+    pub const LuaInvInteractionArg = union(enum) {
+        deposit: struct { name: []const u8 },
+        withdraw: struct { name: []const u8 },
+    };
+
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
         pub export fn testff(L: Lua.Ls) c_int {
@@ -1024,6 +1029,8 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        //TODO make this yield every 500ms.
+        //So long sleeping bots can be terminated cleanly
         pub export fn sleepms(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -1384,6 +1391,9 @@ pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.Bot
     }
 }
 
+//TODO the bots scripts depend on the world being loaded for gotoWaypoint etc.
+//currently we just sleep for some time, a better way would be to wait spawning the threads until some condition.
+//Maybe having n chunks loaded or certain waypoints added
 pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Thread.Mutex) !void {
     //var bot_it_1 = world.bots.iterator();
     //const bot1 = bot_it_1.next();
@@ -1900,7 +1910,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
                 if (world.chunk_data.x.get(item.x)) |xx| {
                     if (xx.get(item.y)) |chunk| {
-                        for (chunk, 0..) |sec, sec_i| {
+                        for (chunk.sections, 0..) |sec, sec_i| {
                             if (!display_caves and sec_i < 7) continue;
                             if (sec.bits_per_entry == 0) continue;
                             //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
@@ -2134,44 +2144,55 @@ pub fn main() !void {
         }
     }
 
-    const bot_names = [_]struct { name: []const u8, sex: enum { male, female }, script_name: ?[]const u8 = null }{
-        .{ .name = "John", .sex = .male, .script_name = "bot.lua" },
-        //.{ .name = "James", .sex = .male },
-        //.{ .name = "Charles", .sex = .male },
-        //.{ .name = "George", .sex = .male },
-        //.{ .name = "Henry", .sex = .male },
-        //.{ .name = "Robert", .sex = .male },
-        //.{ .name = "Harry", .sex = .male },
-        //.{ .name = "Walter", .sex = .male },
-        //.{ .name = "Fred", .sex = .male },
-        //.{ .name = "Albert", .sex = .male },
+    var config_vm = Lua.init();
+    config_vm.loadAndRunFile("bot_config.lua");
+    const bot_names = config_vm.getGlobal(config_vm.state, "bots", []struct {
+        name: []const u8,
+        script_name: []const u8,
+        //sex:
+    });
 
-        //.{ .name = "Mary", .sex = .female },
-        //.{ .name = "Anna", .sex = .female },
-        //.{ .name = "Emma", .sex = .female },
-        //.{ .name = "Minnie", .sex = .female },
-        //.{ .name = "Margaret", .sex = .female },
-        //.{ .name = "Ada", .sex = .female },
-        //.{ .name = "Annie", .sex = .female },
-        //.{ .name = "Laura", .sex = .female },
-        //.{ .name = "Rose", .sex = .female },
-        .{ .name = "Ethel", .sex = .female },
-    };
+    //const bot_names = [_]struct { name: []const u8, sex: enum { male, female }, script_name: ?[]const u8 = null }{
+    //    .{ .name = "John", .sex = .male, .script_name = "bot.lua" },
+    //    .{ .name = "James", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Charles", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "George", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Henry", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Robert", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Harry", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Walter", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Fred", .sex = .male, .script_name = "ethel.lua" },
+    //    .{ .name = "Albert", .sex = .male, .script_name = "ethel.lua" },
+
+    //    .{ .name = "Mary", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Anna", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Emma", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Minnie", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Margaret", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Ada", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Annie", .sex = .female, .script_name = "ethel.lua" },
+    //    .{ .name = "Laura", .sex = .female, .script_name = "ethel.lua" },
+    //    //.{ .name = "Rose", .sex = .female ,.script_name = "ethel.lua"},
+    //    .{ .name = "Ethel", .sex = .female, .script_name = "ethel.lua" },
+    //};
     const epoll_fd = try std.os.epoll_create1(0);
     defer std.os.close(epoll_fd);
 
     var world = McWorld.init(alloc, &dr);
     defer world.deinit();
 
-    var event_structs: [bot_names.len]std.os.linux.epoll_event = undefined;
+    var event_structs = std.ArrayList(std.os.linux.epoll_event).init(alloc);
+    defer event_structs.deinit();
+    try event_structs.resize(bot_names.len);
+    //var event_structs: [bot_names.len]std.os.linux.epoll_event = undefined;
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
         const mb = try botJoin(alloc, bn.name, bn.script_name);
-        event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
-        try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
+        event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
+        try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
         try world.bots.put(mb.fd, mb);
         if (bot_fd == 0)
             bot_fd = mb.fd;
