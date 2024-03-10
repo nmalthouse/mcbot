@@ -59,7 +59,10 @@ end
 
 function loop()
     sleepms(1000)
+    gotoLandmark("wheat_drop")
+    sleepms(100)
     gotoLandmark("food")
+    interactChest("food_chest", {"deposit all category food"})
     interactChest("food_chest", {"withdraw 1 category food"})
     --wheatLoop()
 

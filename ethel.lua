@@ -9,7 +9,8 @@ local is_init = false
 function init()
     is_init = true
 
-    gotoLandmark("food_chest")
+    gotoLandmark("food")
+    interactChest("food_chest", {"deposit all category food", "withdraw 1 category food"})
 end
 
 function loop()
@@ -19,5 +20,9 @@ function loop()
     gotoLandmark(A)
     sleepms(1000)
     gotoLandmark(B)
+
+    while getHunger() < 20 do
+        if not eatFood() then break end
+    end
 
 end

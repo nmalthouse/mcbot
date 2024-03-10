@@ -4,6 +4,7 @@ const vector = @import("vector.zig");
 const V3f = vector.V3f;
 const Bot = @import("bot.zig").Bot;
 const Reg = @import("data_reg.zig");
+const IdList = @import("list.zig");
 
 pub fn RingBuf(comptime n: usize, comptime T: type) type {
     return struct {
@@ -24,6 +25,7 @@ pub fn RingBuf(comptime n: usize, comptime T: type) type {
 }
 
 pub const Entity = struct {
+    kind: IdList.entity_type_enum,
     uuid: u128,
     pos: V3f,
     yaw: f32,

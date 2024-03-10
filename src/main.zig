@@ -254,6 +254,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }));
             //log.info("Spawn player: {any}", .{data});
             try world.putEntity(data.ent_id, .{
+                .kind = .@"minecraft:player",
                 .uuid = data.ent_uuid,
                 .pos = data.pos,
                 .pitch = data.pitch,
@@ -279,6 +280,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //std.debug.print("ent t: {s}\n", .{@tagName(ent_t)});
 
             try world.entities.put(data.ent_id, .{
+                .kind = @enumFromInt(data.ent_type),
                 .uuid = data.ent_uuid,
                 .pos = data.pos,
                 .pitch = data.pitch,
@@ -332,6 +334,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             _ = data;
             //if (data.id == bot1.e_id) {}
         },
+        //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
         .Update_Entity_Position => {
             const data = parse.auto(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
             world.entities_mutex.lock();
@@ -944,7 +947,7 @@ pub const LuaApi = struct {
 
     fn errc(to_check: anytype) ?stripErrorUnion(@TypeOf(to_check)) {
         return to_check catch |err| {
-            std.debug.print("{any}\n", .{err});
+            lss.?.vm.putError(@errorName(err));
             return null;
         };
     }
@@ -1025,15 +1028,23 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        //TODO make this yield every 500ms.
-        //So long sleeping bots can be terminated cleanly
         pub export fn sleepms(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
             const n_ms = self.vm.getArg(L, u64, 1);
+            const max_time_ms = 500;
+            if (n_ms > max_time_ms) {
+                var remaining = n_ms;
+                while (remaining > max_time_ms) : (remaining -= max_time_ms) {
+                    self.beginHalt();
+                    defer self.endHalt();
+                    std.time.sleep(max_time_ms * std.time.ns_per_ms);
+                }
+            }
+            const stime = n_ms % max_time_ms;
             self.beginHalt();
             defer self.endHalt();
-            std.time.sleep(n_ms * std.time.ns_per_ms);
+            std.time.sleep(stime);
             return 0;
         }
 
@@ -1213,7 +1224,6 @@ pub const LuaApi = struct {
             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
             errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
             const sToE = std.meta.stringToEnum;
-            //todo iterate backwards
             var m_i = to_move.len;
             while (m_i > 0) {
                 m_i -= 1;
@@ -1541,13 +1551,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .inventory => |inv| {
-                                const magic_num = 35;
-                                const inv_len = bo.interacted_inventory.slots.items.len;
-                                const player_inv_start = inv_len - magic_num;
-                                const search_i = if (inv.direction == .deposit) player_inv_start else 0;
-                                const search_i_end = if (inv.direction == .deposit) inv_len else player_inv_start;
-                                var num_transfered: u8 = 0;
                                 if (bo.interacted_inventory.win_id) |wid| {
+                                    var num_transfered: u8 = 0;
+                                    const magic_num = 35;
+                                    const inv_len = bo.interacted_inventory.slots.items.len;
+                                    const player_inv_start = inv_len - magic_num;
+                                    const search_i = if (inv.direction == .deposit) player_inv_start else 0;
+                                    const search_i_end = if (inv.direction == .deposit) inv_len else player_inv_start;
                                     for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
                                         const s = slot orelse continue;
                                         var should_move = false;
@@ -1728,12 +1738,13 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var font = try graph.Font.init(alloc, std.fs.cwd(), "dos.ttf", 16, 163, .{});
     defer font.deinit();
 
-    var testmap = graph.Bind(&.{
+    const KeyMap = graph.Bind(&.{
         .{ "print_coord", "c" },
         .{ "toggle_draw_nodes", "t" },
         .{ "toggle_inventory", "e" },
         .{ "toggle_caves", "f" },
-    }).init();
+    });
+    var testmap = KeyMap.init();
 
     var draw_nodes: bool = false;
 
@@ -1777,7 +1788,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         try gctx.begin(0x2f2f2fff, win.screen_dimensions.toF());
         try cubes.indicies.resize(0);
         try cubes.vertices.resize(0);
-        win.pumpEvents(); //Important that this is called after beginDraw for input lag reasons
+        win.pumpEvents();
+        camera.update(&win);
+        const cmatrix = camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000);
 
         for (win.keys.slice()) |key| {
             switch (testmap.get(key.scancode)) {
@@ -1786,6 +1799,29 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 .toggle_inventory => draw_inventory = !draw_inventory,
                 .toggle_caves => display_caves = !display_caves,
                 else => {},
+            }
+        }
+        {
+            world.entities_mutex.lock();
+            defer world.entities_mutex.unlock();
+            var e_it = world.entities.valueIterator();
+            while (e_it.next()) |e| {
+                try cubes.cubeVec(e.pos, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, mc_atlas.getTextureRec(88));
+                const tpos = cmatrix.mulByVec4(graph.za.Vec4.new(
+                    @floatCast(e.pos.x),
+                    @floatCast(e.pos.y),
+                    @floatCast(e.pos.z),
+                    1,
+                ));
+                const w = tpos.w();
+                const z = tpos.z();
+                const pp = graph.Vec2f.new(tpos.x() / w, tpos.y() / -w);
+                const dist_in_blocks = 10;
+                if (z < dist_in_blocks and z > 0 and @fabs(pp.x) < 1 and @fabs(pp.y) < 1) {
+                    const sw = win.screen_dimensions.toF().smul(0.5);
+                    const spos = pp.mul(sw).add(sw);
+                    gctx.text(spos, @tagName(e.kind), &font, 12, 0xffffffff);
+                }
             }
         }
 
@@ -1976,7 +2012,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             while (it.next()) |kv| {
                 var zit = kv.value_ptr.iterator();
                 while (zit.next()) |kv2| {
-                    kv2.value_ptr.cubes.draw(win.screen_dimensions, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
+                    kv2.value_ptr.cubes.draw(win.screen_dimensions, cmatrix);
                 }
             }
         }
@@ -2038,9 +2074,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         }
 
         cubes.setData();
-        cubes.draw(win.screen_dimensions, camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000));
-
-        camera.update(&win);
+        cubes.draw(win.screen_dimensions, cmatrix);
 
         graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
         if (draw_inventory) {
@@ -2087,8 +2121,20 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 0xff,
             );
         }
-        gctx.rect(graph.Rec(@divTrunc(win.screen_dimensions.x, 2), @divTrunc(win.screen_dimensions.x, 2), 10, 10), 0xffffffff);
+        gctx.rect(graph.Rec(@divTrunc(win.screen_dimensions.x, 2), @divTrunc(win.screen_dimensions.y, 2), 10, 10), 0xffffffff);
 
+        { //binding info draw
+            const num_lines = KeyMap.Map.len;
+            const fs = 12;
+            const px_per_line = font.ptToPixel(12);
+            const h = num_lines * px_per_line;
+            const area = graph.Rec(0, @as(f32, @floatFromInt(win.screen_dimensions.y)) - h, 500, h);
+            var y = area.y;
+            for (KeyMap.Map) |binding| {
+                gctx.textFmt(.{ .x = area.x, .y = y }, "{s}: {s}", .{ binding[0], binding[1] }, &font, fs, 0xffffffff);
+                y += px_per_line;
+            }
+        }
         try gctx.end();
         //try ctx.beginDraw(graph.itc(0x2f2f2fff));
         //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
