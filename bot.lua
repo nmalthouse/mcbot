@@ -25,11 +25,12 @@ function wheatLoop()
     if is_init == true then
         is_init = false
         gotoLandmark("tools")
-        interactChest("tools_chest", { {withdraw={name="diamond_axe"}}, {deposit={name="*"}} })
+        interactChest("tools_chest", {"deposit all any", "withdraw 1 item diamond_axe"})
     end
 
     gotoLandmark("seeds")
-    interactChest("seeds_chest",{{withdraw={name="wheat_seeds"}}, {deposit={name="wheat_seeds"}}})
+    interactChest("seeds_chest",{"deposit all item wheat_seeds", "withdraw 1 item wheat_seeds"})
+
 
     sleepms(1000);
     local t = getFieldFlood("wheat_farm", "wheat")
@@ -48,18 +49,19 @@ function wheatLoop()
 
     sleepms(1000)
     gotoLandmark("other")
-    interactChest("other_dropper", {{deposit= {name="stone"}}, {deposit = {name="birch_log"}} })
+    interactChest("other_dropper", {"deposit all item birch_log", "deposit all item stone"})
     sleepms(100);
 
     gotoLandmark("wheat_drop")
-    local table = {{deposit={name="wheat"}}}
-    interactChest("wheat_drop_chest", table)
+    interactChest("wheat_drop_chest", {"deposit all item wheat"})
 
 end
 
 function loop()
     sleepms(1000)
-    wheatLoop()
+    gotoLandmark("food")
+    interactChest("food_chest", {"withdraw 1 category food"})
+    --wheatLoop()
 
     while getHunger() < 20 do
         if not eatFood() then break end

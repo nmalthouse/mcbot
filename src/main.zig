@@ -929,6 +929,7 @@ pub const LuaApi = struct {
     const log = std.log.scoped(.lua);
     const Self = @This();
     const ActionListT = std.ArrayList(astar.AStarContext.PlayerActionItem);
+    const PlayerActionItem = astar.AStarContext.PlayerActionItem;
     thread_data: *bot.BotScriptThreadData,
     vm: *Lua,
     pathctx: astar.AStarContext,
@@ -975,11 +976,6 @@ pub const LuaApi = struct {
         self.thread_data.unlock(.script_thread);
         std.time.sleep(std.time.ns_per_s / 10);
     }
-
-    pub const LuaInvInteractionArg = union(enum) {
-        deposit: struct { name: []const u8 },
-        withdraw: struct { name: []const u8 },
-    };
 
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
@@ -1206,10 +1202,7 @@ pub const LuaApi = struct {
             self.vm.clearAlloc();
             Lua.c.lua_settop(L, 2);
             const name = self.vm.getArg(L, []const u8, 1);
-            const to_move = self.vm.getArg(L, []const union(enum) {
-                deposit: struct { name: []const u8 },
-                withdraw: struct { name: []const u8 },
-            }, 2);
+            const to_move = self.vm.getArg(L, [][]const u8, 2);
             self.beginHalt();
             defer self.endHalt();
             const coord = self.world.getSignWaypoint(name) orelse return 0;
@@ -1219,21 +1212,38 @@ pub const LuaApi = struct {
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
             errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
-            for (to_move) |ac| {
+            const sToE = std.meta.stringToEnum;
+            //todo iterate backwards
+            var m_i = to_move.len;
+            while (m_i > 0) {
+                m_i -= 1;
+                const mv_str = to_move[m_i];
                 errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
-                switch (ac) {
-                    .deposit => |d| {
-                        if (self.world.reg.getItemFromName(d.name)) |id| {
-                            errc(actions.append(.{ .inventory = .{ .deposit = .{ .id = id.id, .kind = .all } } })) orelse break;
-                        } else if (d.name.len > 0 and d.name[0] == '*') {
-                            errc(actions.append(.{ .inventory = .{ .deposit = .{ .id = 0, .kind = .all, .match_any = true } } })) orelse break;
-                        }
+                var it = std.mem.tokenizeScalar(u8, mv_str, ' ');
+                // "DIRECTION COUNT MATCH_TYPE MATCH_PARAMS
+                const dir = sToE(PlayerActionItem.Inv.ItemMoveDirection, it.next() orelse continue) orelse continue;
+                const count = if (it.next()) |cstr| if (eql(u8, cstr, "all")) 0xff else (std.fmt.parseInt(u8, cstr, 10) catch continue) else continue;
+                const match = sToE(enum { item, any, category }, it.next() orelse continue) orelse continue;
+                errc(actions.append(.{
+                    .inventory = .{
+                        .direction = dir,
+                        .count = count,
+                        .match = blk: {
+                            switch (match) {
+                                .item => {
+                                    const item_name = it.next() orelse continue;
+                                    const item_id = self.world.reg.getItemFromName(item_name) orelse continue; //TODO throw error
+                                    break :blk .{ .by_id = item_id.id };
+                                },
+                                .any => break :blk .{ .match_any = {} },
+                                .category => {
+                                    const cat = sToE(PlayerActionItem.Inv.ItemCategory, it.next() orelse continue) orelse continue;
+                                    break :blk .{ .category = cat };
+                                },
+                            }
+                        },
                     },
-                    .withdraw => |w| {
-                        if (self.world.reg.getItemFromName(w.name)) |id|
-                            errc(actions.append(.{ .inventory = .{ .withdraw = .{ .id = id.id } } })) orelse break;
-                    },
-                }
+                })) orelse break;
             }
             errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
             self.thread_data.setActions(actions, pos);
@@ -1250,7 +1260,7 @@ pub const LuaApi = struct {
             defer self.bo.modify_mutex.unlock();
 
             Lua.pushV(L, self.bo.food);
-            return 0;
+            return 1;
         }
 
         pub export fn eatFood(L: Lua.Ls) c_int {
@@ -1530,38 +1540,42 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
                                 th_d.nextAction(0, bo.pos.?);
                             },
-                            .inventory => |ii| {
+                            .inventory => |inv| {
                                 const magic_num = 35;
-                                switch (ii) {
-                                    .withdraw => |w| {
-                                        if (bo.interacted_inventory.win_id) |wid| {
-                                            const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
-                                            for (bo.interacted_inventory.slots.items[0..player_inv_start], 0..) |slot, i| {
-                                                if (slot) |s| {
-                                                    if (s.item_id == w.id) {
-                                                        try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
-                                                        break;
-                                                        //if (d.kind == .one)
-                                                        //    break;
-                                                    }
+                                const inv_len = bo.interacted_inventory.slots.items.len;
+                                const player_inv_start = inv_len - magic_num;
+                                const search_i = if (inv.direction == .deposit) player_inv_start else 0;
+                                const search_i_end = if (inv.direction == .deposit) inv_len else player_inv_start;
+                                var num_transfered: u8 = 0;
+                                if (bo.interacted_inventory.win_id) |wid| {
+                                    for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
+                                        const s = slot orelse continue;
+                                        var should_move = false;
+                                        switch (inv.match) {
+                                            .by_id => |match_id| {
+                                                if (s.item_id == match_id) {
+                                                    should_move = true;
                                                 }
-                                            }
-                                        }
-                                    },
-                                    .deposit => |d| {
-                                        if (bo.interacted_inventory.win_id) |wid| {
-                                            const player_inv_start = bo.interacted_inventory.slots.items.len - magic_num;
-                                            for (bo.interacted_inventory.slots.items[player_inv_start..], player_inv_start..) |slot, i| {
-                                                if (slot) |s| {
-                                                    if (s.item_id == d.id or d.match_any) {
-                                                        try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
-                                                        if (d.kind == .one)
-                                                            break;
-                                                    }
+                                            },
+                                            .match_any => should_move = true,
+                                            .category => |cat| {
+                                                switch (cat) {
+                                                    .food => {
+                                                        for (world.reg.foods) |food| {
+                                                            if (food.id == s.item_id)
+                                                                should_move = true;
+                                                        }
+                                                    },
                                                 }
-                                            }
+                                            },
                                         }
-                                    },
+                                        if (should_move) {
+                                            try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
+                                            num_transfered += 1;
+                                            if (num_transfered == inv.count)
+                                                break;
+                                        }
+                                    }
                                 }
                                 th_d.nextAction(0, bo.pos.?);
                             },

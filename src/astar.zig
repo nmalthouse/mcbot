@@ -61,6 +61,20 @@ pub const AStarContext = struct {
     };
 
     pub const PlayerActionItem = union(enum) {
+        pub const Inv = struct {
+            pub const ItemMoveDirection = enum { deposit, withdraw };
+            pub const ItemCategory = enum { food };
+            pub const Match = union(enum) {
+                by_id: Reg.ItemId,
+                category: ItemCategory,
+                match_any: void,
+            };
+
+            direction: ItemMoveDirection,
+            match: Match,
+            count: u8 = 1,
+        };
+
         eat: void,
         movement: MoveItem,
         block_break: BreakBlock,
@@ -71,16 +85,18 @@ pub const AStarContext = struct {
         },
         open_chest: struct { pos: V3i },
         close_chest: void,
-        inventory: union(enum) {
-            deposit: struct {
-                kind: enum { all, one } = .one,
-                id: Reg.ItemId,
-                match_any: bool = false,
-            },
-            withdraw: struct {
-                id: Reg.ItemId,
-            },
-        },
+
+        inventory: Inv,
+        //inventory: union(enum) {
+        //    deposit: struct {
+        //        kind: enum { all, one } = .one,
+        //        id: Reg.ItemId,
+        //        match_any: bool = false,
+        //    },
+        //    withdraw: struct {
+        //        id: Reg.ItemId,
+        //    },
+        //},
     };
 
     pub const BreakBlock = struct {
