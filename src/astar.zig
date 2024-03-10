@@ -410,7 +410,7 @@ pub const AStarContext = struct {
     }
 
     pub fn addAdjNodes(self: *Self, node: *Node, goal: V3f, override_h: ?u32) !void {
-        const block_above = self.world.chunk_data.getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse return error.fucked;
+        const block_above = self.world.chunk_data.getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse 0;
         const direct_adj = [_]u32{ 1, 3, 5, 7 };
         const diag_adj = [_]u32{ 0, 2, 4, 6 };
         var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;

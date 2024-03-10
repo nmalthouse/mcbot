@@ -47,6 +47,9 @@ pub const McWorld = struct {
     entities: std.AutoHashMap(i32, Entity),
     entities_mutex: std.Thread.Mutex = .{},
 
+    mine_index: u8 = 1,
+    mine_mutex: std.Thread.Mutex = .{},
+
     bots: std.AutoHashMap(i32, Bot),
     tag_table: mc.TagRegistry,
     reg: *const Reg.DataReg,

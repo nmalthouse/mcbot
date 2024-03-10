@@ -982,6 +982,8 @@ pub const LuaApi = struct {
 
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
+        pub const LUA_PATH: []const u8 = "?;?.lua;scripts/?.lua;scripts/?";
+
         pub export fn testff(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
@@ -1025,6 +1027,7 @@ pub const LuaApi = struct {
                     return 1;
                 }
             }
+            std.debug.print("BLCK NOT FOUNd\n", .{});
             return 0;
         }
 
@@ -1068,6 +1071,38 @@ pub const LuaApi = struct {
                 self.thread_data.setActions(actions.*, pos);
 
             return 0;
+        }
+
+        pub export fn assignMine(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.world.mine_mutex.lock();
+            defer self.world.mine_mutex.unlock();
+
+            var buf: [20]u8 = undefined;
+            var fbs = std.io.FixedBufferStream([]u8){ .buffer = &buf, .pos = 0 };
+            fbs.writer().print("mine{d}", .{self.world.mine_index}) catch return 0;
+            self.world.mine_index += 1;
+            Lua.pushV(L, fbs.getWritten());
+            return 1;
+        }
+
+        pub export fn getLandmark(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const str = self.vm.getArg(L, []const u8, 1);
+            self.beginHalt();
+            defer self.endHalt();
+
+            const coord = self.world.getSignWaypoint(str) orelse {
+                log.warn("Can't find waypoint: {s}", .{str});
+                return 0;
+            };
+
+            Lua.pushV(L, coord);
+            return 1;
         }
 
         //Arg x y z, item_name
@@ -1208,6 +1243,7 @@ pub const LuaApi = struct {
         }
 
         //Arg chest_waypoint_name
+        //TODO support globbing *_axe matches diamond_axe, stone_axe
         pub export fn interactChest(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
