@@ -2245,32 +2245,14 @@ pub fn main() !void {
     const bot_names = config_vm.getGlobal(config_vm.state, "bots", []struct {
         name: []const u8,
         script_name: []const u8,
-        //sex:
     });
+    //config_vm.state.printStack();
 
-    //const bot_names = [_]struct { name: []const u8, sex: enum { male, female }, script_name: ?[]const u8 = null }{
-    //    .{ .name = "John", .sex = .male, .script_name = "bot.lua" },
-    //    .{ .name = "James", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Charles", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "George", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Henry", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Robert", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Harry", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Walter", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Fred", .sex = .male, .script_name = "ethel.lua" },
-    //    .{ .name = "Albert", .sex = .male, .script_name = "ethel.lua" },
-
-    //    .{ .name = "Mary", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Anna", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Emma", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Minnie", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Margaret", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Ada", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Annie", .sex = .female, .script_name = "ethel.lua" },
-    //    .{ .name = "Laura", .sex = .female, .script_name = "ethel.lua" },
-    //    //.{ .name = "Rose", .sex = .female ,.script_name = "ethel.lua"},
-    //    .{ .name = "Ethel", .sex = .female, .script_name = "ethel.lua" },
-    //};
+    //const port = config_vm.getGlobal(config_vm.state, "port", u16);
+    //    const ip = config_vm.getGlobal(config_vm.state, "ip", []const u8);
+    //    //std.debug.print("LUA {s}:{d}\n", .{ ip, port });
+    //    std.debug.print("LUA {s}\n", .{ip});
+    //
     const epoll_fd = try std.os.epoll_create1(0);
     defer std.os.close(epoll_fd);
 
