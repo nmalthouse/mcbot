@@ -707,222 +707,23 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .Player_Chat_Message => {
             const uuid = parse.int(u128);
+            _ = uuid;
             const index = parse.varInt();
             const sig_present_bool = parse.boolean();
             _ = index;
             if (sig_present_bool) {
                 std.debug.print("CHAT SIG NOT SUPPORTED \n", .{});
-                unreachable;
+                return error.notImplemented;
             }
 
             const msg = try parse.string(null);
+            _ = msg;
 
             const timestamp = parse.int(u64);
             if (std.mem.indexOfScalar(u64, &world.packet_cache.chat_time_stamps.buf, timestamp) != null) {
                 return;
             }
             world.packet_cache.chat_time_stamps.insert(timestamp);
-
-            var it = std.mem.tokenizeScalar(u8, msg, ' ');
-            const key = it.next().?;
-
-            var ret_msg_buf = std.ArrayList(u8).init(alloc);
-            defer ret_msg_buf.deinit();
-            const m_wr = ret_msg_buf.writer();
-
-            var lower_name: [16]u8 = undefined;
-            const ln = std.ascii.lowerString(&lower_name, key);
-            var bot_it = world.bots.iterator();
-            var bot_i = bot_it.next();
-            const bot_h = blk: {
-                while (bot_i != null) : (bot_i = bot_it.next()) {
-                    var lower_bname: [16]u8 = undefined;
-                    const lnb = std.ascii.lowerString(&lower_bname, bot_i.?.value_ptr.name);
-                    if (eql(u8, ln, lnb)) {
-                        break :blk bot_i.?.value_ptr;
-                    }
-                }
-                break :blk null;
-            };
-            if (bot_h) |cbot| {
-                var bp = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = (std.net.Stream{ .handle = cbot.fd }).writer(), .mutex = &cbot.fd_mutex };
-                defer bp.packet.deinit();
-                var ent_it = world.entities.iterator();
-                var ent = ent_it.next();
-                const player_info: ?Entity = blk: {
-                    while (ent != null) : (ent = ent_it.next()) {
-                        if (ent.?.value_ptr.uuid == uuid) {
-                            break :blk ent.?.value_ptr.*;
-                        }
-                    }
-                    break :blk null;
-                };
-                const com = it.next() orelse return;
-                if (eql(u8, com, "look")) {
-                    if (parseCoordOpt(&it)) |coord| {
-                        _ = coord;
-                        std.debug.print("Has coord\n", .{});
-                    }
-                    const pw = mc.lookAtBlock(cbot.pos.?, player_info.?.pos.add(V3f.new(-0.3, 1, -0.3)));
-                    try bp.setPlayerPositionRot(cbot.pos.?, pw.yaw, pw.pitch, true);
-                } else if (eql(u8, com, "inspect")) {
-                    if (parseCoordOpt(&it)) |coord| {
-                        if (world.chunk_data.getBlock(coord.toI())) |id| {
-                            const block = world.reg.getBlockFromState(id);
-                            //_ = block.getState(id, .age);
-                            try m_wr.print("Block: {s} {d}", .{ block.name, id });
-                            try bp.sendChat(ret_msg_buf.items);
-                        }
-                    }
-                } else if (eql(u8, com, "say")) {
-                    var ite = it.next();
-                    while (ite != null) : (ite = it.next()) {
-                        try m_wr.print("{s} ", .{ite.?});
-                    }
-
-                    try bp.sendChat(ret_msg_buf.items);
-                } else if (eql(u8, com, "path")) {
-                    try bp.sendChat("pathing");
-                    //_ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, reg, cbot.pos.?, player_info.?.pos, cbot.fd });
-                }
-            }
-
-            if (eql(u8, key, "path")) {
-                //var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
-                //defer pathctx.deinit();
-                //const maj_goal = blk: {
-                //    if (parseCoordOpt(&it)) |coord| {
-                //        break :blk coord.add(V3f.new(0, 1, 0));
-                //    }
-                //    break :blk player_info.?.pos;
-                //};
-
-                //const found = try pathctx.pathfind(bot1.pos.?, maj_goal.?);
-                //_ = found;
-                //if (found) |*actions| {
-                //    player_actions.deinit();
-                //    player_actions = actions.*;
-                //    for (player_actions.items) |pitem| {
-                //        std.debug.print("action: {any}\n", .{pitem});
-                //    }
-                //    if (!draw) {
-                //        current_action = player_actions.popOrNull();
-                //        if (current_action) |acc| {
-                //            switch (acc) {
-                //                .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
-                //                .block_break => block_break_timer = null,
-                //            }
-                //        }
-                //    }
-                //}
-            } else if (eql(u8, key, "toggle")) {} else if (eql(u8, key, "inventory")) {
-                try m_wr.print("Items: ", .{});
-                for (bot1.inventory.slots.items) |optslot| {
-                    if (optslot) |slot| {
-                        const itemd = world.reg.getItem(slot.item_id);
-                        try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
-                    }
-                }
-                try pctx.sendChat(ret_msg_buf.items);
-            } else if (eql(u8, key, "report")) {
-                try m_wr.print("Items: ", .{});
-                for (bot1.interacted_inventory.slots.items) |optslot| {
-                    if (optslot) |slot| {
-                        const itemd = world.reg.getItem(slot.item_id);
-                        try m_wr.print("{s}: {d}, ", .{ itemd.name, slot.count });
-                    }
-                }
-                try pctx.sendChat(ret_msg_buf.items);
-            } else if (eql(u8, key, "axe")) {
-                //for (bot1.inventory) |optslot, si| {
-                //if (optslot) |slot| {
-                //    //TODO in mc 19.4 tags have been added for axes etc, for now just do a string search
-                //    const name = reg.getItem(slot.item_id).name;
-                //    const inde = std.mem.indexOf(u8, name, "axe");
-                //    if (inde) |in| {
-                //        std.debug.print("found axe at {d} {any}\n", .{ si, bot1.inventory[si] });
-                //        _ = in;
-                //        //try pctx.pickItem(si - 10);
-                //        try pctx.clickContainer(0, bot1.container_state, @intCast(i16, si), 0, 2, &.{}, null);
-                //        try pctx.setHeldItem(0);
-                //        break;
-                //    }
-                //    //std.debug.print("item: {s}\n", .{item_table.getName(slot.item_id)});
-                //}
-                //}
-            } else if (eql(u8, key, "dump")) {
-                try pctx.sendChat("dumping");
-                const inv = bot1.interacted_inventory;
-                if (inv.win_type == 2) { //A single chest
-                    var first_null_i: u32 = 0;
-                    var num_null: u32 = 0;
-                    var i: u32 = 0;
-                    while (i < 27) : (i += 1) {
-                        if (inv.slots.items[i] == null) {
-                            first_null_i = i;
-                            num_null += 1;
-                            break;
-                        }
-                    }
-
-                    i = 27;
-                    while (i < 63) : (i += 1) {
-                        if (num_null == 0)
-                            break;
-
-                        if (inv.slots.items[i] != null) {
-                            num_null -= 1;
-                            try pctx.clickContainer(inv.win_id.?, bot1.container_state, i, 0, 0, &.{.{ .sloti = i, .slot = null }}, inv.slots.items[i].?);
-                            try pctx.clickContainer(inv.win_id.?, bot1.container_state, first_null_i, 0, 0, &.{.{ .sloti = first_null_i, .slot = inv.slots.items[i].? }}, null);
-                            break;
-                        }
-                    }
-                }
-            } else if (eql(u8, key, "place")) {
-                try pctx.sendChat("Trying to place above");
-                try pctx.useItemOn(.main, bot1.pos.?.add(V3f.new(0, 2, 0)).toI(), .bottom, 0, 0, 0, false, 0);
-            } else if (eql(u8, key, "close_chest")) {
-                try pctx.sendChat("Trying to close chest");
-                try pctx.closeContainer(bot1.interacted_inventory.win_id.?);
-                //bot1.interacted_inventory.win_id = null;
-            } else if (eql(u8, key, "open_chest")) {
-                try pctx.sendChat("Trying to open chest");
-                const v = try parseCoord(&it);
-                try pctx.useItemOn(.main, v.toI(), .bottom, 0, 0, 0, false, 0);
-            } else if (eql(u8, key, "tree")) {
-                //if (try pathctx.findTree(bot1.pos.?)) |*actions| {
-                //    player_actions.deinit();
-                //    player_actions = actions.*;
-                //    for (player_actions.items) |pitem| {
-                //        std.debug.print("action: {any}\n", .{pitem});
-                //    }
-                //    current_action = player_actions.popOrNull();
-                //    if (current_action) |acc| {
-                //        switch (acc) {
-                //            .movement => |m| move_state = bot.MovementState{ .init_pos = bot1.pos.?, .final_pos = m.pos, .time = 0 },
-                //            .block_break => block_break_timer = null,
-                //        }
-                //    }
-                //}
-            } else if (eql(u8, key, "has_tag")) {
-                //const v = try parseCoord(&it);
-                //const tag = it.next() orelse unreachable;
-                //if (pathctx.hasBlockTag(tag, v.toI())) {
-                //    try pctx.sendChat("yes has tag");
-                //} else {
-                //    try pctx.sendChat("no tag");
-                //}
-            } else if (eql(u8, key, "jump")) {} else if (eql(u8, key, "query")) {
-                const qb = (try parseCoord(&it)).toI();
-                const bid = world.chunk_data.getBlock(qb) orelse 0;
-                try m_wr.print("Block {s} id: {d}", .{
-                    world.reg.getBlockFromState(bid).name,
-                    bid,
-                });
-                try pctx.sendChat(ret_msg_buf.items);
-                std.debug.print("{}", .{world.reg.getBlockFromState(bid)});
-                //try pctx.sendChat(m_fbs.getWritten());
-            }
         },
         else => {
             //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, pid)]});
