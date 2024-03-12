@@ -24,6 +24,17 @@ const J = std.json;
 // [F] version.json
 // [P] blocks.json
 
+pub const Recipe = struct {
+    inShape: ?[][]?ItemId = null,
+    ingredients: ?[]ItemId = null,
+    result: struct {
+        count: u8,
+        id: ItemId,
+    },
+};
+
+pub const RecipeJson = std.json.ArrayHashMap([]Recipe);
+
 pub const Food = struct {
     id: ItemId,
     foodPoints: f32,
@@ -309,10 +320,12 @@ pub const DataReg = struct {
     blocks: []Block,
     entities: EntitiesJson,
     materials: Materials,
+    recipes: RecipeJson,
 
     empty_block_ids: std.ArrayList(BlockId),
 
     ent_j: std.json.Parsed(EntitiesJson),
+    rec_j: std.json.Parsed(RecipeJson),
 
     pub fn init(alloc: std.mem.Allocator, comptime version: []const u8) !Self {
         var cwd = std.fs.cwd();
@@ -340,6 +353,8 @@ pub const DataReg = struct {
         const mat = try com.readJson(data_dir, "materials.json", alloc, MaterialsJson);
         defer mat.deinit();
 
+        const rec = try com.readJson(data_dir, "recipes.json", alloc, RecipeJson);
+
         const blocks = try alloc.alloc(Block, block.value.len);
 
         var empty = std.ArrayList(BlockId).init(alloc);
@@ -364,6 +379,7 @@ pub const DataReg = struct {
         //std.sort.heap(Entity, ent.value, {}, Entity.asc);
 
         const ret = Self{
+            .recipes = rec.value,
             .version_id = version_info.value.version,
             .alloc = alloc,
             .entities = ent.value,
@@ -375,6 +391,7 @@ pub const DataReg = struct {
             .empty_block_ids = empty,
 
             .ent_j = ent,
+            .rec_j = rec,
         };
         return ret;
     }
@@ -395,6 +412,7 @@ pub const DataReg = struct {
         self.empty_block_ids.deinit();
         self.ent_j.deinit();
         self.alloc.free(self.foods);
+        self.rec_j.deinit();
     }
 
     pub fn getBlockSlice(self: *const Self) []const Block {

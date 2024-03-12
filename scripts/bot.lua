@@ -1,4 +1,7 @@
-local com = require "common"
+print("hello")
+print(LUA_PATH)
+--local com = require "common"
+local com = dofile("scripts/common.lua")
 
 function old()
     sleepms(500);
@@ -45,5 +48,9 @@ end
 function loop()
     sleepms(1000)
     com.doTheFood()
+    sleepms(1000)
+    gotoLandmark("food")
+    interactChest("food_chest", {"deposit all category food"})
+
     wheatLoop()
 end

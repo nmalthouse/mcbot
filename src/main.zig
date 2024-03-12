@@ -77,15 +77,15 @@ pub fn myLogFn(
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
 }
 
-pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8) !Bot {
+pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16) !Bot {
     const log = std.log.scoped(.parsing);
     var bot1 = try Bot.init(alloc, bot_name, script_name);
     errdefer bot1.deinit();
-    const s = try std.net.tcpConnectToHost(alloc, "localhost", 25565);
+    const s = try std.net.tcpConnectToHost(alloc, ip, port);
     bot1.fd = s.handle;
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.fd_mutex };
     defer pctx.packet.deinit();
-    try pctx.handshake("localhost", 25565);
+    try pctx.handshake(ip, port);
     try pctx.loginStart(bot1.name);
     bot1.connection_state = .login;
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
@@ -493,11 +493,14 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                     const behind = coord.add(dvec);
                                     if (world.chunk_data.getBlock(behind)) |bid| {
                                         const bi = world.reg.getBlockFromState(bid);
-                                        if (std.mem.eql(u8, "chest", bi.name)) {
+                                        if (eql(u8, "chest", bi.name)) {
                                             const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_chest" });
                                             try world.putSignWaypoint(name, behind);
-                                        } else if (std.mem.eql(u8, "dropper", bi.name)) {
+                                        } else if (eql(u8, "dropper", bi.name)) {
                                             const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_dropper" });
+                                            try world.putSignWaypoint(name, behind);
+                                        } else if (eql(u8, "crafting_table", bi.name)) {
+                                            const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_craft" });
                                             try world.putSignWaypoint(name, behind);
                                         }
                                     }
@@ -1242,6 +1245,26 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub export fn craftingTest(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const name = self.vm.getArg(L, []const u8, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            var actions = ActionListT.init(self.world.alloc);
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+            const pos = self.bo.pos.?;
+            const coord = self.world.getSignWaypoint(name) orelse return 0;
+            errc(actions.append(.{ .close_chest = {} })) orelse return 0;
+            errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
+            errc(actions.append(.{ .craft = 0 })) orelse return 0;
+            errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
+            self.thread_data.setActions(actions, pos);
+            return 0;
+        }
+
         //Arg chest_waypoint_name
         //TODO support globbing *_axe matches diamond_axe, stone_axe
         pub export fn interactChest(L: Lua.Ls) c_int {
@@ -1252,7 +1275,11 @@ pub const LuaApi = struct {
             const to_move = self.vm.getArg(L, [][]const u8, 2);
             self.beginHalt();
             defer self.endHalt();
-            const coord = self.world.getSignWaypoint(name) orelse return 0;
+            const coord = self.world.getSignWaypoint(name) orelse {
+                std.debug.print("interactChest can't find waypoint {s}\n", .{name});
+                return 0;
+            };
+            std.debug.print("Interact chest query : {s}\n", .{to_move});
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
@@ -1267,9 +1294,30 @@ pub const LuaApi = struct {
                 errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
                 var it = std.mem.tokenizeScalar(u8, mv_str, ' ');
                 // "DIRECTION COUNT MATCH_TYPE MATCH_PARAMS
-                const dir = sToE(PlayerActionItem.Inv.ItemMoveDirection, it.next() orelse continue) orelse continue;
-                const count = if (it.next()) |cstr| if (eql(u8, cstr, "all")) 0xff else (std.fmt.parseInt(u8, cstr, 10) catch continue) else continue;
-                const match = sToE(enum { item, any, category }, it.next() orelse continue) orelse continue;
+                const dir_str = it.next() orelse {
+                    self.vm.putErrorFmt("expected string", .{});
+                    return 0;
+                };
+                const dir = sToE(PlayerActionItem.Inv.ItemMoveDirection, dir_str) orelse {
+                    self.vm.putErrorFmt("invalid direction: {s}", .{dir_str});
+                    return 0;
+                };
+                const count_str = it.next() orelse {
+                    self.vm.putError("expected count");
+                    return 0;
+                };
+                const count = if (eql(u8, count_str, "all")) 0xff else (std.fmt.parseInt(u8, count_str, 10)) catch {
+                    self.vm.putErrorFmt("invalid count: {s}", .{count_str});
+                    return 0;
+                };
+                const match_str = it.next() orelse {
+                    self.vm.putError("expected match predicate");
+                    return 0;
+                };
+                const match = sToE(enum { item, any, category }, match_str) orelse {
+                    self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
+                    return 0;
+                };
                 errc(actions.append(.{
                     .inventory = .{
                         .direction = dir,
@@ -1277,13 +1325,26 @@ pub const LuaApi = struct {
                         .match = blk: {
                             switch (match) {
                                 .item => {
-                                    const item_name = it.next() orelse continue;
-                                    const item_id = self.world.reg.getItemFromName(item_name) orelse continue; //TODO throw error
+                                    const item_name = it.next() orelse {
+                                        self.vm.putError("expected item name");
+                                        return 0;
+                                    };
+                                    const item_id = self.world.reg.getItemFromName(item_name) orelse {
+                                        self.vm.putErrorFmt("invalid item name: {s}", .{item_name});
+                                        return 0;
+                                    };
                                     break :blk .{ .by_id = item_id.id };
                                 },
                                 .any => break :blk .{ .match_any = {} },
                                 .category => {
-                                    const cat = sToE(PlayerActionItem.Inv.ItemCategory, it.next() orelse continue) orelse continue;
+                                    const cat_str = it.next() orelse {
+                                        self.vm.putError("expected category name");
+                                        return 0;
+                                    };
+                                    const cat = sToE(PlayerActionItem.Inv.ItemCategory, cat_str) orelse {
+                                        self.vm.putErrorFmt("unknown category: {s}", .{cat_str});
+                                        return 0;
+                                    };
                                     break :blk .{ .category = cat };
                                 },
                             }
@@ -1293,7 +1354,6 @@ pub const LuaApi = struct {
             }
             errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
             self.thread_data.setActions(actions, pos);
-            //std.debug.print("interct with chest\n", .{});
             return 0;
         }
 
@@ -1586,10 +1646,35 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
                                 th_d.nextAction(0, bo.pos.?);
                             },
+                            .craft => |cr| {
+                                _ = cr;
+                                if (bo.interacted_inventory.win_id) |wid| {
+                                    const magic_num = 35;
+                                    const inv_len = bo.interacted_inventory.slots.items.len;
+                                    const player_inv_start = inv_len - magic_num;
+                                    const search_i = player_inv_start;
+                                    const search_i_end = inv_len;
+                                    const oak_log = world.reg.getItemFromName("oak_log") orelse unreachable;
+                                    for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
+                                        const s = slot orelse continue;
+                                        if (s.item_id == oak_log.id) {
+                                            try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 0, &.{}, slot);
+
+                                            //Index 5 is middle of crafting table
+                                            try bp.clickContainer(wid, bo.container_state, 5, 0, 0, &.{}, null);
+
+                                            //index 0 is crafting result
+                                            try bp.clickContainer(wid, bo.container_state, 0, 1, 0, &.{}, null);
+                                        }
+                                    }
+                                }
+                                th_d.nextAction(0, bo.pos.?);
+                            },
                             .inventory => |inv| {
                                 if (bo.interacted_inventory.win_id) |wid| {
+                                    std.debug.print("Inventory interact:  {any}\n", .{inv});
                                     var num_transfered: u8 = 0;
-                                    const magic_num = 35;
+                                    const magic_num = 36; //should this be 36?
                                     const inv_len = bo.interacted_inventory.slots.items.len;
                                     const player_inv_start = inv_len - magic_num;
                                     const search_i = if (inv.direction == .deposit) player_inv_start else 0;
@@ -2232,6 +2317,9 @@ pub fn main() !void {
             //try packet_analyze.analyzeWalk(alloc, arg_it.next() orelse return);
             return;
         }
+        if (eql(u8, action_arg, "rec")) {
+            return;
+        }
         if (eql(u8, action_arg, "draw")) {
             draw = true;
         }
@@ -2246,13 +2334,11 @@ pub fn main() !void {
         name: []const u8,
         script_name: []const u8,
     });
-    //config_vm.state.printStack();
+    Lua.printStack(config_vm.state);
 
-    //const port = config_vm.getGlobal(config_vm.state, "port", u16);
-    //    const ip = config_vm.getGlobal(config_vm.state, "ip", []const u8);
-    //    //std.debug.print("LUA {s}:{d}\n", .{ ip, port });
-    //    std.debug.print("LUA {s}\n", .{ip});
-    //
+    const port = config_vm.getGlobal(config_vm.state, "port", u16);
+    const ip = config_vm.getGlobal(config_vm.state, "ip", []const u8);
+
     const epoll_fd = try std.os.epoll_create1(0);
     defer std.os.close(epoll_fd);
 
@@ -2268,7 +2354,7 @@ pub fn main() !void {
 
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
-        const mb = try botJoin(alloc, bn.name, bn.script_name);
+        const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port);
         event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
         try world.bots.put(mb.fd, mb);

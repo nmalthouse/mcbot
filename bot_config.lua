@@ -1,4 +1,6 @@
 bots = {}
+ip = "localhost"
+port = 25565
 
 local bots_list = {
         { name = "John",        script_name = "scripts/bot.lua" },
@@ -23,11 +25,9 @@ local bots_list = {
         { name = "Ethel",       script_name = "ethel.lua" },
 }
 
-local num_to_add = 1
+local num_to_add = 19
 
 for i = 1, num_to_add do
     bots[i] = bots_list[i]
 end
 
-ip = "localhost"
---port = 25565
