@@ -1,4 +1,11 @@
 A Minecraft Bot written in zig
+Linux only because of epoll() usage, can easily be changed
+
+Running:
+git submodule update --init --recursive
+zig build run
+
+The file bot_config.lua sets port, ip, and bots that will be added.
 
 Current features:
 - pathfinding
@@ -7,7 +14,6 @@ Current features:
 - lua scripting
 - offline mode only
 - 1.19.3
-- linux only because of epoll usage, can easily be changed
 
 Cool problems to solve:
 A bot that fells and replants trees in an area
