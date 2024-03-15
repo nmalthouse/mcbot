@@ -1,12 +1,13 @@
 A Minecraft Bot written in zig
 
 Current features:
-pathfinding
-basic inventory interaction
-multiple bots
-lua scripting
-1.19.3
-linux only because of epoll usage, can easily be changed
+- pathfinding
+- basic inventory interaction
+- multiple bots
+- lua scripting
+- offline mode only
+- 1.19.3
+- linux only because of epoll usage, can easily be changed
 
 Cool problems to solve:
 A bot that fells and replants trees in an area
