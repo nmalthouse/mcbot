@@ -1657,7 +1657,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
     var position_synced = false;
 
-    var font = try graph.Font.init(alloc, std.fs.cwd(), "dos.ttf", 16, 163, .{});
+    var font = try graph.Font.init(alloc, std.fs.cwd(), "ratgraph/fonts/roboto.ttf", 16, 163, .{});
     defer font.deinit();
 
     const KeyMap = graph.Bind(&.{
