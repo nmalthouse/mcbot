@@ -734,6 +734,7 @@ pub const LuaApi = struct {
     world: *McWorld,
     bo: *Bot,
     in_yield: bool = false,
+    has_yield_fn: bool = false,
 
     fn stripErrorUnion(comptime T: type) type {
         const info = @typeInfo(T);
@@ -763,9 +764,9 @@ pub const LuaApi = struct {
     }
 
     pub fn beginHalt(self: *Self) void {
-        if (!self.in_yield) {
+        if (!self.in_yield and self.has_yield_fn) {
             self.in_yield = true;
-            //self.vm.callLuaFunction("onYield") catch {};
+            self.vm.callLuaFunction("onYield") catch {};
             self.in_yield = false;
         }
 
@@ -911,6 +912,40 @@ pub const LuaApi = struct {
             fbs.writer().print("mine{d}", .{self.world.mine_index}) catch return 0;
             self.world.mine_index += 1;
             Lua.pushV(L, fbs.getWritten());
+            return 1;
+        }
+
+        pub export fn findNearbyItems(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const max_dist = self.vm.getArg(L, f64, 1);
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            defer self.bo.modify_mutex.unlock();
+
+            var list = std.ArrayList(V3i).init(self.vm.fba.allocator());
+
+            self.world.entities_mutex.lock();
+            defer self.world.entities_mutex.unlock();
+            var e_it = self.world.entities.iterator();
+            while (e_it.next()) |e| {
+                if (e.value_ptr.kind == .@"minecraft:item") {
+                    if (e.value_ptr.pos.subtract(pos).magnitude() < max_dist) {
+                        const bpos = V3i.new(
+                            @intFromFloat(@floor(e.value_ptr.pos.x)),
+                            @intFromFloat(@floor(e.value_ptr.pos.y)),
+                            @intFromFloat(@floor(e.value_ptr.pos.z)),
+                        );
+                        list.append(bpos) catch return 0;
+                    }
+                }
+            }
+
+            Lua.pushV(L, list.items);
             return 1;
         }
 
@@ -1224,7 +1259,6 @@ pub const LuaApi = struct {
             return 1;
         }
 
-        //Args: item_name
         pub export fn itemCount(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
@@ -1305,7 +1339,7 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
-            defer self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
             var count: usize = 0;
             for (self.bo.inventory.slots.items) |sl| {
                 if (sl == null)
@@ -1346,6 +1380,13 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScr
     lss = &script_state;
     luavm.loadAndRunFile("scripts/common.lua");
     luavm.loadAndRunFile(filename);
+    _ = Lua.c.lua_getglobal(luavm.state, "onYield");
+    const t = Lua.c.lua_type(luavm.state, 1);
+    Lua.c.lua_pop(luavm.state, 1);
+    if (t == Lua.c.LUA_TFUNCTION) {
+        script_state.has_yield_fn = true;
+    }
+
     while (true) {
         luavm.callLuaFunction("loop") catch |err| {
             switch (err) {
@@ -1416,6 +1457,32 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                 th_d.u_status = .terminate_thread;
             }
             return;
+        } else if (world.bot_reload_mutex.tryLock()) {
+            defer world.bot_reload_mutex.unlock();
+            if (world.reload_bot_id) |id| {
+                if (world.bots.get(id)) |b| {
+                    for (bot_threads_data.items, 0..) |th_d, i| {
+                        if (th_d.bot.fd == b.fd) {
+                            th_d.lock(.bot_thread);
+                            th_d.u_status = .terminate_thread;
+                            th_d.unlock(.bot_thread);
+                            bot_threads.items[i].join();
+                            th_d.u_status = .actions_empty;
+
+                            std.debug.print("Spawning new\n", .{});
+                            bot_threads.items[i] = try std.Thread.spawn(.{}, luaBotScript, .{
+                                th_d.bot,
+                                alloc,
+                                th_d,
+                                world,
+                                b.script_filename.?,
+                            });
+                            world.reload_bot_id = null;
+                            break;
+                        }
+                    }
+                }
+            }
         }
 
         for (bot_threads_data.items) |th_d| {
@@ -2260,6 +2327,18 @@ pub fn main() !void {
                 if (eql(u8, "exit", key)) {
                     update_bots_exit_mutex.unlock();
                     run = false;
+                } else if (eql(u8, "reload", key)) {
+                    const bname = itt.next() orelse continue;
+                    var b_it = world.bots.valueIterator();
+                    while (b_it.next()) |b| {
+                        if (eql(u8, b.name, bname)) {
+                            std.debug.print("Reloading bot: {s}\n", .{b.name});
+                            world.bot_reload_mutex.lock();
+                            defer world.bot_reload_mutex.unlock();
+                            world.reload_bot_id = b.fd;
+                            break;
+                        }
+                    }
                 } else if (eql(u8, "draw", key)) {
                     const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
                     draw_thread.detach();

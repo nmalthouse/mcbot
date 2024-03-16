@@ -43,12 +43,14 @@ pub const McWorld = struct {
     sign_waypoints: std.StringHashMap(vector.V3i),
     alloc: std.mem.Allocator,
 
-    //TODO make entities and bots thread safe
     entities: std.AutoHashMap(i32, Entity),
     entities_mutex: std.Thread.Mutex = .{},
 
     mine_index: u8 = 1,
     mine_mutex: std.Thread.Mutex = .{},
+
+    bot_reload_mutex: std.Thread.Mutex = .{},
+    reload_bot_id: ?i32 = null,
 
     bots: std.AutoHashMap(i32, Bot),
     tag_table: mc.TagRegistry,

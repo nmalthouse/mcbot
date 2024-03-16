@@ -4,7 +4,7 @@ port = 25565
 
 local bots_list = {
         { name = "John",        script_name = "scripts/lumber.lua" },
-        { name = "James",       script_name = "scripts/ethel.lua" },
+        { name = "James",       script_name = "scripts/bot.lua" },
         { name = "Charles",     script_name = "scripts/ethel.lua" },
         { name = "George",      script_name = "scripts/ethel.lua" },
         { name = "Henry",       script_name = "scripts/ethel.lua" },
@@ -25,7 +25,7 @@ local bots_list = {
         { name = "Ethel",       script_name = "scripts/ethel.lua" },
 }
 
-local num_to_add = 1
+local num_to_add = 2
 
 for i = 1, num_to_add do
     bots[i] = bots_list[i]
