@@ -1,15 +1,9 @@
 const std = @import("std");
-const ziglib = @import("ratgraph/build.zig");
+const ratgraph = @import("ratgraph/build.zig");
 
 pub fn build(b: *std.build.Builder) void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
 
-    // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardOptimizeOption(.{});
 
     const exe = b.addExecutable(.{
@@ -20,9 +14,8 @@ pub fn build(b: *std.build.Builder) void {
         .link_libc = true,
     });
     b.installArtifact(exe);
-    exe.linkSystemLibrary("event");
 
-    const module = ziglib.module(b, exe);
+    const module = ratgraph.module(b, exe);
     exe.addModule("graph", module);
 
     const run_cmd = b.addRunArtifact(exe);

@@ -25,7 +25,7 @@ local bots_list = {
         { name = "Ethel",       script_name = "scripts/ethel.lua" },
 }
 
-local num_to_add = 19
+local num_to_add = 1
 
 for i = 1, num_to_add do
     bots[i] = bots_list[i]

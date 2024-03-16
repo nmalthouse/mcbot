@@ -1,7 +1,7 @@
 const std = @import("std");
 const math = std.math;
-
-const c = @import("c.zig").c;
+//TODO delete all of this and use zalgebra's generic vector
+//Same goes for ratgraph
 
 pub fn Ivec(comptime itype: type) type {
     return struct {
@@ -42,25 +42,6 @@ pub fn deltaPosToV3f(x0: V3f, del: shortV3i) V3f {
         .z = (((d.z / 128) + (32 * x0.z)) / 32),
     };
 }
-
-//pub const V3i = struct {
-//    const Self = @This();
-//    x: i32,
-//    y: i32,
-//    z: i32,
-//
-//    pub fn new(x: i32, y: i32, z: i32) Self {
-//        return Self{
-//            .x = x,
-//            .y = y,
-//            .z = z,
-//        };
-//    }
-//
-//    pub fn add(a: Self, b: Self) Self {
-//        return Self.new(a.x + b.x, a.y + b.y, a.z + b.z);
-//    }
-//};
 
 pub const V2i = struct {
     x: i32,

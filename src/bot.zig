@@ -6,17 +6,6 @@ const astar = @import("astar.zig");
 const RegD = @import("data_reg.zig");
 const Reg = RegD.DataReg;
 
-//How to move?
-//Kinds of movment
-//Walking
-//  What is the height of the block we are standing on, slabs, carpets,
-//  Dealing with instant changes in y with slabs and stairs
-//Jumping
-//Falling
-//Swimming
-//Ladder climbing
-//Rabbit mode
-
 pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
     const disc = std.math.pow(f64, b, 2) - (4 * a * C);
     if (disc < 0) return null;
@@ -415,7 +404,6 @@ pub const Bot = struct {
 
     held_item: ?mc.Slot = null,
     inventory: Inventory,
-    //inventory: [46]?mc.Slot = [_]?mc.Slot{null} ** 46,
     selected_slot: u8 = 0,
 
     interacted_inventory: Inventory,

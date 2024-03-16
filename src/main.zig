@@ -24,8 +24,6 @@ const V2i = vector.V2i;
 
 const common = @import("common.zig");
 
-const c = @import("c.zig").c;
-
 const fbsT = std.io.FixedBufferStream([]const u8);
 const AutoParse = mc.AutoParse;
 
@@ -166,14 +164,6 @@ pub fn parseCoord(it: *std.mem.TokenIterator(u8, .scalar)) !vector.V3f {
         .z = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
     };
 }
-
-const Queue = std.atomic.Queue;
-pub const QItem = struct {
-    fd: i32,
-    buf: []u8,
-};
-
-pub const QType = Queue(QItem);
 
 pub const PacketParse = struct {
     state: enum { len, data } = .len,
