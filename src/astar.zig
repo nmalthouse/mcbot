@@ -14,6 +14,7 @@ pub const V2i = struct {
     y: i32,
 };
 
+// Even indicies are diagonal
 const ADJ = [8]V2i{
     .{ .x = -1, .y = 1 },
     .{ .x = 0, .y = 1 },
@@ -211,9 +212,15 @@ pub const AStarContext = struct {
 
     pub fn findTree(self: *Self, start: V3f, axe_index: u32, wood_break_time: f64) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
-        try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
+        try self.addOpen(.{
+            .x = @as(i32, @intFromFloat(@floor(start.x))),
+            .y = @as(i32, @intFromFloat(@floor(start.y))),
+            .z = @as(i32, @intFromFloat(@floor(start.z))),
+        });
 
-        while (true) {
+        const ITERATION_LIMIT = 3000;
+        var iter_count: usize = 0;
+        while (iter_count < ITERATION_LIMIT) : (iter_count += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             const pv = V3i.new(current_n.x, current_n.y, current_n.z);
             const direct_adj = [_]u32{ 1, 3, 5, 7 };
@@ -227,9 +234,9 @@ pub const AStarContext = struct {
                         is_tree = true;
                     }
                 }
+                //We seem to be missing a node at the beginning
                 if (is_tree) {
                     var parent: ?*AStarContext.Node = current_n;
-                    //try move_vecs.resize(0);
                     var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
                     //First add the tree backwards
                     n_logs -= 1;
@@ -247,7 +254,8 @@ pub const AStarContext = struct {
                     }
                     try actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(axe_index)) } });
 
-                    while (parent.?.parent != null) : (parent = parent.?.parent) {
+                    while (parent != null) : (parent = parent.?.parent) {
+                        //while (parent.?.parent != null) : (parent = parent.?.parent) {
                         switch (parent.?.ntype) {
                             .gap, .jump, .fall => try actions.append(.{ .wait_ms = 300 }),
                             else => {},
@@ -374,10 +382,14 @@ pub const AStarContext = struct {
             }
 
             if (old_open) |op| {
+                //TODO is it correct to fully replace the node?
                 if (new_node.G < op.G) {
-                    op.parent = parent;
-                    op.G = new_node.G;
+                    op.* = new_node;
                 }
+                //if (new_node.G < op.G) {
+                //    op.parent = parent;
+                //    op.G = new_node.G;
+                //}
             } else {
                 try self.addOpen(new_node);
             }
@@ -547,3 +559,68 @@ pub const AStarContext = struct {
         return false;
     }
 };
+
+test "basic" {
+    const Nt = AStarContext.Node.Ntype;
+    const Column = [4]bool;
+
+    const columns = [8]Column{
+        Column{ true, false, false, false },
+        Column{ true, false, false, false },
+        Column{ false, false, false, false },
+        Column{ false, false, false, false },
+
+        Column{ false, false, false, false },
+        Column{ false, false, false, false },
+        Column{ false, false, false, false },
+        Column{ false, true, false, false },
+    };
+
+    const exp = [8]Nt{
+        .blocked,
+        .walk,
+        .blocked,
+        .blocked,
+
+        .blocked,
+        .blocked,
+        .blocked,
+        .jump,
+    };
+    //const MAX_FALL_DISTANCE = 3;
+    var actual = [_]Nt{.blocked} ** 8;
+    const block_above_head = false;
+
+    for (ADJ, 0..) |a, ai| {
+        const col = columns[ai];
+        _ = a;
+        const can_walk = col[0] and (!(col[1] or col[2]));
+        if (ai % 2 == 0) { //Diagonal
+            const lcol = columns[(ai + 7) % 8];
+            const rcol = columns[(ai + 1) % 8];
+            const can_walk_d = can_walk and !(lcol[1] or lcol[2]) and !(rcol[1] or rcol[2]);
+            actual[ai] = if (can_walk_d) .walk else .blocked;
+
+            //Diagonals can only walk
+        } else { //Straight
+            if (can_walk) {
+                actual[ai] = .walk;
+            } else {
+                actual[ai] = blk: {
+                    if (!block_above_head and col[1] and !(col[2] or col[3])) { //Can jump
+                        break :blk .jump;
+                    } else if (!(col[0] or col[1] or col[2])) { //Can fall, check if we hit maxfalldist
+
+                    }
+                };
+                //jump
+                //fall
+                //gap
+            }
+        }
+    }
+
+    for (exp, 0..) |v, i| {
+        try std.testing.expectEqual(v, actual[i]);
+    }
+}

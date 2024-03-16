@@ -570,7 +570,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 bot1.container_state = state_id;
                 try bot1.interacted_inventory.setSlot(@intCast(slot_i), data);
 
-                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 35);
+                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
                 if (slot_i >= player_inv_start)
                     try bot1.inventory.setSlot(@intCast(slot_i - player_inv_start + 9), data);
             }
@@ -599,7 +599,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 try bot1.interacted_inventory.setSize(item_count);
                 bot1.interacted_inventory.win_id = win_id;
                 bot1.container_state = state_id;
-                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 35);
+                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
                 while (i < item_count) : (i += 1) {
                     const s = parse.slot();
                     try bot1.interacted_inventory.setSlot(i, s);
@@ -765,7 +765,7 @@ pub const LuaApi = struct {
     pub fn beginHalt(self: *Self) void {
         if (!self.in_yield) {
             self.in_yield = true;
-            self.vm.callLuaFunction("onYield") catch {};
+            //self.vm.callLuaFunction("onYield") catch {};
             self.in_yield = false;
         }
 
@@ -792,6 +792,29 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const ret = self.vm.getArg(L, []const f32, 1);
             std.debug.print("{any}\n", .{ret});
+            return 0;
+        }
+
+        pub export fn floodFindColumn(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const ret = self.vm.getArg(L, []const union {
+                one: struct {
+                    y: i32 = 0, //If y isn't specified, use last y + 1
+                    tag: []const u8,
+                },
+                n: struct {
+                    y: i32 = 0,
+                    max: i32,
+                    tag: []const u8,
+                },
+            }, 1);
+            for (ret) |r| {
+                std.debug.print("{any}\n", .{r});
+            }
+
+            self.beginHalt();
+            defer self.endHalt();
             return 0;
         }
 
@@ -919,7 +942,12 @@ pub const LuaApi = struct {
         pub export fn placeBlock(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 2);
-            const bpos = self.vm.getArg(L, V3i, 1);
+            const bposf = self.vm.getArg(L, V3f, 1);
+            const bpos = V3i.new(
+                @intFromFloat(@floor(bposf.x)),
+                @intFromFloat(@floor(bposf.y)),
+                @intFromFloat(@floor(bposf.z)),
+            );
             const item_name = self.vm.getArg(L, []const u8, 2);
             self.beginHalt();
             defer self.endHalt();
@@ -997,12 +1025,16 @@ pub const LuaApi = struct {
                         _ = item;
                         //std.debug.print("{any}\n", .{item});
                     }
+                } else {
+                    Lua.pushV(L, false);
+                    return 1;
                 }
             } else {
                 self.bo.modify_mutex.unlock();
             }
 
-            return 0;
+            Lua.pushV(L, true);
+            return 1;
         }
 
         pub export fn getBlockId(L: Lua.Ls) c_int {
@@ -1184,6 +1216,11 @@ pub const LuaApi = struct {
             defer self.bo.modify_mutex.unlock();
 
             Lua.pushV(L, self.bo.food);
+            return 1;
+        }
+
+        pub export fn timestamp(L: Lua.Ls) c_int {
+            Lua.pushV(L, std.time.timestamp());
             return 1;
         }
 
@@ -1570,7 +1607,7 @@ pub fn basicPathfindThread(
     goal: V3f,
     bot_handle: i32,
     return_ctx_mutex: *std.Thread.Mutex,
-    return_ctx: *?astar.AStarContext,
+    return_ctx: *astar.AStarContext,
 ) !void {
     std.debug.print("PATHFIND CALLED \n", .{});
     var pathctx = astar.AStarContext.init(alloc, world);
@@ -1594,9 +1631,7 @@ pub fn basicPathfindThread(
     std.debug.print("FINISHED DUMPING\n", .{});
 
     return_ctx_mutex.lock();
-    if (return_ctx.* != null) {
-        return_ctx.*.?.deinit();
-    }
+    return_ctx.*.deinit();
     return_ctx.* = pathctx;
     return_ctx_mutex.unlock();
     std.debug.print("PATHFIND FINISHED\n", .{});
@@ -1708,12 +1743,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     defer gctx.deinit();
 
     var astar_ctx_mutex: std.Thread.Mutex = .{};
-    var astar_ctx: ?astar.AStarContext = null;
-    defer {
-        if (astar_ctx) |*actx| {
-            actx.deinit();
-        }
-    }
+    var astar_ctx = astar.AStarContext.init(alloc, world);
+    defer astar_ctx.deinit();
     {
         try gctx.begin(0x263556ff, win.screen_dimensions.toF());
         win.pumpEvents();
@@ -1767,31 +1798,29 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         }
 
         if (draw_nodes and astar_ctx_mutex.tryLock()) {
-            if (astar_ctx) |actx| {
-                for (actx.open.items) |item| {
-                    try cubes.cube(
-                        @as(f32, @floatFromInt(item.x)),
-                        @as(f32, @floatFromInt(item.y)),
-                        @as(f32, @floatFromInt(item.z)),
-                        0.7,
-                        0.2,
-                        0.6,
-                        mc_atlas.getTextureRec(1),
-                        &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
-                    );
-                }
-                for (actx.closed.items) |item| {
-                    try cubes.cube(
-                        @as(f32, @floatFromInt(item.x)),
-                        @as(f32, @floatFromInt(item.y)),
-                        @as(f32, @floatFromInt(item.z)),
-                        0.7,
-                        0.2,
-                        0.6,
-                        mc_atlas.getTextureRec(1),
-                        &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
-                    );
-                }
+            for (astar_ctx.open.items) |item| {
+                try cubes.cube(
+                    @as(f32, @floatFromInt(item.x)),
+                    @as(f32, @floatFromInt(item.y)),
+                    @as(f32, @floatFromInt(item.z)),
+                    0.7,
+                    0.2,
+                    0.6,
+                    mc_atlas.getTextureRec(1),
+                    &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
+                );
+            }
+            for (astar_ctx.closed.items) |item| {
+                try cubes.cube(
+                    @as(f32, @floatFromInt(item.x)),
+                    @as(f32, @floatFromInt(item.y)),
+                    @as(f32, @floatFromInt(item.z)),
+                    0.7,
+                    0.2,
+                    0.6,
+                    mc_atlas.getTextureRec(1),
+                    &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
+                );
             }
             astar_ctx_mutex.unlock();
         }
@@ -1867,12 +1896,26 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 if (wheat_pos) |wh| {
                                     wh.deinit();
                                 }
-                                wheat_pos = try astar_ctx.?.floodfillCommonBlock(pi.toF(), wheat_id);
+                                wheat_pos = try astar_ctx.floodfillCommonBlock(pi.toF(), wheat_id);
                             }
 
                             break;
                         }
                     }
+                }
+            }
+
+            if (win.keyPressed(.G)) {
+                bot1.modify_mutex.lock();
+                defer bot1.modify_mutex.unlock();
+                try astar_ctx.reset();
+                if (try astar_ctx.findTree(
+                    bot1.pos.?,
+                    0,
+                    0,
+                )) |*acc| {
+                    bot1.action_list.deinit();
+                    bot1.action_list = acc.*;
                 }
             }
 
