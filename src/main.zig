@@ -905,7 +905,15 @@ pub const LuaApi = struct {
                 return 0;
             };
 
+            Lua.printStack(L);
             Lua.pushV(L, coord);
+            _ = Lua.c.lua_getglobal(L, Lua.zstring("Vec3"));
+            Lua.printStack(L);
+            Lua.c.lua_setfield(L, -2, "__index");
+            _ = Lua.c.lua_getglobal(L, Lua.zstring("Vec3"));
+            _ = Lua.c.lua_setmetatable(L, -2);
+            //Lua.c.lua_pop(L, 1);
+            Lua.printStack(L);
             return 1;
         }
 
@@ -1080,7 +1088,7 @@ pub const LuaApi = struct {
                 std.debug.print("interactChest can't find waypoint {s}\n", .{name});
                 return 0;
             };
-            std.debug.print("Interact chest query : {s}\n", .{to_move});
+            //std.debug.print("Interact chest query : {s}\n", .{to_move});
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
@@ -1199,6 +1207,7 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScr
     var script_state = LuaApi.init(alloc, world, bo, thread_data, &luavm);
     defer script_state.deinit();
     lss = &script_state;
+    luavm.loadAndRunFile("scripts/common.lua");
     luavm.loadAndRunFile(filename);
     while (true) {
         luavm.callLuaFunction("loop") catch |err| {
@@ -1209,115 +1218,10 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScr
     }
 }
 
-pub fn simpleBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld) !void {
-    const disable = false;
-    const locations = [_]V3f{
-        //V3f.new(-225, 68, 209),
-        V3f.new(-236, 69, 204),
-        //V3f.new(-216, 68, 184),
-        //V3f.new(-278, 69, 195),
-        //V3f.new(-326, 71, 115),
-        //V3f.new(-278, 69, 195),
-    };
-
-    const waypoints = [_][]const u8{ "tools", "wood_drop", "mine1" };
-    var waypoint_index: usize = 0;
-    var location_index: usize = 0;
-    var bot_command_index: u32 = 0;
-
-    var pathctx = astar.AStarContext.init(alloc, world);
-    defer pathctx.deinit();
-
-    while (true) {
-        thread_data.lock(.script_thread);
-        if (thread_data.u_status == .terminate_thread) {
-            std.debug.print("Stopping botScript thread\n", .{});
-            thread_data.unlock(.script_thread);
-            return;
-        }
-
-        defer bot_command_index += 1;
-        defer std.time.sleep(std.time.ns_per_s / 10); //This sleep is here so updateBots has time to tryLock()
-        defer thread_data.unlock(.script_thread);
-        if (disable)
-            continue;
-        //Fake a coroutine
-        switch (bot_command_index) {
-            1 => {
-                try pathctx.reset();
-                bo.modify_mutex.lock();
-                const pos = bo.pos.?;
-                bo.modify_mutex.unlock();
-                const found = try pathctx.pathfind(pos, locations[location_index]);
-                location_index = (location_index + 1) % locations.len;
-                if (found) |*actions|
-                    thread_data.setActions(actions.*, pos);
-            },
-            2 => {
-                bo.modify_mutex.lock();
-                defer bo.modify_mutex.unlock();
-                if (bo.inventory.findToolForMaterial(world.reg, "mineable/pickaxe")) |index| {
-                    try thread_data.setActionSlice(alloc, &.{.{ .hold_item = .{ .slot_index = @as(u16, @intCast(index.slot_index)) } }}, V3i.new(0, 0, 0).toF());
-                }
-            },
-            3 => {
-                try pathctx.reset();
-                bo.modify_mutex.lock();
-                const pos = bo.pos.?;
-                bo.modify_mutex.unlock();
-                const coord = world.getSignWaypoint(waypoints[waypoint_index]) orelse {
-                    std.debug.print("Cant find tools waypoint\n", .{});
-                    continue;
-                };
-                waypoint_index = (waypoint_index + 1) % waypoints.len;
-                const found = try pathctx.pathfind(pos, coord.toF());
-                if (found) |*actions|
-                    thread_data.setActions(actions.*, pos);
-            },
-            4 => {},
-            5 => {
-                try pathctx.reset();
-                bo.modify_mutex.lock();
-                const pos = bo.pos.?;
-                if (bo.inventory.findToolForMaterial(world.reg, "mineable/axe")) |match| {
-                    const wood_hardness = 2;
-                    const btime = Reg.calculateBreakTime(match.mul, wood_hardness, .{});
-                    //block hardness
-                    //tool_multiplier
-                    bo.modify_mutex.unlock();
-                    const tree_o = try pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20);
-                    if (tree_o) |*tree| {
-                        thread_data.setActions(tree.*, pos);
-                    }
-                } else {
-                    bo.modify_mutex.unlock();
-                }
-            },
-            //2 => {
-            //    var pathctx = astar.AStarContext.init(alloc, &world.chunk_data, &world.tag_table, reg);
-            //    defer pathctx.deinit();
-            //    bo.modify_mutex.lock();
-            //    const found = try pathctx.findTree(bo.pos.?);
-            //    if (found) |*actions|
-            //        thread_data.setActions(actions.*, bo.pos.?);
-            //    bo.modify_mutex.unlock();
-            //},
-            6 => std.time.sleep(std.time.ns_per_s),
-            else => bot_command_index = 0,
-        }
-    }
-}
-
 //TODO the bots scripts depend on the world being loaded for gotoWaypoint etc.
 //currently we just sleep for some time, a better way would be to wait spawning the threads until some condition.
 //Maybe having n chunks loaded or certain waypoints added
 pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Thread.Mutex) !void {
-    //var bot_it_1 = world.bots.iterator();
-    //const bot1 = bot_it_1.next();
-    //if (bot1 == null)
-    //    return error.NoBotsToSpawnScriptsFor;
-    //const bo = bot1.?.value_ptr;
-
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
@@ -1473,7 +1377,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             },
                             .inventory => |inv| {
                                 if (bo.interacted_inventory.win_id) |wid| {
-                                    std.debug.print("Inventory interact:  {any}\n", .{inv});
+                                    //std.debug.print("Inventory interact:  {any}\n", .{inv});
                                     var num_transfered: u8 = 0;
                                     const magic_num = 36; //should this be 36?
                                     const inv_len = bo.interacted_inventory.slots.items.len;
@@ -1595,6 +1499,25 @@ pub fn basicPathfindThread(
     std.debug.print("PATHFIND FINISHED\n", .{});
 }
 
+fn drawTextCube(win: *graph.SDL.Window, gctx: *graph.NewCtx, cmatrix: graph.za.Mat4, cubes: *graph.Cubes, pos: V3f, tr: graph.Rect, text: []const u8, font: *graph.Font) !void {
+    try cubes.cubeVec(pos, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, tr);
+    const tpos = cmatrix.mulByVec4(graph.za.Vec4.new(
+        @floatCast(pos.x),
+        @floatCast(pos.y),
+        @floatCast(pos.z),
+        1,
+    ));
+    const w = tpos.w();
+    const z = tpos.z();
+    const pp = graph.Vec2f.new(tpos.x() / w, tpos.y() / -w);
+    const dist_in_blocks = 10;
+    if (z < dist_in_blocks and z > 0 and @fabs(pp.x) < 1 and @fabs(pp.y) < 1) {
+        const sw = win.screen_dimensions.toF().smul(0.5);
+        const spos = pp.mul(sw).add(sw);
+        gctx.text(spos, text, font, 12, 0xffffffff);
+    }
+}
+
 pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void {
     const InvMap = struct {
         default: []const [2]f32,
@@ -1707,7 +1630,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
-        try gctx.begin(0x2f2f2fff, win.screen_dimensions.toF());
+        try gctx.begin(0x467b8cff, win.screen_dimensions.toF());
         try cubes.indicies.resize(0);
         try cubes.vertices.resize(0);
         win.pumpEvents();
@@ -1728,22 +1651,15 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             defer world.entities_mutex.unlock();
             var e_it = world.entities.valueIterator();
             while (e_it.next()) |e| {
-                try cubes.cubeVec(e.pos, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, mc_atlas.getTextureRec(88));
-                const tpos = cmatrix.mulByVec4(graph.za.Vec4.new(
-                    @floatCast(e.pos.x),
-                    @floatCast(e.pos.y),
-                    @floatCast(e.pos.z),
-                    1,
-                ));
-                const w = tpos.w();
-                const z = tpos.z();
-                const pp = graph.Vec2f.new(tpos.x() / w, tpos.y() / -w);
-                const dist_in_blocks = 10;
-                if (z < dist_in_blocks and z > 0 and @fabs(pp.x) < 1 and @fabs(pp.y) < 1) {
-                    const sw = win.screen_dimensions.toF().smul(0.5);
-                    const spos = pp.mul(sw).add(sw);
-                    gctx.text(spos, @tagName(e.kind), &font, 12, 0xffffffff);
-                }
+                try drawTextCube(&win, &gctx, cmatrix, &cubes, e.pos, mc_atlas.getTextureRec(88), @tagName(e.kind), &font);
+            }
+        }
+        {
+            world.sign_waypoints_mutex.lock();
+            defer world.sign_waypoints_mutex.unlock();
+            var w_it = world.sign_waypoints.iterator();
+            while (w_it.next()) |w| {
+                try drawTextCube(&win, &gctx, cmatrix, &cubes, w.value_ptr.*.toF(), mc_atlas.getTextureRec(88), w.key_ptr.*, &font);
             }
         }
 

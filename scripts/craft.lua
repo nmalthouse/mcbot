@@ -1,11 +1,11 @@
-local com = dofile("scripts/common.lua")
-
+print(crass)
 function loop()
     sleepms(1000)
-    interactChest("tools_chest", {"withdraw all item oak_log"})
-    --com.doTheFood()
-    --gotoLandmark("tools")
-
-    --gotoLandmark("craft")
-    --craftingTest("craft_craft")
+    print("craft")
+    local lm = getLandmark("tools")
+    local v1 = Vec3:new({x = -23, y = 0, z = 1})
+    print("tools at", lm.x, lm.y, lm.z)
+    lm:add(v1)
+    lm:add(1, 1,1)
+    print("tools at", lm.x, lm.y, lm.z)
 end
