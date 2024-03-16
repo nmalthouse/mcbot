@@ -5,17 +5,19 @@ function old()
     chopNearestTree()
 end
 
+local crass = 0
+
 
 local is_init = true
 function wheatLoop()
-    sleepms(1000);
+    --sleepms(1000);
     gotoLandmark("seeds")
     interactChest("seeds_chest",{"deposit all item wheat_seeds", "withdraw 1 item wheat_seeds"})
 
     if is_init == true then
         is_init = false
-        gotoLandmark("tools")
-        interactChest("tools_chest", {"deposit all any", "withdraw 1 item diamond_axe"})
+        --gotoLandmark("tools")
+        --interactChest("tools_chest", {"deposit all any", "withdraw 1 item diamond_axe"})
     end
 
 
@@ -41,11 +43,10 @@ function wheatLoop()
 end
 
 function loop()
-    sleepms(1000)
-    doTheFood()
-    sleepms(1000)
-    gotoLandmark("food")
-    interactChest("food_chest", {"deposit all category food"})
-
     wheatLoop()
+end
+
+
+function onYield()
+    handleHunger()
 end

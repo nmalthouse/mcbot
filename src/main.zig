@@ -733,6 +733,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
 threadlocal var lss: ?*LuaApi = null;
 pub const LuaApi = struct {
+    const sToE = std.meta.stringToEnum;
     const log = std.log.scoped(.lua);
     const Self = @This();
     const ActionListT = std.ArrayList(astar.AStarContext.PlayerActionItem);
@@ -742,6 +743,7 @@ pub const LuaApi = struct {
     pathctx: astar.AStarContext,
     world: *McWorld,
     bo: *Bot,
+    in_yield: bool = false,
 
     fn stripErrorUnion(comptime T: type) type {
         const info = @typeInfo(T);
@@ -771,6 +773,12 @@ pub const LuaApi = struct {
     }
 
     pub fn beginHalt(self: *Self) void {
+        if (!self.in_yield) {
+            self.in_yield = true;
+            self.vm.callLuaFunction("onYield") catch {};
+            self.in_yield = false;
+        }
+
         self.thread_data.lock(.script_thread);
         if (self.thread_data.u_status == .terminate_thread) {
             std.debug.print("Stopping botScript thread\n", .{});
@@ -1095,7 +1103,6 @@ pub const LuaApi = struct {
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
             errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
-            const sToE = std.meta.stringToEnum;
             var m_i = to_move.len;
             while (m_i > 0) {
                 m_i -= 1;
@@ -1166,6 +1173,18 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub export fn getPosition(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 0);
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+
+            Lua.pushV(L, self.bo.pos.?);
+            return 1;
+        }
+
         pub export fn getHunger(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
@@ -1175,6 +1194,97 @@ pub const LuaApi = struct {
             defer self.bo.modify_mutex.unlock();
 
             Lua.pushV(L, self.bo.food);
+            return 1;
+        }
+
+        //Args: item_name
+        pub export fn itemCount(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const query = self.vm.getArg(L, []const u8, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+            var it = std.mem.tokenizeScalar(u8, query, ' ');
+            const match_str = it.next() orelse {
+                self.vm.putErrorFmt("expected string", .{});
+                return 0;
+            };
+            const match = sToE(enum { item, any, category }, match_str) orelse {
+                self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
+                return 0;
+            };
+            var item_id: Reg.Item = undefined;
+            var cat: PlayerActionItem.Inv.ItemCategory = undefined;
+            switch (match) {
+                .item => {
+                    const item_name = it.next() orelse {
+                        self.vm.putError("expected item name");
+                        return 0;
+                    };
+                    item_id = self.world.reg.getItemFromName(item_name) orelse {
+                        self.vm.putErrorFmt("invalid item name: {s}", .{item_name});
+                        return 0;
+                    };
+                },
+                .category => {
+                    const cat_str = it.next() orelse {
+                        self.vm.putError("expected category name");
+                        return 0;
+                    };
+                    cat = sToE(PlayerActionItem.Inv.ItemCategory, cat_str) orelse {
+                        self.vm.putErrorFmt("unknown category: {s}", .{cat_str});
+                        return 0;
+                    };
+                },
+                else => {},
+            }
+            var item_count: usize = 0;
+            for (self.bo.inventory.slots.items) |sl| {
+                const slot = sl orelse continue;
+
+                switch (match) {
+                    .item => {
+                        if (slot.item_id == item_id.id)
+                            item_count += slot.count;
+                    },
+                    .any => {
+                        item_count += slot.count;
+                    },
+                    .category => {
+                        switch (cat) {
+                            .food => {
+                                for (self.world.reg.foods) |food| {
+                                    if (food.id == slot.item_id) {
+                                        item_count += slot.count;
+                                        break;
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            }
+
+            Lua.pushV(L, item_count);
+            return 1;
+        }
+
+        pub export fn countFreeSlots(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 0);
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.lock();
+            var count: usize = 0;
+            for (self.bo.inventory.slots.items) |sl| {
+                if (sl == null)
+                    count += 1;
+            }
+            Lua.pushV(L, count);
             return 1;
         }
 
@@ -1225,6 +1335,9 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
+
+    //BAD, give the bot time to load in chunks and inventory before we start the script
+    std.time.sleep(std.time.ns_per_s * 2);
 
     var bot_threads = std.ArrayList(std.Thread).init(alloc);
     var bot_threads_data = std.ArrayList(*bot.BotScriptThreadData).init(alloc);

@@ -36,3 +36,20 @@ function Vec3:add(b, y , z)
     self.y = self.y + j.y
     self.z = self.z + j.z
 end
+
+function handleHunger()
+    local food_amount = itemCount("category food")
+    if food_amount < 10 then
+        local pos = getPosition()
+        gotoLandmark("food")
+        while food_amount < 10 do
+            interactChest("food_chest", {"withdraw 1 category food"})
+            food_amount = itemCount("category food")
+        end
+        gotoCoord(pos)
+    end
+
+    while getHunger() < 20 do
+        if not eatFood() then break end
+    end
+end
