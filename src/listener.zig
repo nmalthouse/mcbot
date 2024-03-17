@@ -1,4 +1,5 @@
 const std = @import("std");
+const Proto = @import("protocol.zig");
 
 const IDS = @import("list.zig");
 const nbt_zig = @import("nbt.zig");
@@ -12,10 +13,11 @@ const Queue = std.atomic.Queue;
 const com = @import("common.zig");
 
 //TODO Edit api to use vector structs for everything
-//TODO use an enum for all serverbound packet ids
 
 const Serv = std.net.Stream.Writer;
 pub const PacketCtx = struct {
+    const Play = Proto.Play_Serverbound;
+
     pub const PlayerActionStatus = enum(i32) {
         start_digging,
         cancel_digging,
@@ -40,7 +42,7 @@ pub const PacketCtx = struct {
 
     pub fn useItem(self: *@This(), hand: enum { main, off_hand }, sequence: i32) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x32);
+        try self.packet.packetId(Play.use_item);
         try self.packet.varInt(@intFromEnum(hand));
         try self.packet.varInt(sequence);
         try self.wr();
@@ -58,7 +60,7 @@ pub const PacketCtx = struct {
         sequence: i32,
     ) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x31);
+        try self.packet.packetId(Play.block_place);
         try self.packet.varInt(@intFromEnum(hand));
         try self.packet.iposition(block_pos);
         try self.packet.varInt(@intFromEnum(face));
@@ -72,7 +74,7 @@ pub const PacketCtx = struct {
 
     pub fn pickItem(self: *@This(), sloti: usize) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x19);
+        try self.packet.packetId(Play.pick_item);
         try self.packet.varInt(@as(i32, @intCast(sloti)));
 
         //try self.packet.writeToServer(self.server);
@@ -82,14 +84,14 @@ pub const PacketCtx = struct {
     pub fn setHeldItem(self: *@This(), index: u8) !void {
         try self.packet.clear();
 
-        try self.packet.varInt(0x28);
+        try self.packet.packetId(Play.held_item_slot);
         try self.packet.short(@as(u16, @intCast(index)));
         try self.wr();
     }
 
     pub fn closeContainer(self: *@This(), win_id: u8) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x0B);
+        try self.packet.packetId(Play.close_window);
         try self.packet.ubyte(win_id);
         try self.wr();
     }
@@ -105,7 +107,7 @@ pub const PacketCtx = struct {
         held_slot: ?Slot,
     ) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x0A);
+        try self.packet.packetId(Play.window_click);
         try self.packet.ubyte(win);
         try self.packet.varInt(state_id);
         try self.packet.short(@as(u16, @intCast(slot)));
@@ -125,7 +127,7 @@ pub const PacketCtx = struct {
         const len = if (msg.len > 255) 255 else msg.len;
         //if (msg.len > 255) return error.msgToLong;
         try self.packet.clear();
-        try self.packet.varInt(0x05);
+        try self.packet.packetId(Play.chat_message);
         try self.packet.string(msg[0..len]);
         try self.packet.long(0);
         try self.packet.long(0);
@@ -139,7 +141,7 @@ pub const PacketCtx = struct {
 
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x1C); //Packet id
+        try self.packet.packetId(Play.block_dig); //Packet id
         try self.packet.varInt(@intFromEnum(status));
         try self.packet.iposition(block_pos);
         try self.packet.ubyte(0); //Face of block
@@ -149,7 +151,7 @@ pub const PacketCtx = struct {
 
     pub fn handshake(self: *@This(), hostname: []const u8, port: u16, protocol_version: u32) !void {
         try self.packet.clear();
-        try self.packet.varInt(0); //Packet id
+        try self.packet.packetId(Proto.Handshake_Serverbound.set_protocol); //Packet id
         try self.packet.varInt(@intCast(protocol_version)); //Protocol version
         try self.packet.string(hostname);
         try self.packet.short(port);
@@ -160,21 +162,21 @@ pub const PacketCtx = struct {
     pub fn clientCommand(self: *@This(), action: u8) !void {
         //action == 0, player respawn, action == 1, player opened stats window
         try self.packet.clear();
-        try self.packet.varInt(0x06);
+        try self.packet.packetId(Play.client_command);
         try self.packet.varInt(action);
         try self.wr();
     }
 
     pub fn completeLogin(self: *@This()) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x06);
+        try self.packet.packetId(Play.client_command);
         try self.packet.varInt(0x0);
         try self.wr();
     }
 
     pub fn loginStart(self: *@This(), username: []const u8) !void {
         try self.packet.clear();
-        try self.packet.varInt(0); //Packet id
+        try self.packet.packetId(Proto.Login_Serverbound.login_start); //Packet id
         try self.packet.string(username);
         try self.packet.boolean(false); //No uuid
         try self.wr();
@@ -182,14 +184,14 @@ pub const PacketCtx = struct {
 
     pub fn keepAlive(self: *@This(), id: i64) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x11);
+        try self.packet.packetId(Play.keep_alive);
         try self.packet.long(id);
         try self.wr();
     }
 
     pub fn setPlayerRot(self: *@This(), yaw: f32, pitch: f32, grounded: bool) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x15);
+        try self.packet.packetId(Play.look);
         try self.packet.float(yaw);
         try self.packet.float(pitch);
         try self.packet.boolean(grounded);
@@ -198,7 +200,7 @@ pub const PacketCtx = struct {
 
     pub fn setPlayerPositionRot(self: *@This(), pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x14);
+        try self.packet.packetId(Play.position_look);
         try self.packet.double(pos.x);
         try self.packet.double(pos.y);
         try self.packet.double(pos.z);
@@ -211,21 +213,21 @@ pub const PacketCtx = struct {
 
     pub fn confirmTeleport(self: *@This(), id: i32) !void {
         try self.packet.clear();
-        try self.packet.varInt(0);
+        try self.packet.packetId(Play.teleport_confirm);
         try self.packet.varInt(id);
         try self.wr();
     }
 
     pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x0C);
+        try self.packet.packetId(Play.custom_payload);
         try self.packet.string(brand);
         try self.wr();
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
         try self.packet.clear();
-        try self.packet.varInt(0x07); //client info packet
+        try self.packet.packetId(Play.settings); //client info packet
         try self.packet.string(locale);
         try self.packet.ubyte(render_dist);
         try self.packet.varInt(0); //Chat mode, enabled
@@ -296,6 +298,10 @@ pub const Packet = struct {
                 try self.ubyte(0);
             }
         }
+    }
+
+    pub fn packetId(self: *Self, val: anytype) !void {
+        try self.varInt(@intFromEnum(val));
     }
 
     pub fn varInt(self: *Self, int: i32) !void {

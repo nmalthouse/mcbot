@@ -29,7 +29,6 @@ A picture of the debug renderer and astar pathfinding nodes.
 ![astar pathfinding](img/astar.jpg)
 
 ## Todo:
-- Codegen for protocol.json. At the very least have zig enums generated for packet id's.
 - Reference counting and ownership for individual entities. Entities are update with relative data. This is a problem with multiple bots
 
         Architecture overview
