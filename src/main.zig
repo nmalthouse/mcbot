@@ -99,12 +99,12 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
         const parseT = mc.packetParseCtx(fbsT.Reader);
         var parse = parseT.init(fbs_.reader(), arena_alloc);
         const pid = parse.varInt();
-        switch (@as(id_list.login_packet_enum, @enumFromInt(pid))) {
-            .Disconnect => {
+        switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
+            .disconnect => {
                 const reason = try parse.string(null);
                 log.warn("Disconnected: {s}\n", .{reason});
             },
-            .Set_Compression => {
+            .compress => {
                 const threshold = parse.varInt();
                 comp_thresh = threshold;
                 log.info("Setting Compression threshhold: {d}\n", .{threshold});
@@ -115,14 +115,14 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                     pctx.packet.comp_thresh = threshold;
                 }
             },
-            .Encryption_Request => {
+            .encryption_begin => {
                 const server_id = try parse.string(20);
                 const public_key = try parse.string(null);
                 const verify_token = try parse.string(null);
                 log.err("Encryption_request: {any} {any} {any} EXITING\n", .{ server_id, public_key, verify_token });
                 return error.notImplemented;
             },
-            .Login_Success => {
+            .success => {
                 const uuid = parse.int(u128);
                 const username = try parse.string(16);
                 const n_props = @as(u32, @intCast(parse.varInt()));
@@ -207,25 +207,25 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;
-    const penum = @as(id_list.packet_enum, @enumFromInt(pid));
+    const penum = @as(Proto.Play_Clientbound, @enumFromInt(pid));
     switch (penum) {
         //WORLD specific packets
-        .Plugin_Message => {
+        .custom_payload => {
             const channel_name = try parse.string(null);
             log.info("{s}: {s}", .{ @tagName(penum), channel_name });
 
             try pctx.pluginMessage("tony:brand");
             try pctx.clientInfo("en_US", bot1.view_dist, 1);
         },
-        .Change_Difficulty => {
+        .difficulty => {
             const diff = parse.int(u8);
             const locked = parse.int(u8);
             log.info("Set difficulty: {d}, Locked: {d}", .{ diff, locked });
         },
-        .Player_Abilities => {
+        .abilities => {
             log.info("Player Abilities packet", .{});
         },
-        .Feature_Flags => {
+        .feature_flags => {
             const num_feature = parse.varInt();
             log.info("Feature_Flags:", .{});
 
@@ -235,7 +235,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 log.info("\t{s}", .{feat});
             }
         },
-        .Spawn_Player => {
+        .named_entity_spawn => {
             const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.uuid, "ent_uuid"),
@@ -252,7 +252,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 .yaw = data.yaw,
             });
         },
-        .Spawn_Entity => {
+        .spawn_entity => {
             const Lt = PT(&.{
                 P(.varInt, "ent_id"),
                 P(.uuid, "ent_uuid"),
@@ -278,7 +278,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 .yaw = data.yaw,
             });
         },
-        .Remove_Entities => {
+        .entity_destroy => {
             const num_ent = parse.varInt();
             var n: u32 = 0;
             while (n < num_ent) : (n += 1) {
@@ -286,7 +286,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 world.removeEntity(e_id);
             }
         },
-        .Update_Entity_Rotation => {
+        .entity_look => {
             const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.angle, "yaw"),
@@ -298,7 +298,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.yaw = data.yaw;
             }
         },
-        .Update_Entity_Position_and_Rotation => {
+        .entity_move_look => {
             const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.shortV3i, "del"),
@@ -314,7 +314,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.yaw = data.yaw;
             }
         },
-        .Entity_Effect => {
+        .entity_effect => {
             const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.varInt, "effect_id"),
@@ -326,7 +326,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //if (data.id == bot1.e_id) {}
         },
         //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
-        .Update_Entity_Position => {
+        .rel_entity_move => {
             const data = parse.auto(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
@@ -334,7 +334,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.pos = vector.deltaPosToV3f(e.pos, data.del);
             }
         },
-        .Block_Entity_Data => {
+        .tile_entity_data => {
             const pos = parse.position();
             const btype = parse.varInt();
             const tr = nbt_zig.TrackingReader(@TypeOf(parse.reader));
@@ -347,7 +347,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             _ = btype;
             //_ = nbt_data;
         },
-        .Teleport_Entity => {
+        .entity_teleport => {
             const data = parse.auto(PT(&.{
                 P(.varInt, "ent_id"),
                 P(.V3f, "pos"),
@@ -363,16 +363,16 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.yaw = data.yaw;
             }
         },
-        .Set_Entity_Metadata => {
+        .entity_metadata => {
             const e_id = parse.varInt();
             _ = e_id;
         },
-        .Game_Event => {
+        .game_state_change => {
             const event = parse.int(u8);
             const value = parse.float(f32);
             log.info("Game event: {d} {d}", .{ event, value });
         },
-        .Update_Section_Blocks => {
+        .multi_block_change => {
             const chunk_pos = parse.chunk_position();
             const sup_light = parse.boolean();
             _ = sup_light;
@@ -387,12 +387,12 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 try world.chunk_data.setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
             }
         },
-        .Block_Update => {
+        .block_change => {
             const pos = parse.position();
             const new_id = parse.varInt();
             try world.chunk_data.setBlock(pos, @as(mc.BLOCK_ID_INT, @intCast(new_id)));
         },
-        .Chunk_Data_and_Update_Light => {
+        .map_chunk => {
             const cx = parse.int(i32);
             const cy = parse.int(i32);
             if (!try world.chunk_data.tryOwn(cx, cy, bot1.uuid)) {
@@ -508,17 +508,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
-        .Unload_Chunk => {
+        .unload_chunk => {
             const data = parse.auto(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
             try world.chunk_data.removeChunkColumn(data.cx, data.cz, bot1.uuid);
         },
         //BOT specific packets
-        .Keep_Alive => {
+        .keep_alive => {
             const data = parse.auto(PT(&.{P(.long, "keep_alive_id")}));
 
             try pctx.keepAlive(data.keep_alive_id);
         },
-        .Login => {
+        .login => {
             const data = parse.auto(PT(&.{
                 P(.int, "ent_id"),
                 P(.boolean, "is_hardcore"),
@@ -540,7 +540,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }));
             bot1.view_dist = @as(u8, @intCast(data.sim_dist));
         },
-        .Combat_Death => {
+        .death_combat_event => {
             const id = parse.varInt();
             const killer_id = parse.int(i32);
             const msg = try parse.string(null);
@@ -548,15 +548,15 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
             try pctx.clientCommand(0);
         },
-        .Disconnect => {
+        .kick_disconnect => {
             const reason = try parse.string(null);
             log.warn("Disconnected. Reason:  {s}", .{reason});
         },
-        .Set_Held_Item => {
+        .held_item_slot => {
             bot1.selected_slot = parse.int(u8);
             try pctx.setHeldItem(bot1.selected_slot);
         },
-        .Set_Container_Slot => {
+        .set_slot => {
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
             const slot_i = parse.int(i16);
@@ -576,7 +576,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     try bot1.inventory.setSlot(@intCast(slot_i - player_inv_start + 9), data);
             }
         },
-        .Open_Screen => {
+        .open_window => {
             const win_id = parse.varInt();
             const win_type = parse.varInt();
             bot1.interacted_inventory.win_type = @as(u32, @intCast(win_type));
@@ -584,7 +584,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const win_title = try parse.string(null);
             inv_log.info("open_win: win_id: {d}, win_type: {d}, title: {s}", .{ win_id, win_type, win_title });
         },
-        .Set_Container_Content => {
+        .window_items => {
             inv_log.info("set content packet", .{});
             const win_id = parse.int(u8);
             const state_id = parse.varInt();
@@ -610,7 +610,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 }
             }
         },
-        .Synchronize_Player_Position => {
+        .position => {
             const FieldMask = enum(u8) {
                 X = 0x01,
                 Y = 0x02,
@@ -644,18 +644,16 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 try pctx.completeLogin();
             }
         },
-        .Acknowledge_Block_Change => {
+        .acknowledge_player_digging => {
 
             //TODO use this to advance to next break_block item
         },
-        .Set_Health => {
+        .update_health => {
             bot1.health = parse.float(f32);
             bot1.food = @as(u8, @intCast(parse.varInt()));
             bot1.food_saturation = parse.float(f32);
         },
-        .Set_Head_Rotation => {},
-        .Update_Time => {},
-        .Update_Tags => {
+        .tags => {
             if (!world.has_tag_table) {
                 world.has_tag_table = true;
 
@@ -686,17 +684,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 }
             }
         },
-        .Set_Entity_Velocity => {},
-        .System_Chat_Message => {
-            //const msg = try parse.string(null);
-            //const is_actionbar = parse.boolean();
-            //std.debug.print("System msg: {s} {}\n", .{ msg, is_actionbar });
-        },
-        .Disguised_Chat_Message => {
-            const msg = try parse.string(null);
-            std.debug.print("System msg: {s}\n", .{msg});
-        },
-        .Player_Chat_Message => {
+        .player_chat => {
             const uuid = parse.int(u128);
             _ = uuid;
             const index = parse.varInt();

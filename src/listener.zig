@@ -1,7 +1,5 @@
 const std = @import("std");
 const Proto = @import("protocol.zig");
-
-const IDS = @import("list.zig");
 const nbt_zig = @import("nbt.zig");
 
 const vector = @import("vector.zig");
