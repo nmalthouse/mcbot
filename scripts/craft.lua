@@ -1,11 +1,6 @@
-print(crass)
 function loop()
-    sleepms(1000)
-    print("craft")
     local lm = getLandmark("tools")
-    local v1 = Vec3:new({x = -23, y = 0, z = 1})
-    print("tools at", lm.x, lm.y, lm.z)
-    lm:add(v1)
-    lm:add(1, 1,1)
-    print("tools at", lm.x, lm.y, lm.z)
+    gotoLandmark("craft")
+    craft("hay_bale")
+    
 end

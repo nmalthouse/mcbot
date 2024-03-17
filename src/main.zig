@@ -1119,23 +1119,25 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        pub export fn craftingTest(L: Lua.Ls) c_int {
+        pub export fn craft(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
             Lua.c.lua_settop(L, 1);
-            const name = self.vm.getArg(L, []const u8, 1);
+            const item_name = self.vm.getArg(L, []const u8, 1);
             self.beginHalt();
             defer self.endHalt();
-            var actions = ActionListT.init(self.world.alloc);
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
-            const coord = self.world.getSignWaypoint(name) orelse return 0;
-            errc(actions.append(.{ .close_chest = {} })) orelse return 0;
-            errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
-            errc(actions.append(.{ .craft = 0 })) orelse return 0;
-            errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
-            self.thread_data.setActions(actions, pos);
+            const coord = self.world.getSignWaypoint("craft_craft") orelse return 0;
+            if (self.world.reg.getItemFromName(item_name)) |item| {
+                var actions = ActionListT.init(self.world.alloc);
+                errc(actions.append(.{ .close_chest = {} })) orelse return 0;
+                errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
+                errc(actions.append(.{ .craft = .{ .product_id = item.id, .count = 1 } })) orelse return 0;
+                errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
+                self.thread_data.setActions(actions, pos);
+            }
             return 0;
         }
 
@@ -1561,7 +1563,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             .craft => |cr| {
                                 _ = cr;
                                 if (bo.interacted_inventory.win_id) |wid| {
-                                    const magic_num = 35;
+                                    const magic_num = 36;
                                     const inv_len = bo.interacted_inventory.slots.items.len;
                                     const player_inv_start = inv_len - magic_num;
                                     const search_i = player_inv_start;
