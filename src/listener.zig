@@ -147,10 +147,10 @@ pub const PacketCtx = struct {
         try self.wr();
     }
 
-    pub fn handshake(self: *@This(), hostname: []const u8, port: u16) !void {
+    pub fn handshake(self: *@This(), hostname: []const u8, port: u16, protocol_version: u32) !void {
         try self.packet.clear();
         try self.packet.varInt(0); //Packet id
-        try self.packet.varInt(761); //Protocol version
+        try self.packet.varInt(@intCast(protocol_version)); //Protocol version
         try self.packet.string(hostname);
         try self.packet.short(port);
         try self.packet.varInt(2); //Next state

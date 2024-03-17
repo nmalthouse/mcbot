@@ -3,4 +3,5 @@ zig-out
 zig-cache
 callgrind*
 debug
+src/protocol.zig
 

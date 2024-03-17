@@ -1,4 +1,5 @@
 const std = @import("std");
+const Proto = @import("protocol.zig");
 
 const graph = @import("graph");
 const mcBlockAtlas = @import("mc_block_atlas.zig");
@@ -75,7 +76,7 @@ pub fn myLogFn(
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
 }
 
-pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16) !Bot {
+pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16, version_id: u32) !Bot {
     const log = std.log.scoped(.parsing);
     var bot1 = try Bot.init(alloc, bot_name, script_name);
     errdefer bot1.deinit();
@@ -83,7 +84,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     bot1.fd = s.handle;
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.fd_mutex };
     defer pctx.packet.deinit();
-    try pctx.handshake(ip, port);
+    try pctx.handshake(ip, port, version_id);
     try pctx.loginStart(bot1.name);
     bot1.connection_state = .login;
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
@@ -2235,7 +2236,7 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
 
-    var dr = try Reg.DataReg.init(alloc, "1.19.3");
+    var dr = try Reg.DataReg.init(alloc, Proto.minecraftVersion);
     defer dr.deinit();
 
     var arg_it = try std.process.argsWithAllocator(alloc);
@@ -2286,7 +2287,7 @@ pub fn main() !void {
 
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
-        const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port);
+        const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id);
         event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
         try world.bots.put(mb.fd, mb);
