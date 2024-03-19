@@ -36,11 +36,15 @@ const log = std.log.scoped(.world);
 
 pub const McWorld = struct {
     const Self = @This();
+    pub const Waypoint = struct {
+        pos: vector.V3i,
+        facing: Reg.Direction,
+    };
 
     chunk_data: mc.ChunkMap,
 
     sign_waypoints_mutex: std.Thread.Mutex = .{},
-    sign_waypoints: std.StringHashMap(vector.V3i),
+    sign_waypoints: std.StringHashMap(Waypoint),
     alloc: std.mem.Allocator,
 
     entities: std.AutoHashMap(i32, Entity),
@@ -67,7 +71,7 @@ pub const McWorld = struct {
     pub fn init(alloc: std.mem.Allocator, reg: *const Reg.DataReg) Self {
         return Self{
             .alloc = alloc,
-            .sign_waypoints = std.StringHashMap(vector.V3i).init(alloc),
+            .sign_waypoints = std.StringHashMap(Waypoint).init(alloc),
             .reg = reg,
             .packet_cache = .{},
             .chunk_data = mc.ChunkMap.init(alloc),
@@ -78,16 +82,16 @@ pub const McWorld = struct {
         };
     }
 
-    pub fn putSignWaypoint(self: *Self, sign_name: []const u8, pos: vector.V3i) !void {
+    pub fn putSignWaypoint(self: *Self, sign_name: []const u8, waypoint: Waypoint) !void {
         self.sign_waypoints_mutex.lock();
         defer self.sign_waypoints_mutex.unlock();
         const name = try self.alloc.dupe(u8, sign_name);
         log.info("Putting waypoint \"{s}\"", .{name});
         errdefer self.alloc.free(name);
-        try self.sign_waypoints.put(name, pos);
+        try self.sign_waypoints.put(name, waypoint);
     }
 
-    pub fn getSignWaypoint(self: *Self, sign_name: []const u8) ?vector.V3i {
+    pub fn getSignWaypoint(self: *Self, sign_name: []const u8) ?Waypoint {
         self.sign_waypoints_mutex.lock();
         defer self.sign_waypoints_mutex.unlock();
         return self.sign_waypoints.get(sign_name);

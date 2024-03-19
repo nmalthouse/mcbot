@@ -58,6 +58,8 @@ pub fn main() !void {
     try emitPacketEnum(&root, w, "handshaking", "toClient", "Handshake_Clientbound");
     try emitPacketEnum(&root, w, "login", "toClient", "Login_Clientbound");
     try emitPacketEnum(&root, w, "login", "toServer", "Login_Serverbound");
+    //try emitPacketEnum(&root, w, "configuration", "toClient", "Config_Clientbound");
+    //try emitPacketEnum(&root, w, "configuration", "toServer", "Config_Serverbound");
 }
 
 pub fn emitPacketEnum(root: *std.json.ObjectMap, writer: anytype, game_state: []const u8, direction: []const u8, enum_name: []const u8) !void {

@@ -1,4 +1,5 @@
 const std = @import("std");
+const Lua = @import("graph").Lua;
 const math = std.math;
 //TODO delete all of this and use zalgebra's generic vector
 //Same goes for ratgraph
@@ -9,6 +10,10 @@ pub fn Ivec(comptime itype: type) type {
         x: itype,
         y: itype,
         z: itype,
+
+        pub fn setLuaTable(L: Lua.Ls) void {
+            V3f.setLuaTable(L);
+        }
 
         pub fn new(x: itype, y: itype, z: itype) Self {
             return Self{
@@ -53,11 +58,26 @@ pub const V3f = struct {
     y: f64,
     z: f64,
 
+    pub fn setLuaTable(L: Lua.Ls) void {
+        _ = Lua.c.lua_getglobal(L, Lua.zstring("Vec3"));
+        Lua.c.lua_setfield(L, -2, "__index");
+        _ = Lua.c.lua_getglobal(L, Lua.zstring("Vec3"));
+        _ = Lua.c.lua_setmetatable(L, -2);
+    }
+
     pub fn toI(a: @This()) V3i {
         return .{
             .x = @as(i32, @intFromFloat(a.x)),
             .y = @as(i32, @intFromFloat(a.y)),
             .z = @as(i32, @intFromFloat(a.z)),
+        };
+    }
+
+    pub fn toIFloor(a: @This()) V3i {
+        return .{
+            .x = @as(i32, @intFromFloat(@floor(a.x))),
+            .y = @as(i32, @intFromFloat(@floor(a.y))),
+            .z = @as(i32, @intFromFloat(@floor(a.z))),
         };
     }
 

@@ -42,6 +42,7 @@ pub const AStarContext = struct {
     const Self = @This();
     pub const Node = struct {
         pub const Ntype = enum {
+            freemove,
             blocked,
             ladder,
             walk,
@@ -478,7 +479,7 @@ pub const AStarContext = struct {
                 .z = node.z + avec.y,
                 .y = node.y + cat.y_offset,
                 .G = node.G + switch (cat.cat) {
-                    .ladder => 10,
+                    .ladder => 1,
                     .fall => 40,
                     .jump => 40,
                     .gap => 30,

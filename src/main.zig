@@ -341,7 +341,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var tracker = tr.init(arena_alloc, parse.reader);
             defer tracker.deinit();
 
-            var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader());
+            var nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch {
+                log.warn("Nbt crashed", .{});
+                return;
+            };
             _ = nbt_data;
             _ = pos;
             _ = btype;
@@ -480,23 +483,24 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                             if (e == .string) {
                                 const j = try std.json.parseFromSlice(struct { text: []const u8 }, arena_alloc, e.string, .{});
                                 if (b.getState(id, .facing)) |facing| {
+                                    const fac = facing.sub.facing;
                                     const dvec = facing.sub.facing.reverse().toVec();
                                     const behind = coord.add(dvec);
                                     if (world.chunk_data.getBlock(behind)) |bid| {
                                         const bi = world.reg.getBlockFromState(bid);
                                         if (eql(u8, "chest", bi.name)) {
                                             const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_chest" });
-                                            try world.putSignWaypoint(name, behind);
+                                            try world.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
                                         } else if (eql(u8, "dropper", bi.name)) {
                                             const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_dropper" });
-                                            try world.putSignWaypoint(name, behind);
+                                            try world.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
                                         } else if (eql(u8, "crafting_table", bi.name)) {
                                             const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_craft" });
-                                            try world.putSignWaypoint(name, behind);
+                                            try world.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
                                         }
                                     }
+                                    try world.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = fac });
                                 }
-                                try world.putSignWaypoint(j.value.text, coord);
                             }
                         }
                     }
@@ -776,12 +780,39 @@ pub const LuaApi = struct {
     pub const Api = struct {
         pub const LUA_PATH: []const u8 = "?;?.lua;scripts/?.lua;scripts/?";
 
-        pub export fn testff(L: Lua.Ls) c_int {
+        pub export fn reverseDirection(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            self.vm.clearAlloc();
             Lua.c.lua_settop(L, 1);
-            const ret = self.vm.getArg(L, []const f32, 1);
-            std.debug.print("{any}\n", .{ret});
+            const p = self.vm.getArg(L, Reg.Direction, 1);
+
+            Lua.pushV(L, p.reverse());
+            return 1;
+        }
+
+        pub export fn directionToVec(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const p = self.vm.getArg(L, Reg.Direction, 1);
+
+            Lua.pushV(L, p.toVec());
+            return 1;
+        }
+
+        pub export fn freemovetest(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const p = self.vm.getArg(L, V3f, 1);
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
+
+            var actions = ActionListT.init(self.world.alloc);
+            errc(actions.append(.{ .movement = .{ .kind = .freemove, .pos = pos.add(p) } })) orelse return 0;
+            self.thread_data.setActions(actions, pos);
+
             return 0;
         }
 
@@ -814,7 +845,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             const vm = self.vm;
             Lua.c.lua_settop(L, 1);
-            const p = vm.getArg(L, V3i, 1);
+            const p = vm.getArg(L, V3f, 1).toIFloor();
 
             if (self.world.chunk_data.getBlock(p)) |id| {
                 const block = self.world.reg.getBlockFromState(id);
@@ -877,15 +908,16 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
-            const coord = self.world.getSignWaypoint(str) orelse {
+            const wp = self.world.getSignWaypoint(str) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
-            const found = self.pathctx.pathfind(pos, coord.toF()) catch unreachable;
+            const found = self.pathctx.pathfind(pos, wp.pos.toF()) catch unreachable;
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
 
-            return 0;
+            Lua.pushV(L, wp);
+            return 1;
         }
 
         pub export fn assignMine(L: Lua.Ls) c_int {
@@ -945,27 +977,21 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
 
-            const coord = self.world.getSignWaypoint(str) orelse {
+            const wp = self.world.getSignWaypoint(str) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
 
             Lua.printStack(L);
-            Lua.pushV(L, coord);
-            _ = Lua.c.lua_getglobal(L, Lua.zstring("Vec3"));
-            Lua.printStack(L);
-            Lua.c.lua_setfield(L, -2, "__index");
-            _ = Lua.c.lua_getglobal(L, Lua.zstring("Vec3"));
-            _ = Lua.c.lua_setmetatable(L, -2);
-            //Lua.c.lua_pop(L, 1);
-            Lua.printStack(L);
+            Lua.pushV(L, wp.pos);
+
             return 1;
         }
 
-        //Arg x y z, item_name
+        //Arg x y z, item_name, ?face
         pub export fn placeBlock(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 2);
+            Lua.c.lua_settop(L, 3);
             const bposf = self.vm.getArg(L, V3f, 1);
             const bpos = V3i.new(
                 @intFromFloat(@floor(bposf.x)),
@@ -973,6 +999,9 @@ pub const LuaApi = struct {
                 @intFromFloat(@floor(bposf.z)),
             );
             const item_name = self.vm.getArg(L, []const u8, 2);
+
+            const face = self.vm.getArg(L, ?Reg.Direction, 3);
+            _ = face;
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
@@ -990,7 +1019,7 @@ pub const LuaApi = struct {
         pub export fn breakBlock(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
-            const bpos = self.vm.getArg(L, V3i, 1);
+            const bpos = self.vm.getArg(L, V3f, 1).toIFloor();
             self.beginHalt();
             defer self.endHalt();
 
@@ -1094,12 +1123,12 @@ pub const LuaApi = struct {
             const landmark = self.vm.getArg(L, []const u8, 1);
             const block_name = self.vm.getArg(L, []const u8, 2);
             const id = self.world.reg.getBlockFromName(block_name) orelse return 0;
-            const coord = self.world.getSignWaypoint(landmark) orelse {
+            const wp = self.world.getSignWaypoint(landmark) orelse {
                 std.debug.print("cant find waypoint: {s}\n", .{landmark});
                 return 0;
             };
             //errc(self.pathctx.reset()) orelse return 0;
-            const flood_pos = errc(self.pathctx.floodfillCommonBlock(coord.toF(), id)) orelse return 0;
+            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id)) orelse return 0;
             if (flood_pos) |fp| {
                 Lua.pushV(L, fp.items);
                 fp.deinit();
@@ -1118,13 +1147,13 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
-            const coord = self.world.getSignWaypoint("craft_craft") orelse return 0;
+            const wp = self.world.getSignWaypoint("craft_craft") orelse return 0;
             if (self.world.reg.getItemFromName(item_name)) |item| {
                 var actions = ActionListT.init(self.world.alloc);
                 errc(actions.append(.{ .close_chest = {} })) orelse return 0;
                 errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
                 errc(actions.append(.{ .craft = .{ .product_id = item.id, .count = 1 } })) orelse return 0;
-                errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
+                errc(actions.append(.{ .open_chest = .{ .pos = wp.pos } })) orelse return 0;
                 self.thread_data.setActions(actions, pos);
             }
             return 0;
@@ -1140,7 +1169,7 @@ pub const LuaApi = struct {
             const to_move = self.vm.getArg(L, [][]const u8, 2);
             self.beginHalt();
             defer self.endHalt();
-            const coord = self.world.getSignWaypoint(name) orelse {
+            const wp = self.world.getSignWaypoint(name) orelse {
                 std.debug.print("interactChest can't find waypoint {s}\n", .{name});
                 return 0;
             };
@@ -1216,7 +1245,7 @@ pub const LuaApi = struct {
                     },
                 })) orelse break;
             }
-            errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
+            errc(actions.append(.{ .open_chest = .{ .pos = wp.pos } })) orelse return 0;
             self.thread_data.setActions(actions, pos);
             return 0;
         }
@@ -1616,7 +1645,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             .place_block => |pb| {
                                 const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
                                 try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                                try bp.useItemOn(.main, pb.pos, .bottom, 0, 0, 0, false, 0);
+                                try bp.useItemOn(.main, pb.pos, .north, 0, 0, 0, false, 0);
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .open_chest => |ii| {
@@ -1851,7 +1880,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             defer world.sign_waypoints_mutex.unlock();
             var w_it = world.sign_waypoints.iterator();
             while (w_it.next()) |w| {
-                try drawTextCube(&win, &gctx, cmatrix, &cubes, w.value_ptr.*.toF(), mc_atlas.getTextureRec(88), w.key_ptr.*, &font);
+                try drawTextCube(&win, &gctx, cmatrix, &cubes, w.value_ptr.pos.toF(), mc_atlas.getTextureRec(88), w.key_ptr.*, &font);
             }
         }
 

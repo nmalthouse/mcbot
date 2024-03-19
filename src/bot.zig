@@ -62,17 +62,28 @@ pub const MovementState = struct {
         const mvec = V3f.new(iv.x, 0, iv.z);
         switch (self.move_type) {
             .blocked => unreachable,
+            .freemove => {
+                const max_t = iv.magnitude() / speed;
+
+                if (max_t < self.time + dt) {
+                    const r = (self.time + dt) - max_t;
+                    self.time = max_t;
+                    return MoveResult{ .remaining_dt = r, .move_complete = true, .new_pos = self.final_pos };
+                }
+                self.time += dt;
+                return MoveResult{
+                    .remaining_dt = 0,
+                    .move_complete = false,
+                    .new_pos = self.init_pos.add(iv.getUnitVec().smul(speed * self.time)),
+                };
+            },
             .walk => {
                 const max_t = mvec.magnitude() / speed;
 
                 if (max_t < self.time + dt) {
                     const r = (self.time + dt) - max_t;
                     self.time = max_t;
-                    return MoveResult{
-                        .remaining_dt = r,
-                        .move_complete = true,
-                        .new_pos = self.final_pos,
-                    };
+                    return MoveResult{ .remaining_dt = r, .move_complete = true, .new_pos = self.final_pos };
                 }
 
                 self.time += dt;

@@ -28,14 +28,22 @@ function Vec3:new(o)
     return o
 end
 
+function Vec3:__tostring()
+    return string.format("[%f, %f, %f]", self.x, self.y ,self.z)
+end
+
+function Vec3:crass()
+    print ("CRASS FUNC")
+end
+
+
 function Vec3:add(b, y , z)
     local j = b
     if type(b) ~= 'table' then j = {x = b, y = y or 0, z = z or 0} end
 
-    self.x = self.x + j.x
-    self.y = self.y + j.y
-    self.z = self.z + j.z
+    return Vec3:new({ x = self.x + j.x, y = self.y + j.y, z = self.z + j.z })
 end
+Vec3:new() --For some reason I have to call this otherwise zig -> lua can't see Vec3 methods
 
 function handleHunger()
     local food_amount = itemCount("category food")
