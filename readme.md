@@ -2,7 +2,14 @@
 Linux only because of epoll() usage, can easily be changed
 
 ## Running:
-
+        # make sure you have the following libraries installed system-wide:
+        # libepoxy
+        # sdl2
+        # freetype
+        # 
+        # Setup a 1.19.3 Minecraft server with the following set in server.properties
+        # online-mode=false
+        # network-compression-threshold=-1
         git submodule update --init --recursive
         zig build run
 
@@ -16,17 +23,13 @@ The file bot_config.lua sets port, ip, and bots that will be added.
 - offline mode only
 - 1.19.3
 
-## Cool problems to solve:
-- A bot that fells and replants trees in an area
-- A bot that manages a set of chests, sorting items, retrieving requested items.
-- A bot that goes strip mining
-- A bot that goes hunting
-- A bot that manages the breeding and slaughtering of animals
-- A bot that farms a section of land
-
 A picture of the debug renderer and astar pathfinding nodes. 
 
 ![astar pathfinding](img/astar.jpg)
+
+# Depends on
+* [zig-nbt](https://github.com/SuperAuguste/zig-nbt)
+* Everything listed under ratgraph's dependencies
 
 ## Todo:
 - Reference counting and ownership for individual entities. Entities are update with relative data. This is a problem with multiple bots

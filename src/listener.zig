@@ -879,6 +879,8 @@ pub const PacketQueueType = Queue(PacketData);
 
 pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_threshold: i32) ![]const u8 {
     const comp_enabled = (comp_threshold > -1);
+    if (comp_enabled)
+        return error.compressionNotSupported;
     const total_len = @as(u32, @intCast(readVarInt(reader)));
     //const is_compressed = blk: {
     //    if (comp_enabled)
