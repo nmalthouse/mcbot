@@ -82,7 +82,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     errdefer bot1.deinit();
     const s = try std.net.tcpConnectToHost(alloc, ip, port);
     bot1.fd = s.handle;
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc), .server = s.writer(), .mutex = &bot1.fd_mutex };
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc, -1), .server = s.writer(), .mutex = &bot1.fd_mutex };
     defer pctx.packet.deinit();
     try pctx.handshake(ip, port, version_id);
     try pctx.loginStart(bot1.name);
@@ -116,11 +116,10 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 }
             },
             .encryption_begin => {
-                const server_id = try parse.string(20);
-                const public_key = try parse.string(null);
-                const verify_token = try parse.string(null);
-                log.err("Encryption_request: {any} {any} {any} EXITING\n", .{ server_id, public_key, verify_token });
-                return error.notImplemented;
+                //log.err("Encryption_request: {s} {s} {s} EXITING\n", .{ server_id, public_key, verify_token });
+                std.debug.print("\n!!!!!!!!!!!\n", .{});
+                std.debug.print("ONLINE MODE NOT SUPPORTED\nDISABLE with online-mode=false in server.properties\n", .{});
+                std.process.exit(1);
             },
             .success => {
                 const uuid = parse.int(u128);
@@ -189,12 +188,27 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
 
-    var fbs_ = fbsT{ .buffer = packet_buf, .pos = 0 };
+    var fbs_ = blk: {
+        var fbs = fbsT{ .buffer = packet_buf, .pos = 0 };
+        _ = mc.readVarInt(fbs.reader()); //Discard the packet length
+        if (bot1.compression_threshold > -1) {
+            const comp_len = mc.readVarInt(fbs.reader());
+            if (comp_len == 0)
+                break :blk fbs;
+
+            var zlib_stream = try std.compress.zlib.decompressStream(arena_alloc, fbs.reader());
+            const ubuf = try zlib_stream.reader().readAllAlloc(arena_alloc, std.math.maxInt(usize));
+            break :blk fbsT{ .buffer = ubuf, .pos = 0 };
+        } else {
+            break :blk fbs;
+        }
+    };
+
     const parseT = mc.packetParseCtx(fbsT.Reader);
     var parse = parseT.init(fbs_.reader(), arena_alloc);
 
-    const plen = parse.varInt();
-    _ = plen;
+    //const plen = parse.varInt();
+    //_ = plen;
     const pid = parse.varInt();
 
     const P = AutoParse.P;
@@ -202,7 +216,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     const server_stream = std.net.Stream{ .handle = bot1.fd };
 
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
+    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bot1.compression_threshold), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
     //defer pctx.packet.deinit();
 
     if (bot1.connection_state != .play)
@@ -1508,7 +1522,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
         for (bot_threads_data.items) |th_d| {
             if (th_d.trylock(.bot_thread)) {
                 const bo = th_d.bot;
-                var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
+                var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bo.compression_threshold), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
                 bo.modify_mutex.lock();
                 defer bo.modify_mutex.unlock();
                 if (!bo.handshake_complete)
@@ -2284,7 +2298,6 @@ pub fn main() !void {
         name: []const u8,
         script_name: []const u8,
     });
-    Lua.printStack(config_vm.state);
 
     const port = config_vm.getGlobal(config_vm.state, "port", u16);
     const ip = config_vm.getGlobal(config_vm.state, "ip", []const u8);

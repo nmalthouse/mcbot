@@ -264,8 +264,9 @@ pub const Packet = struct {
     buffer: std.ArrayList(u8),
     comp_thresh: i32 = -1,
 
-    pub fn init(alloc: std.mem.Allocator) !Self {
+    pub fn init(alloc: std.mem.Allocator, comp_thresh: i32) !Self {
         var ret = Self{
+            .comp_thresh = comp_thresh,
             .buffer = std.ArrayList(u8).init(alloc),
         };
 
@@ -879,14 +880,7 @@ pub const PacketQueueType = Queue(PacketData);
 
 pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_threshold: i32) ![]const u8 {
     const comp_enabled = (comp_threshold > -1);
-    if (comp_enabled)
-        return error.compressionNotSupported;
     const total_len = @as(u32, @intCast(readVarInt(reader)));
-    //const is_compressed = blk: {
-    //    if (comp_enabled)
-    //        break :blk (readVarInt(reader) != 0);
-    //    break :blk false;
-    //};
 
     const buf = try alloc.alloc(u8, total_len);
     errdefer alloc.free(buf);
@@ -896,14 +890,16 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     }
 
     if (comp_enabled) {
+        defer alloc.free(buf);
         var in_stream = std.io.FixedBufferStream([]const u8){ .buffer = buf, .pos = 0 };
         const comp_len = readVarInt(in_stream.reader());
-        if (comp_len == 0)
-            return buf[in_stream.pos..];
+        if (comp_len == 0) {
+            const ret_buf = try alloc.dupe(u8, buf[in_stream.pos..]);
+            return ret_buf;
+        }
         var zlib_stream = try std.compress.zlib.decompressStream(alloc, in_stream.reader());
         defer zlib_stream.deinit();
         const ubuf = try zlib_stream.reader().readAllAlloc(alloc, std.math.maxInt(usize));
-        alloc.free(buf);
         return ubuf;
     }
     return buf;
@@ -1092,8 +1088,8 @@ pub const ChunkMap = struct {
         self.rw_lock.lock();
         defer self.rw_lock.unlock();
         try self.addNotify(chunk_pos.x, chunk_pos.z);
-        const world_z = self.x.getPtr(chunk_pos.x) orelse unreachable;
-        const column = world_z.getPtr(chunk_pos.z) orelse unreachable;
+        const world_z = self.x.getPtr(chunk_pos.x) orelse return;
+        const column = world_z.getPtr(chunk_pos.z) orelse return;
         const section = &column.sections[@as(u32, @intCast(chunk_pos.y + 4))];
 
         try section.setBlock(
@@ -1111,7 +1107,10 @@ pub const ChunkMap = struct {
             const co = ChunkMap.getChunkCoord(pos);
             try self.addNotify(co.x, co.z);
         }
-        const section = self.getChunkSectionPtr(pos) orelse unreachable;
+        const section = self.getChunkSectionPtr(pos) orelse {
+            std.debug.print("setBlock, invalid chunk warn\n", .{});
+            return;
+        };
 
         const rx = @as(u32, @intCast(@mod(pos.x, 16)));
         const rz = @as(u32, @intCast(@mod(pos.z, 16)));
