@@ -187,6 +187,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
+    bot1.modify_mutex.lock();
+    defer bot1.modify_mutex.unlock();
 
     var fbs_ = blk: {
         var fbs = fbsT{ .buffer = packet_buf, .pos = 0 };
@@ -700,27 +702,34 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                         }
                     }
                 }
+                log.info("Tags added {d} namespaces", .{num_tags});
             }
         },
         .player_chat => {
-            const uuid = parse.int(u128);
-            _ = uuid;
-            const index = parse.varInt();
-            const sig_present_bool = parse.boolean();
-            _ = index;
-            if (sig_present_bool) {
-                std.debug.print("CHAT SIG NOT SUPPORTED \n", .{});
+            const header = parse.auto(PT(&.{
+                P(.uuid, "sender_uuid"),
+                P(.varInt, "index"),
+                P(.boolean, "is_sig_present"),
+            }));
+            if (header.is_sig_present) {
+                log.err("A player chat has encryption, not supported, exiting", .{});
                 return error.notImplemented;
             }
+            const body = parse.auto(PT(&.{
+                P(.string, "message"),
+                P(.long, "timestamp"),
+                P(.long, "salt"),
+            }));
 
-            const msg = try parse.string(null);
-            _ = msg;
-
-            const timestamp = parse.int(u64);
-            if (std.mem.indexOfScalar(u64, &world.packet_cache.chat_time_stamps.buf, timestamp) != null) {
+            if (std.mem.indexOfScalar(i64, &world.packet_cache.chat_time_stamps.buf, body.timestamp) != null)
                 return;
+            world.packet_cache.chat_time_stamps.insert(body.timestamp);
+            var message_it = std.mem.tokenizeScalar(u8, body.message, ' ');
+            if (std.ascii.eqlIgnoreCase(message_it.next() orelse return, bot1.name)) {
+                //try pctx.sendChatFmt("Hello: {d}", .{header.sender_uuid});
+                const a = message_it.next() orelse return;
+                if (eql(u8, a, "say")) {}
             }
-            world.packet_cache.chat_time_stamps.insert(timestamp);
         },
         else => {
             //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, pid)]});
@@ -1221,7 +1230,7 @@ pub const LuaApi = struct {
                     self.vm.putError("expected match predicate");
                     return 0;
                 };
-                const match = sToE(enum { item, any, category }, match_str) orelse {
+                const match = sToE(enum { item, any, category, tag }, match_str) orelse {
                     self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
                     return 0;
                 };
@@ -1241,6 +1250,17 @@ pub const LuaApi = struct {
                                         return 0;
                                     };
                                     break :blk .{ .by_id = item_id.id };
+                                },
+                                .tag => {
+                                    const tag_name = it.next() orelse {
+                                        self.vm.putError("expected tag name");
+                                        return 0;
+                                    };
+                                    const item_list = self.world.tag_table.getIdList("minecraft:item", tag_name) orelse {
+                                        self.vm.putErrorFmt("invalid tag {s} for minecraft:item", .{tag_name});
+                                        return 0;
+                                    };
+                                    break :blk .{ .tag_list = item_list };
                                 },
                                 .any => break :blk .{ .match_any = {} },
                                 .category => {
@@ -1634,6 +1654,14 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                                     should_move = true;
                                                 }
                                             },
+                                            .tag_list => |tags| {
+                                                for (tags) |i_id| {
+                                                    if (i_id == s.item_id) {
+                                                        should_move = true;
+                                                        break;
+                                                    }
+                                                }
+                                            },
                                             .match_any => should_move = true,
                                             .category => |cat| {
                                                 switch (cat) {
@@ -1696,7 +1724,6 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
             }
         }
 
-        //std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * (1.0 / 20.0))));
         std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * dt)));
     }
 }
@@ -1831,8 +1858,6 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var testmap = KeyMap.init();
 
     var draw_nodes: bool = false;
-
-    //std.time.sleep(std.time.ns_per_s * 10);
 
     var cubes = graph.Cubes.init(alloc, mc_atlas.texture, ctx.tex_shad);
     defer cubes.deinit();
@@ -2311,7 +2336,6 @@ pub fn main() !void {
     var event_structs = std.ArrayList(std.os.linux.epoll_event).init(alloc);
     defer event_structs.deinit();
     try event_structs.resize(bot_names.len);
-    //var event_structs: [bot_names.len]std.os.linux.epoll_event = undefined;
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
@@ -2375,14 +2399,23 @@ pub fn main() !void {
                 } else if (eql(u8, "draw", key)) {
                     const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
                     draw_thread.detach();
-                } else if (eql(u8, "query", key)) {
+                } else if (eql(u8, "query", key)) { //query the tag table, "query ?namespace ?tag"
                     if (itt.next()) |tag_type| {
                         const tags = world.tag_table.tags.getPtr(tag_type) orelse unreachable;
-                        var kit = tags.keyIterator();
-                        var ke = kit.next();
-                        std.debug.print("Possible sub tag: \n", .{});
-                        while (ke != null) : (ke = kit.next()) {
-                            std.debug.print("\t{s}\n", .{ke.?.*});
+                        if (itt.next()) |wanted_tag| {
+                            if (tags.get(wanted_tag)) |t| {
+                                std.debug.print("Ids for: {s} {s}\n", .{ tag_type, wanted_tag });
+                                for (t.items) |item| {
+                                    std.debug.print("\t{d}\n", .{item});
+                                }
+                            }
+                        } else {
+                            var kit = tags.keyIterator();
+                            var ke = kit.next();
+                            std.debug.print("Possible sub tag: \n", .{});
+                            while (ke != null) : (ke = kit.next()) {
+                                std.debug.print("\t{s}\n", .{ke.?.*});
+                            }
                         }
                     } else {
                         var kit = world.tag_table.tags.keyIterator();

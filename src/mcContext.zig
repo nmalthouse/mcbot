@@ -61,7 +61,7 @@ pub const McWorld = struct {
     reg: *const Reg.DataReg,
 
     packet_cache: struct {
-        chat_time_stamps: RingBuf(32, u64) = RingBuf(32, u64).init(0),
+        chat_time_stamps: RingBuf(32, i64) = RingBuf(32, i64).init(0),
     },
 
     has_tag_table: bool = false,

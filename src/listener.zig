@@ -15,6 +15,7 @@ const com = @import("common.zig");
 const Serv = std.net.Stream.Writer;
 pub const PacketCtx = struct {
     const Play = Proto.Play_Serverbound;
+    const MAX_CHAT_LEN = 256;
 
     pub const PlayerActionStatus = enum(i32) {
         start_digging,
@@ -122,8 +123,7 @@ pub const PacketCtx = struct {
     }
 
     pub fn sendChat(self: *@This(), msg: []const u8) !void {
-        const len = if (msg.len > 255) 255 else msg.len;
-        //if (msg.len > 255) return error.msgToLong;
+        const len = if (msg.len > MAX_CHAT_LEN) MAX_CHAT_LEN else msg.len;
         try self.packet.clear();
         try self.packet.packetId(Play.chat_message);
         try self.packet.string(msg[0..len]);
@@ -135,6 +135,14 @@ pub const PacketCtx = struct {
 
         if (len < msg.len)
             try self.sendChat(msg[len..msg.len]);
+    }
+
+    ///If the message exceeds MAX_CHAT_LEN, silently returns without sending message
+    pub fn sendChatFmt(self: *@This(), comptime fmt: []const u8, args: anytype) !void {
+        var buf: [MAX_CHAT_LEN]u8 = undefined;
+        var fbs = std.io.FixedBufferStream([]u8){ .buffer = &buf, .pos = 0 };
+        fbs.writer().print(fmt, args) catch return;
+        try self.sendChat(fbs.getWritten());
     }
 
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
@@ -1386,6 +1394,12 @@ pub const TagRegistry = struct {
             }
         }
         return false;
+    }
+
+    //Returned memory owned by TagRegistry, only valid as until TagRegistry.deinit() is called.
+    pub fn getIdList(self: *Self, namespace: []const u8, tag: []const u8) ?[]const u32 {
+        const ns = self.tags.get(namespace) orelse return null;
+        return (ns.get(tag) orelse return null).items;
     }
 
     //Generate a sorted list of ids that have any of the tags[]
