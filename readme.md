@@ -1,27 +1,30 @@
 # A Minecraft Bot written in zig
 Linux only because of epoll() usage, can easily be changed
 
+[Lua API documentation](lua_doc.md)
+
 ## Running:
         # make sure you have the following libraries installed system-wide:
         # libepoxy
         # sdl2
         # freetype
         # 
-        # Setup a 1.19.3 Minecraft server with the following set in server.properties
+        # Setup a 1.19.3 Minecraft server and ensure the following is set in server.properties:
         # online-mode=false
-        # network-compression-threshold=-1
+
+        git clone https://github.com/nmalthouse/mcbot.git
+        cd mcbot
         git submodule update --init --recursive
         zig build run
 
 The file bot_config.lua sets port, ip, and bots that will be added.
 
 ## Current features:
-- pathfinding
-- basic inventory interaction
-- multiple bots
+- Pathfinding, (includes: ladders, gaps)
+- Block breaking
+- Basic inventory interaction
+- Multiple bots
 - Lua scripting
-- offline mode only
-- 1.19.3
 
 A picture of the debug renderer and astar pathfinding nodes. 
 
@@ -31,10 +34,8 @@ A picture of the debug renderer and astar pathfinding nodes.
 * [zig-nbt](https://github.com/SuperAuguste/zig-nbt)
 * Everything listed under ratgraph's dependencies
 
-## Todo:
-- Reference counting and ownership for individual entities. Entities are update with relative data. This is a problem with multiple bots
+## Architecture overview:
 
-        Architecture overview
         fn main
             reads bot_config.lua
             Establishes connections with Minecraft server for all bots specified.
