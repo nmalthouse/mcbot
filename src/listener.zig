@@ -1,6 +1,7 @@
 const std = @import("std");
 const Proto = @import("protocol.zig");
 const nbt_zig = @import("nbt.zig");
+const dreg = @import("data_reg.zig");
 
 const vector = @import("vector.zig");
 const V3f = vector.V3f;
@@ -1349,6 +1350,10 @@ pub const ItemJson = struct {
 pub const TagRegistry = struct {
     const Self = @This();
 
+    const TagJson = struct {
+        values: []const []const u8,
+    };
+
     strings: std.ArrayList(std.ArrayList(u8)),
 
     tags: std.StringHashMap(std.StringHashMap(std.ArrayList(u32))),
@@ -1360,6 +1365,70 @@ pub const TagRegistry = struct {
             .tags = std.StringHashMap(std.StringHashMap(std.ArrayList(u32))).init(alloc),
             .alloc = alloc,
         };
+    }
+
+    /// Given a path to a minecraft datapacks folder, attempts to add any item tags. With the following restrictions:
+    /// Tag files can only contain minecraft:item_name values, no tag references: "#minecraft:tag_name".
+    /// The values must be in the "minecraft:" namespace.
+    /// Tags are added to the "minecraft:item" namespace under the datapacks specified namespace.
+    /// Ex: my_datapack/data/my_ns/data/tags/items/my_item_tag.json -> minecraft:item my_ns:my_item_tag
+    pub fn addUserDatapacksTags(self: *Self, dir: std.fs.Dir, datapacks_folder_path: []const u8, reg: *const dreg.DataReg) !void {
+        const m = std.mem;
+
+        var str_buf: [256]u8 = undefined;
+        var str_fbs = std.io.FixedBufferStream([]u8){ .buffer = &str_buf, .pos = 0 };
+
+        var id_list = std.ArrayList(u32).init(self.alloc);
+        defer id_list.deinit();
+        var itdir = try dir.openIterableDir(datapacks_folder_path, .{});
+        defer itdir.close();
+        var dir_it = itdir.iterate();
+        while (try dir_it.next()) |pack| {
+            if (pack.kind != .directory) continue;
+            var pdir = try dir_it.dir.openDir(pack.name, .{});
+            defer pdir.close();
+            var ns_it_dir = try pdir.openIterableDir("data", .{});
+            defer ns_it_dir.close();
+            var ns_it = ns_it_dir.iterate();
+            while (try ns_it.next()) |ns| {
+                if (ns.kind != .directory) continue;
+                var ns_dir = try ns_it_dir.dir.openDir(ns.name, .{});
+                defer ns_dir.close();
+                var item_dir_it = try ns_dir.openIterableDir("tags/items", .{});
+                defer item_dir_it.close();
+                var item_it = item_dir_it.iterate();
+                while (try item_it.next()) |item| {
+                    const file_extension = ".json";
+                    if (!m.endsWith(u8, item.name, file_extension)) {
+                        std.debug.print("Ignoring non json file: {s}\n", .{item.name});
+                        continue;
+                    }
+                    id_list.clearRetainingCapacity();
+                    std.debug.print("adding item file: {s}\n", .{item.name});
+                    const tj = try com.readJson(item_dir_it.dir, item.name, self.alloc, TagJson);
+                    defer tj.deinit();
+                    for (tj.value.values) |value| {
+                        const allowed_ns = "minecraft:";
+                        if (m.startsWith(u8, value, "#")) {
+                            const v = value[1..];
+                            if (!m.startsWith(u8, v, allowed_ns))
+                                return error.namespaceNotSupported;
+                            return error.tagsNotSupported;
+                        } else {
+                            if (!m.startsWith(u8, value, allowed_ns))
+                                return error.namespaceNotSupported;
+
+                            const f_item = reg.getItemFromName(value[allowed_ns.len..]) orelse continue;
+                            try id_list.append(@intCast(f_item.id));
+                        }
+                    }
+                    str_fbs.reset();
+                    const no_file_ext_name = item.name[0 .. item.name.len - file_extension.len];
+                    try str_fbs.writer().print("{s}:{s}", .{ ns.name, no_file_ext_name }); //Namespace the new tag
+                    try self.addTag("minecraft:item", str_fbs.getWritten(), id_list.items);
+                }
+            }
+        }
     }
 
     pub fn addTag(self: *Self, tag_ident: []const u8, tag_name: []const u8, id_list: []const u32) !void {
