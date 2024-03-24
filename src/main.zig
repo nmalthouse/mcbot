@@ -105,7 +105,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 log.warn("Disconnected: {s}\n", .{reason});
             },
             .compress => {
-                const d = try Proto.Login_Clientbound.packet_compress.parse(&parse);
+                const d = try Proto.Login_Clientbound.packets.Type_packet_compress.parse(&parse);
                 comp_thresh = d.threshold;
                 log.info("Setting Compression threshhold: {d}\n", .{d.threshold});
                 if (d.threshold < 0) {
@@ -143,7 +143,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 bot1.connection_state = .play;
             },
             .login_plugin_request => {
-                const data = try Proto.Login_Clientbound.packet_login_plugin_request.parse(&parse);
+                const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);
                 log.info("Login plugin request {d} {s}", .{ data.messageId, data.channel });
                 log.info("Payload {s}", .{data.data});
 
@@ -192,7 +192,7 @@ pub const PacketParse = struct {
 };
 
 pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
-    const CB = Proto.Play_Clientbound;
+    const CB = Proto.Play_Clientbound.packets;
     const log = std.log.scoped(.parsing);
     const inv_log = std.log.scoped(.inventory);
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
@@ -238,18 +238,18 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     switch (penum) {
         //WORLD specific packets
         .custom_payload => {
-            const d = try CB.packet_custom_payload.parse(&parse);
+            const d = try CB.Type_packet_custom_payload.parse(&parse);
             log.info("{s}: {s}", .{ @tagName(penum), d.channel });
 
             try pctx.pluginMessage("tony:brand");
             try pctx.clientInfo("en_US", bot1.view_dist, 1);
         },
         .difficulty => {
-            const d = try CB.packet_difficulty.parse(&parse);
+            const d = try CB.Type_packet_difficulty.parse(&parse);
             log.info("Set difficulty: {d}, Locked: {any}", .{ d.difficulty, d.difficultyLocked });
         },
         .abilities => {
-            const d = try CB.packet_abilities.parse(&parse);
+            const d = try CB.Type_packet_abilities.parse(&parse);
             log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
         },
         .feature_flags => {
@@ -263,7 +263,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .named_entity_spawn => {
-            const data = try CB.packet_named_entity_spawn.parse(&parse);
+            const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
             try world.putEntity(data.entityId, .{
                 .kind = .@"minecraft:player",
                 .uuid = data.playerUUID,
@@ -273,7 +273,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             });
         },
         .spawn_entity => {
-            const data = try CB.packet_spawn_entity.parse(&parse);
+            const data = try CB.Type_packet_spawn_entity.parse(&parse);
             try world.entities.put(data.entityId, .{
                 .kind = .@"minecraft:cod",
                 //.kind = @enumFromInt(data.type),
@@ -292,14 +292,14 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .entity_look => {
-            const data = try CB.packet_entity_look.parse(&parse);
+            const data = try CB.Type_packet_entity_look.parse(&parse);
             if (world.entities.getPtr(data.entityId)) |e| {
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
             }
         },
         .entity_move_look => {
-            const data = try CB.packet_entity_move_look.parse(&parse);
+            const data = try CB.Type_packet_entity_move_look.parse(&parse);
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
             if (world.entities.getPtr(data.entityId)) |e| {
@@ -345,7 +345,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //_ = nbt_data;
         },
         .entity_teleport => {
-            const data = try CB.packet_entity_teleport.parse(&parse);
+            const data = try CB.Type_packet_entity_teleport.parse(&parse);
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
             if (world.entities.getPtr(data.entityId)) |e| {
@@ -507,7 +507,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         //BOT specific packets
         .keep_alive => {
-            const data = try Proto.Play_Clientbound.packet_keep_alive.parse(&parse);
+            const data = try Proto.Play_Clientbound.packets.Type_packet_keep_alive.parse(&parse);
             try pctx.keepAlive(data.keepAliveId);
         },
         .login => {
@@ -610,7 +610,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 Y_ROT = 0x08,
                 x_ROT = 0x10,
             };
-            const data = try Proto.Play_Clientbound.packet_position.parse(&parse);
+            const data = try Proto.Play_Clientbound.packets.Type_packet_position.parse(&parse);
             const Coord_fmt = "[{d:.2}, {d:.2}, {d:.2}]";
 
             log.warn("Sync Pos: new: " ++ Coord_fmt ++ " tel_id: {d}", .{ data.x, data.y, data.z, data.teleportId });
