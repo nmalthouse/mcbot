@@ -2344,7 +2344,6 @@ pub fn main() !void {
 
     var world = McWorld.init(alloc, &dr);
     defer world.deinit();
-    try world.tag_table.addUserDatapacksTags(cwd, "datapacks", &dr);
 
     var event_structs = std.ArrayList(std.os.linux.epoll_event).init(alloc);
     defer event_structs.deinit();

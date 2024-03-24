@@ -1,10 +1,5 @@
 local cats = getSortCategories()
 
-for i, c in ipairs(cats) do
-    print(i, c)
-end
-
-
 function loop()
     gotoLandmark("junk")
     interactChest("junk_chest", {"withdraw all any"})
