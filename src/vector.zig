@@ -1,5 +1,6 @@
 const std = @import("std");
-const Lua = @import("graph").Lua;
+const graph = @import("graph");
+const Lua = graph.Lua;
 const math = std.math;
 //TODO delete all of this and use zalgebra's generic vector
 //Same goes for ratgraph
@@ -83,6 +84,10 @@ pub const V3f = struct {
 
     pub fn new(x_: f64, y_: f64, z_: f64) @This() {
         return .{ .x = x_, .y = y_, .z = z_ };
+    }
+
+    pub fn fromZa(v: graph.za.Vec3) @This() {
+        return new(v.x(), v.y(), v.z());
     }
 
     pub fn newi(x_: i64, y_: i64, z_: i64) @This() {

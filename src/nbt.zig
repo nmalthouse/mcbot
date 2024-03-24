@@ -202,7 +202,7 @@ pub fn parse(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(r
 pub fn parseAsCompoundEntry(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(reader))!Entry {
     var result = try parse(allocator, reader);
     var com = Entry.Compound{};
-    try com.put(allocator, result.name.?, result.entry);
+    try com.put(allocator, result.name orelse return error.InvalidNbt, result.entry);
     return Entry{ .compound = com };
 }
 

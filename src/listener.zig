@@ -174,6 +174,15 @@ pub const PacketCtx = struct {
         try self.wr();
     }
 
+    pub fn loginPluginResponse(self: *@This(), message_id: i32, understood_request: bool, payload: []const u8) !void {
+        try self.packet.clear();
+        try self.packet.packetId(Proto.Login_Serverbound.login_plugin_response);
+        try self.packet.varInt(message_id);
+        try self.packet.boolean(understood_request);
+        try self.packet.slice(payload);
+        try self.wr();
+    }
+
     pub fn completeLogin(self: *@This()) !void {
         try self.packet.clear();
         try self.packet.packetId(Play.client_command);
@@ -620,6 +629,40 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const slice = try self.alloc.alloc(u8, len);
             try self.reader.readNoEof(slice);
             return slice;
+        }
+
+        pub fn parse_bool(self: *Self) !bool {
+            return self.int(u8) == 1;
+        }
+
+        pub fn parse_i16(self: *Self) !i16 {
+            return self.int(i16);
+        }
+        pub fn parse_i32(self: *Self) !i32 {
+            return self.int(i32);
+        }
+
+        pub fn parse_i64(self: *Self) !i64 {
+            return self.int(i64);
+        }
+
+        pub fn parse_f64(self: *Self) !f64 {
+            return self.float(f64);
+        }
+        pub fn parse_f32(self: *Self) !f32 {
+            return self.float(f32);
+        }
+
+        pub fn parse_i8(self: *Self) !i8 {
+            return self.int(i8);
+        }
+
+        pub fn parse_UUID(self: *Self) !u128 {
+            return self.int(u128);
+        }
+
+        pub fn parse_varint(self: *Self) !i32 {
+            return self.varInt();
         }
 
         pub fn boolean(self: *Self) bool {
@@ -1080,6 +1123,10 @@ pub const ChunkMap = struct {
                 const blocks_per_long = @divTrunc(64, section.bits_per_entry);
                 const data_index = @as(u32, @intCast(@divTrunc(block_index, blocks_per_long)));
                 const shift_index = @rem(block_index, blocks_per_long);
+                if (data_index >= section.data.items.len) {
+                    std.debug.print("SECTION DATA LEN INVALID: {any}\n", .{pos});
+                    return null;
+                }
                 const mapping = (section.data.items[data_index] >> @as(u6, @intCast((shift_index * section.bits_per_entry)))) & getBitMask(section.bits_per_entry);
                 switch (section.bits_per_entry) {
                     4...8 => { //Indirect mapping

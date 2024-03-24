@@ -92,6 +92,9 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     const arena_alloc = arena_allocs.allocator();
     var comp_thresh: i32 = -1;
 
+    const P = AutoParse.P;
+    const PT = AutoParse.parseType;
+
     while (bot1.connection_state == .login) {
         const pd = try mc.recvPacket(alloc, s.reader(), comp_thresh);
         defer alloc.free(pd);
@@ -142,7 +145,21 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 bot1.uuid = uuid;
                 bot1.connection_state = .play;
             },
-            else => {},
+            .login_plugin_request => {
+                const data = parse.auto(PT(&.{
+                    P(.varInt, "message_id"),
+                    P(.identifier, "channel"),
+                }));
+                const payload = fbs_.buffer[fbs_.pos..];
+                log.info("Login plugin request {d} {s}", .{ data.message_id, data.channel });
+                log.info("Payload {s}", .{payload});
+
+                try pctx.loginPluginResponse(
+                    data.message_id,
+                    false, // We tell the server we don't understand any plugin requests, might be a problem
+                    &.{}, //No payload data
+                );
+            },
         }
     }
     return bot1;
@@ -182,6 +199,7 @@ pub const PacketParse = struct {
 };
 
 pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
+    const CB = Proto.Play_Clientbound;
     const log = std.log.scoped(.parsing);
     const inv_log = std.log.scoped(.inventory);
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
@@ -252,44 +270,38 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .named_entity_spawn => {
-            const data = parse.auto(PT(&.{
-                P(.varInt, "ent_id"),
-                P(.uuid, "ent_uuid"),
-                P(.V3f, "pos"),
-                P(.angle, "yaw"),
-                P(.angle, "pitch"),
-            }));
+            //const data = parse.auto(Proto.)
+            const data = try CB.packet_named_entity_spawn.parse(&parse);
             //log.info("Spawn player: {any}", .{data});
-            try world.putEntity(data.ent_id, .{
+            try world.putEntity(data.entityId, .{
                 .kind = .@"minecraft:player",
-                .uuid = data.ent_uuid,
-                .pos = data.pos,
+                .uuid = data.playerUUID,
+                .pos = V3f.new(data.x, data.y, data.z),
                 .pitch = data.pitch,
                 .yaw = data.yaw,
             });
         },
         .spawn_entity => {
-            const Lt = PT(&.{
-                P(.varInt, "ent_id"),
-                P(.uuid, "ent_uuid"),
-                P(.varInt, "ent_type"),
-                P(.V3f, "pos"),
-                P(.angle, "pitch"),
-                P(.angle, "yaw"),
-                P(.angle, "head_yaw"),
-                P(.varInt, "data"),
-                P(.shortV3i, "vel"),
-            });
-            const data = parse.auto(Lt);
+            const data = try CB.packet_spawn_entity.parse(&parse);
+            //const Lt = PT(&.{
+            //    P(.varInt, "ent_id"),
+            //    P(.uuid, "ent_uuid"),
+            //    P(.varInt, "ent_type"),
+            //    P(.V3f, "pos"),
+            //    P(.angle, "pitch"),
+            //    P(.angle, "yaw"),
+            //    P(.angle, "head_yaw"),
+            //    P(.varInt, "data"),
+            //    P(.shortV3i, "vel"),
+            //});
+            //const data = parse.auto(Lt);
             //std.debug.print("Spawn ent {any}\n", .{data});
-            const ent_t = @as(id_list.entity_type_enum, @enumFromInt(data.ent_type));
-            _ = ent_t;
             //std.debug.print("ent t: {s}\n", .{@tagName(ent_t)});
 
-            try world.entities.put(data.ent_id, .{
-                .kind = @enumFromInt(data.ent_type),
-                .uuid = data.ent_uuid,
-                .pos = data.pos,
+            try world.entities.put(data.entityId, .{
+                .kind = @enumFromInt(data.type),
+                .uuid = data.objectUUID,
+                .pos = V3f.new(data.x, data.y, data.z),
                 .pitch = data.pitch,
                 .yaw = data.yaw,
             });
@@ -303,29 +315,25 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .entity_look => {
-            const data = parse.auto(PT(&.{
-                P(.varInt, "ent_id"),
-                P(.angle, "yaw"),
-                P(.angle, "pitch"),
-                P(.boolean, "grounded"),
-            }));
-            if (world.entities.getPtr(data.ent_id)) |e| {
+            const data = try CB.packet_entity_look.parse(&parse);
+            if (world.entities.getPtr(data.entityId)) |e| {
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
             }
         },
         .entity_move_look => {
-            const data = parse.auto(PT(&.{
-                P(.varInt, "ent_id"),
-                P(.shortV3i, "del"),
-                P(.angle, "yaw"),
-                P(.angle, "pitch"),
-                P(.boolean, "grounded"),
-            }));
+            const data = try CB.packet_entity_move_look.parse(&parse);
+            //const data = parse.auto(PT(&.{
+            //    P(.varInt, "ent_id"),
+            //    P(.shortV3i, "del"),
+            //    P(.angle, "yaw"),
+            //    P(.angle, "pitch"),
+            //    P(.boolean, "grounded"),
+            //}));
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
-            if (world.entities.getPtr(data.ent_id)) |e| {
-                e.pos = vector.deltaPosToV3f(e.pos, data.del);
+            if (world.entities.getPtr(data.entityId)) |e| {
+                e.pos = vector.deltaPosToV3f(e.pos, vector.shortV3i.new(data.dX, data.dY, data.dZ));
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
             }
@@ -367,17 +375,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //_ = nbt_data;
         },
         .entity_teleport => {
-            const data = parse.auto(PT(&.{
-                P(.varInt, "ent_id"),
-                P(.V3f, "pos"),
-                P(.angle, "yaw"),
-                P(.angle, "pitch"),
-                P(.boolean, "grounded"),
-            }));
+            const data = try CB.packet_entity_teleport.parse(&parse);
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
-            if (world.entities.getPtr(data.ent_id)) |e| {
-                e.pos = data.pos;
+            if (world.entities.getPtr(data.entityId)) |e| {
+                e.pos = V3f.new(data.x, data.y, data.z);
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
             }
@@ -386,11 +388,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const e_id = parse.varInt();
             _ = e_id;
         },
-        .game_state_change => {
-            const event = parse.int(u8);
-            const value = parse.float(f32);
-            log.info("Game event: {d} {d}", .{ event, value });
-        },
+        //.game_state_change => {
+        //    const event = parse.int(u8);
+        //    const value = parse.float(f32);
+        //    //log.info("Game event: {d} {d}", .{ event, value });
+        //},
         .multi_block_change => {
             const chunk_pos = parse.chunk_position();
             const sup_light = parse.boolean();
@@ -439,6 +441,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                 { //BLOCK STATES palated container
                     const bp_entry = try cr.readInt(u8, .Big);
+                    if (bp_entry > 15) {
+                        std.debug.print("IMPOSSIBLE BPE {d} [{d},{d}, {d}]\n", .{ bp_entry, cx, @as(i64, @intCast(chunk_i * 16)) - 64, cy });
+                        chunk.deinit();
+                        return;
+                    }
                     {
                         if (bp_entry == 0) {
                             try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mc.readVarInt(cr))));
@@ -534,9 +541,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         //BOT specific packets
         .keep_alive => {
-            const data = parse.auto(PT(&.{P(.long, "keep_alive_id")}));
-
-            try pctx.keepAlive(data.keep_alive_id);
+            const data = try Proto.Play_Clientbound.packet_keep_alive.parse(&parse);
+            try pctx.keepAlive(data.keepAliveId);
         },
         .login => {
             const data = parse.auto(PT(&.{
@@ -638,26 +644,19 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 Y_ROT = 0x08,
                 x_ROT = 0x10,
             };
-            const data = parse.auto(PT(&.{
-                P(.V3f, "pos"),
-                P(.float, "yaw"),
-                P(.float, "pitch"),
-                P(.byte, "flags"),
-                P(.varInt, "tel_id"),
-                P(.boolean, "should_dismount"),
-            }));
+            const data = try Proto.Play_Clientbound.packet_position.parse(&parse);
             const Coord_fmt = "[{d:.2}, {d:.2}, {d:.2}]";
 
-            log.warn("Sync Pos: new: " ++ Coord_fmt ++ " tel_id: {d}", .{ data.pos.x, data.pos.y, data.pos.z, data.tel_id });
+            log.warn("Sync Pos: new: " ++ Coord_fmt ++ " tel_id: {d}", .{ data.x, data.y, data.z, data.teleportId });
             if (bot1.pos) |p|
                 log.warn("\told: " ++ Coord_fmt ++ " diff: " ++ Coord_fmt, .{
-                    p.x,              p.y,              p.z,
-                    p.x - data.pos.x, p.y - data.pos.y, p.z - data.pos.z,
+                    p.x,          p.y,          p.z,
+                    p.x - data.x, p.y - data.y, p.z - data.z,
                 });
-            bot1.pos = data.pos;
+            bot1.pos = V3f.new(data.x, data.y, data.z);
             _ = FieldMask;
 
-            try pctx.confirmTeleport(data.tel_id);
+            try pctx.confirmTeleport(data.teleportId);
 
             if (bot1.handshake_complete == false) {
                 bot1.handshake_complete = true;
@@ -1776,7 +1775,9 @@ pub fn basicPathfindThread(
 }
 
 fn drawTextCube(win: *graph.SDL.Window, gctx: *graph.NewCtx, cmatrix: graph.za.Mat4, cubes: *graph.Cubes, pos: V3f, tr: graph.Rect, text: []const u8, font: *graph.Font) !void {
-    try cubes.cubeVec(pos, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, tr);
+    _ = cubes;
+    _ = tr;
+    //try cubes.cubeVec(pos, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, tr);
     const tpos = cmatrix.mulByVec4(graph.za.Vec4.new(
         @floatCast(pos.x),
         @floatCast(pos.y),
@@ -1826,6 +1827,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         "debug/mc_itematlas.bmp",
     );
     defer item_atlas.deinit(alloc);
+
+    var strbuf: [32]u8 = undefined;
+    var fbs = std.io.FixedBufferStream([]u8){ .buffer = &strbuf, .pos = 0 };
 
     var invtex = try graph.Texture.initFromImgFile(alloc, std.fs.cwd(), "res_pack/assets/minecraft/textures/gui/container/inventory.png", .{ .mag_filter = graph.c.GL_NEAREST });
     defer invtex.deinit();
@@ -1947,6 +1951,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 );
             }
             for (astar_ctx.closed.items) |item| {
+                const vv = V3f.newi(item.x, item.y, item.z);
                 try cubes.cube(
                     @as(f32, @floatFromInt(item.x)),
                     @as(f32, @floatFromInt(item.y)),
@@ -1957,6 +1962,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     mc_atlas.getTextureRec(1),
                     &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
                 );
+                fbs.reset();
+                const H = item.H * 20;
+                try fbs.writer().print("{d} {d}: {d}", .{ H, item.G, item.G + H });
+                try drawTextCube(&win, &gctx, cmatrix, &cubes, vv, graph.Rec(0, 0, 0, 0), fbs.getWritten(), &font);
             }
             astar_ctx_mutex.unlock();
         }
@@ -2008,7 +2017,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                         .z = @as(i32, @intFromFloat(@floor(point[2]))),
                     };
                     if (world.chunk_data.getBlock(pi)) |block| {
-                        if (block != 0) {
+                        const cam_pos = world.chunk_data.getBlock(V3f.fromZa(camera.pos).toIFloor()) orelse 0;
+                        if (block != 0 and cam_pos == 0) {
                             try cubes.cube(
                                 @as(f32, @floatFromInt(pi.x)),
                                 @as(f32, @floatFromInt(pi.y)),
@@ -2302,32 +2312,19 @@ pub fn main() !void {
     errdefer _ = gpa.detectLeaks();
     const alloc = gpa.allocator();
     const cwd = std.fs.cwd();
+    var arg_it = try std.process.argsWithAllocator(alloc);
+    defer arg_it.deinit();
+
+    const Arg = graph.ArgGen.Arg;
+    const args = try graph.ArgGen.parseArgs(&.{
+        Arg("draw", .flag, "Draw debug graphics"),
+        Arg("ip", .string, "Override ip"),
+        Arg("port", .number, "Override port"),
+    }, &arg_it);
 
     var dr = try Reg.DataReg.init(alloc, Proto.minecraftVersion);
     defer dr.deinit();
     try dr.addUserItemCategories(cwd, "item_sort.json");
-
-    var arg_it = try std.process.argsWithAllocator(alloc);
-    defer arg_it.deinit();
-    const prog_name = arg_it.next() orelse unreachable;
-    _ = prog_name;
-
-    var draw = false;
-    if (arg_it.next()) |action_arg| {
-        if (eql(u8, action_arg, "analyze")) {
-            //try packet_analyze.analyzeWalk(alloc, arg_it.next() orelse return);
-            return;
-        }
-        if (eql(u8, action_arg, "rec")) {
-            return;
-        }
-        if (eql(u8, action_arg, "draw")) {
-            draw = true;
-        }
-        if (eql(u8, action_arg, "init")) {
-            return;
-        }
-    }
 
     var config_vm = Lua.init();
     config_vm.loadAndRunFile("bot_config.lua");
@@ -2336,8 +2333,8 @@ pub fn main() !void {
         script_name: []const u8,
     });
 
-    const port = config_vm.getGlobal(config_vm.state, "port", u16);
-    const ip = config_vm.getGlobal(config_vm.state, "ip", []const u8);
+    const port: u16 = @intFromFloat(args.port orelse config_vm.getGlobal(config_vm.state, "port", f32));
+    const ip = args.ip orelse config_vm.getGlobal(config_vm.state, "ip", []const u8);
 
     const epoll_fd = try std.os.epoll_create1(0);
     defer std.os.close(epoll_fd);
@@ -2372,7 +2369,7 @@ pub fn main() !void {
     var tb = PacketParse{ .buf = std.ArrayList(u8).init(alloc) };
     defer tb.buf.deinit();
 
-    if (draw) {
+    if (args.draw != null) {
         const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
         draw_thread.detach();
     }

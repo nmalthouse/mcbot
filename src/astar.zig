@@ -334,7 +334,9 @@ pub const AStarContext = struct {
 
     pub fn addAdjLadderNodes(self: *Self, node: *Node, goal: V3i, override_h: ?u32) !void {
         var y_offset: i32 = 1;
-        const h = if (override_h != null) override_h.? else @as(u32, @intCast(try std.math.absInt(goal.x - (node.x)) + try std.math.absInt(goal.z - (node.z))));
+        //const h = if (override_h != null) override_h.? else @as(u32, @intCast(try std.math.absInt(goal.x - (node.x)) + try std.math.absInt(goal.z - (node.z))));
+        const h = override_h orelse 0;
+        _ = goal;
         while (self.hasBlockTag("minecraft:climbable", V3i.new(node.x, node.y + y_offset, node.z))) : (y_offset += 1) {
             if (self.hasWalkableAdj(node.x, node.y + y_offset, node.z))
                 try self.addNode(.{
@@ -342,7 +344,8 @@ pub const AStarContext = struct {
                     .x = node.x,
                     .z = node.z,
                     .y = node.y + y_offset + 1,
-                    .G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
+                    //.G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
+                    .G = node.G + 10,
                     .H = h,
                     //.H = @intCast(u32, try std.math.absInt(goal.x - (node.x)) +
                     //    try std.math.absInt(goal.z - (node.z))),
@@ -357,7 +360,8 @@ pub const AStarContext = struct {
                     .x = node.x,
                     .z = node.z,
                     .y = node.y + y_offset + 1,
-                    .G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
+                    .G = node.G + 10,
+                    //.G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
                     //.H = @intCast(u32, try std.math.absInt(goal.x - (node.x)) +
                     //try std.math.absInt(goal.z - (node.z))),
                     .H = h,

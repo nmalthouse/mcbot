@@ -28,8 +28,8 @@ pub const Entity = struct {
     kind: IdList.entity_type_enum,
     uuid: u128,
     pos: V3f,
-    yaw: f32,
-    pitch: f32,
+    yaw: i8,
+    pitch: i8,
 };
 
 const log = std.log.scoped(.world);

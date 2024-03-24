@@ -1,6 +1,6 @@
 const std = @import("std");
 const ratgraph = @import("ratgraph/build.zig");
-const MC_VERSION_STRING = "1.19.3";
+const MC_VERSION_STRING = "1.19.4";
 
 pub fn build(b: *std.build.Builder) void {
     const target = b.standardTargetOptions(.{});
