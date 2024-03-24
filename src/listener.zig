@@ -1404,7 +1404,6 @@ pub const TagRegistry = struct {
                         continue;
                     }
                     id_list.clearRetainingCapacity();
-                    std.debug.print("adding item file: {s}\n", .{item.name});
                     const tj = try com.readJson(item_dir_it.dir, item.name, self.alloc, TagJson);
                     defer tj.deinit();
                     for (tj.value.values) |value| {
@@ -1418,7 +1417,10 @@ pub const TagRegistry = struct {
                             if (!m.startsWith(u8, value, allowed_ns))
                                 return error.namespaceNotSupported;
 
-                            const f_item = reg.getItemFromName(value[allowed_ns.len..]) orelse continue;
+                            const f_item = reg.getItemFromName(value[allowed_ns.len..]) orelse {
+                                std.debug.print("tags: invalid item: {s}\n", .{value});
+                                continue;
+                            };
                             try id_list.append(@intCast(f_item.id));
                         }
                     }

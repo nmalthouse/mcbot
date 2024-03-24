@@ -799,6 +799,96 @@ pub const LuaApi = struct {
         std.time.sleep(std.time.ns_per_s / 10);
     }
 
+    pub fn interactChest(self: *Self, coord: V3i, to_move: [][]const u8) c_int {
+        self.beginHalt();
+        defer self.endHalt();
+        self.bo.modify_mutex.lock();
+        defer self.bo.modify_mutex.unlock();
+        const pos = self.bo.pos.?;
+        var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
+        errc(actions.append(.{ .close_chest = {} })) orelse return 0;
+        errc(actions.append(.{ .wait_ms = 100 })) orelse return 0;
+        var m_i = to_move.len;
+        while (m_i > 0) {
+            m_i -= 1;
+            const mv_str = to_move[m_i];
+            errc(actions.append(.{ .wait_ms = 200 })) orelse return 0;
+            var it = std.mem.tokenizeScalar(u8, mv_str, ' ');
+            // "DIRECTION COUNT MATCH_TYPE MATCH_PARAMS
+            const dir_str = it.next() orelse {
+                self.vm.putErrorFmt("expected string", .{});
+                return 0;
+            };
+            const dir = sToE(PlayerActionItem.Inv.ItemMoveDirection, dir_str) orelse {
+                self.vm.putErrorFmt("invalid direction: {s}", .{dir_str});
+                return 0;
+            };
+            const count_str = it.next() orelse {
+                self.vm.putError("expected count");
+                return 0;
+            };
+            const count = if (eql(u8, count_str, "all")) 0xff else (std.fmt.parseInt(u8, count_str, 10)) catch {
+                self.vm.putErrorFmt("invalid count: {s}", .{count_str});
+                return 0;
+            };
+            const match_str = it.next() orelse {
+                self.vm.putError("expected match predicate");
+                return 0;
+            };
+            const match = sToE(enum { item, any, category, tag }, match_str) orelse {
+                self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
+                return 0;
+            };
+            errc(actions.append(.{
+                .inventory = .{
+                    .direction = dir,
+                    .count = count,
+                    .match = blk: {
+                        switch (match) {
+                            .item => {
+                                const item_name = it.next() orelse {
+                                    self.vm.putError("expected item name");
+                                    return 0;
+                                };
+                                const item_id = self.world.reg.getItemFromName(item_name) orelse {
+                                    self.vm.putErrorFmt("invalid item name: {s}", .{item_name});
+                                    return 0;
+                                };
+                                break :blk .{ .by_id = item_id.id };
+                            },
+                            .tag => {
+                                const tag_name = it.next() orelse {
+                                    self.vm.putError("expected tag name");
+                                    return 0;
+                                };
+                                const item_list = self.world.tag_table.getIdList("minecraft:item", tag_name) orelse {
+                                    self.vm.putErrorFmt("invalid tag {s} for minecraft:item", .{tag_name});
+                                    return 0;
+                                };
+                                break :blk .{ .tag_list = item_list };
+                            },
+                            .any => break :blk .{ .match_any = {} },
+                            .category => {
+                                const cat_str = it.next() orelse {
+                                    self.vm.putError("expected category name");
+                                    return 0;
+                                };
+                                const sindex = self.world.reg.item_categories.string_tracker.get(cat_str) orelse {
+                                    self.vm.putErrorFmt("unknown category: {s}", .{cat_str});
+                                    return 0;
+                                };
+                                break :blk .{ .category = sindex };
+                            },
+                        }
+                    },
+                },
+            })) orelse break;
+        }
+        errc(actions.append(.{ .open_chest = .{ .pos = coord } })) orelse return 0;
+        self.thread_data.setActions(actions, pos);
+        return 0;
+    }
+
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
         pub const LUA_PATH: []const u8 = "?;?.lua;scripts/?.lua;scripts/?";
@@ -1005,8 +1095,7 @@ pub const LuaApi = struct {
                 return 0;
             };
 
-            Lua.printStack(L);
-            Lua.pushV(L, wp.pos);
+            Lua.pushV(L, wp);
 
             return 1;
         }
@@ -1190,98 +1279,24 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 2);
             const name = self.vm.getArg(L, []const u8, 1);
             const to_move = self.vm.getArg(L, [][]const u8, 2);
-            self.beginHalt();
-            defer self.endHalt();
             const wp = self.world.getSignWaypoint(name) orelse {
                 std.debug.print("interactChest can't find waypoint {s}\n", .{name});
                 return 0;
             };
-            //std.debug.print("Interact chest query : {s}\n", .{to_move});
-            self.bo.modify_mutex.lock();
-            defer self.bo.modify_mutex.unlock();
-            const pos = self.bo.pos.?;
-            var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
-            errc(actions.append(.{ .close_chest = {} })) orelse return 0;
-            errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
-            var m_i = to_move.len;
-            while (m_i > 0) {
-                m_i -= 1;
-                const mv_str = to_move[m_i];
-                errc(actions.append(.{ .wait_ms = 500 })) orelse return 0;
-                var it = std.mem.tokenizeScalar(u8, mv_str, ' ');
-                // "DIRECTION COUNT MATCH_TYPE MATCH_PARAMS
-                const dir_str = it.next() orelse {
-                    self.vm.putErrorFmt("expected string", .{});
-                    return 0;
-                };
-                const dir = sToE(PlayerActionItem.Inv.ItemMoveDirection, dir_str) orelse {
-                    self.vm.putErrorFmt("invalid direction: {s}", .{dir_str});
-                    return 0;
-                };
-                const count_str = it.next() orelse {
-                    self.vm.putError("expected count");
-                    return 0;
-                };
-                const count = if (eql(u8, count_str, "all")) 0xff else (std.fmt.parseInt(u8, count_str, 10)) catch {
-                    self.vm.putErrorFmt("invalid count: {s}", .{count_str});
-                    return 0;
-                };
-                const match_str = it.next() orelse {
-                    self.vm.putError("expected match predicate");
-                    return 0;
-                };
-                const match = sToE(enum { item, any, category, tag }, match_str) orelse {
-                    self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
-                    return 0;
-                };
-                errc(actions.append(.{
-                    .inventory = .{
-                        .direction = dir,
-                        .count = count,
-                        .match = blk: {
-                            switch (match) {
-                                .item => {
-                                    const item_name = it.next() orelse {
-                                        self.vm.putError("expected item name");
-                                        return 0;
-                                    };
-                                    const item_id = self.world.reg.getItemFromName(item_name) orelse {
-                                        self.vm.putErrorFmt("invalid item name: {s}", .{item_name});
-                                        return 0;
-                                    };
-                                    break :blk .{ .by_id = item_id.id };
-                                },
-                                .tag => {
-                                    const tag_name = it.next() orelse {
-                                        self.vm.putError("expected tag name");
-                                        return 0;
-                                    };
-                                    const item_list = self.world.tag_table.getIdList("minecraft:item", tag_name) orelse {
-                                        self.vm.putErrorFmt("invalid tag {s} for minecraft:item", .{tag_name});
-                                        return 0;
-                                    };
-                                    break :blk .{ .tag_list = item_list };
-                                },
-                                .any => break :blk .{ .match_any = {} },
-                                .category => {
-                                    const cat_str = it.next() orelse {
-                                        self.vm.putError("expected category name");
-                                        return 0;
-                                    };
-                                    const cat = sToE(PlayerActionItem.Inv.ItemCategory, cat_str) orelse {
-                                        self.vm.putErrorFmt("unknown category: {s}", .{cat_str});
-                                        return 0;
-                                    };
-                                    break :blk .{ .category = cat };
-                                },
-                            }
-                        },
-                    },
-                })) orelse break;
-            }
-            errc(actions.append(.{ .open_chest = .{ .pos = wp.pos } })) orelse return 0;
-            self.thread_data.setActions(actions, pos);
-            return 0;
+            return self.interactChest(wp.pos, to_move);
+        }
+
+        pub export fn interactInv(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            const bpos = self.vm.getArg(L, V3f, 1).toIFloor();
+            const to_move = self.vm.getArg(L, [][]const u8, 2);
+            return self.interactChest(bpos, to_move);
+        }
+
+        pub export fn getSortCategories(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.pushV(L, self.world.reg.item_categories.categories.items);
+            return 1;
         }
 
         pub export fn getPosition(L: Lua.Ls) c_int {
@@ -1664,13 +1679,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                             },
                                             .match_any => should_move = true,
                                             .category => |cat| {
-                                                switch (cat) {
-                                                    .food => {
-                                                        for (world.reg.foods) |food| {
-                                                            if (food.id == s.item_id)
-                                                                should_move = true;
-                                                        }
-                                                    },
+                                                if (world.reg.item_categories.map.get(s.item_id) orelse 0 == cat) {
+                                                    should_move = true;
                                                 }
                                             },
                                         }
@@ -2295,6 +2305,7 @@ pub fn main() !void {
 
     var dr = try Reg.DataReg.init(alloc, Proto.minecraftVersion);
     defer dr.deinit();
+    try dr.addUserItemCategories(cwd, "item_sort.json");
 
     var arg_it = try std.process.argsWithAllocator(alloc);
     defer arg_it.deinit();

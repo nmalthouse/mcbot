@@ -3,6 +3,15 @@ const vector = @import("vector.zig");
 const com = @import("common.zig");
 const J = std.json;
 
+pub const ItemCatJson = struct {
+    pub const JFuzzyItem = union(enum) {
+        startsWith: []const u8,
+        endsWith: []const u8,
+    };
+    fuzzy: J.ArrayHashMap([]const JFuzzyItem),
+    exact_name: J.ArrayHashMap([]const []const u8),
+};
+
 //Support Key F: full, P: partial
 // [ ] biomes.json
 // [ ] blockLoot.json
@@ -311,8 +320,33 @@ pub const BlocksJson = []Block;
 
 pub const DataReg = struct {
     const Self = @This();
+    pub const ItemCategories = struct {
+        alloc: std.mem.Allocator,
+        map: std.AutoHashMap(ItemId, u16),
+        categories: std.ArrayList([]const u8),
+        string_tracker: std.StringHashMap(usize),
+
+        pub fn init(alloc: std.mem.Allocator) @This() {
+            return .{
+                .map = std.AutoHashMap(ItemId, u16).init(alloc),
+                .alloc = alloc,
+                .string_tracker = std.StringHashMap(usize).init(alloc),
+                .categories = std.ArrayList([]const u8).init(alloc),
+            };
+        }
+
+        pub fn deinit(self: *@This()) void {
+            self.map.deinit();
+            self.string_tracker.deinit();
+            for (self.categories.items) |item| {
+                self.alloc.free(item);
+            }
+            self.categories.deinit();
+        }
+    };
 
     alloc: std.mem.Allocator,
+    item_categories: ItemCategories,
     version_id: u32,
     item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[]. name strings are stored in items[]
     items: []Item,
@@ -381,6 +415,7 @@ pub const DataReg = struct {
         const ret = Self{
             .recipes = rec.value,
             .version_id = version_info.value.version,
+            .item_categories = ItemCategories.init(alloc),
             .alloc = alloc,
             .entities = ent.value,
             .foods = foods,
@@ -396,7 +431,66 @@ pub const DataReg = struct {
         return ret;
     }
 
+    pub fn addUserItemCategories(self: *Self, dir: std.fs.Dir, path: []const u8) !void {
+        var json = try com.readJson(dir, path, self.alloc, ItemCatJson);
+        defer json.deinit();
+        const cat = &self.item_categories;
+        {
+            var it = json.value.exact_name.map.iterator();
+            while (it.next()) |n| {
+                const r = try cat.string_tracker.getOrPut(n.key_ptr.*);
+                if (r.found_existing) continue;
+                r.key_ptr.* = n.key_ptr.*;
+            }
+        }
+        {
+            var it = json.value.fuzzy.map.iterator();
+            while (it.next()) |n| {
+                const r = try cat.string_tracker.getOrPut(n.key_ptr.*);
+                if (r.found_existing) continue;
+                r.key_ptr.* = n.key_ptr.*;
+            }
+        }
+        {
+            var it = cat.string_tracker.iterator();
+            while (it.next()) |n| {
+                n.value_ptr.* = cat.categories.items.len;
+                try cat.categories.append(try self.alloc.dupe(u8, n.key_ptr.*));
+                n.key_ptr.* = cat.categories.items[n.value_ptr.*];
+            }
+        }
+        {
+            var it = json.value.exact_name.map.iterator();
+            while (it.next()) |n| {
+                const index = cat.string_tracker.get(n.key_ptr.*) orelse continue;
+                for (n.value_ptr.*) |item_name| {
+                    const item = self.getItemFromName(item_name) orelse continue;
+                    try cat.map.put(item.id, @intCast(index));
+                }
+            }
+        }
+        {
+            var it = json.value.fuzzy.map.iterator();
+            while (it.next()) |n| {
+                const index = cat.string_tracker.get(n.key_ptr.*) orelse continue;
+                for (n.value_ptr.*) |match_type| {
+                    for (self.items) |item| {
+                        const is_match = switch (match_type) {
+                            .startsWith => |s| std.mem.startsWith(u8, item.name, s),
+                            .endsWith => |s| std.mem.endsWith(u8, item.name, s),
+                        };
+                        if (is_match) {
+                            try cat.map.put(item.id, @intCast(index));
+                            continue;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     pub fn deinit(self: *Self) void {
+        self.item_categories.deinit();
         for (self.blocks) |b| {
             self.alloc.free(b.name);
             self.alloc.free(b.states);

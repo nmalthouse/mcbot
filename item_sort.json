@@ -1,0 +1,601 @@
+{
+  "fuzzy": {
+      "shulker":[
+          {"endsWith":"shulker_box"}
+      ],
+      "riches":[
+          {"endsWith":"ingot"}
+      ],
+    "wall": [
+      {
+        "endsWith": "_fence"
+      },
+      {
+        "endsWith": "_gate"
+      },
+      {
+        "endsWith": "_wall"
+      }
+    ],
+    "bricks":[
+        {"endsWith":"bricks"}
+    ],
+    "dye": [
+      {
+        "endsWith": "_dye"
+      }
+    ],
+    "wood": [
+      {
+        "endsWith": "_planks"
+      },
+      {
+        "endsWith": "_log"
+      },
+      {
+        "endsWith": "_wood"
+      }
+    ],
+    "half": [
+      {
+        "endsWith": "_stairs"
+      },
+      {
+        "endsWith": "_slab"
+      }
+    ],
+    "plant": [
+      {
+        "endsWith": "_sapling"
+      },
+      {
+        "endsWith": "_leaves"
+      }
+    ],
+    "craft":[
+        {"endsWith":"book"}
+    ],
+    "redstone": [
+      {
+        "endsWith": "_button"
+      },
+      {
+        "endsWith": "pressure_plate"
+      }
+    ],
+    "func": [
+      { "endsWith": "_bed" },
+      { "endsWith": "rail" },
+      { "endsWith": "anvil" },
+      {
+        "endsWith": "_sign"
+      },
+      {
+        "endsWith": "door"
+      }
+    ],
+    "light": [
+      {
+        "endsWith": "candle"
+      },
+      {
+        "endsWith": "_froglight"
+      }
+    ],
+    "junk": [
+      { "startsWith": "music_" },
+      { "startsWith": "infested" },
+      { "endsWith": "_boat" },
+      { "endsWith": "coral" },
+      { "endsWith": "coral_fan" },
+      { "endsWith": "coral_block" },
+      {
+        "endsWith": "_banner"
+      },
+      {
+        "endsWith": "_egg"
+      },
+      {
+        "endsWith": "_head"
+      },
+      {
+        "endsWith": "_copper"
+      },
+      {
+        "endsWith": "_pattern"
+      }
+    ],
+    "tool": [
+      {
+        "endsWith": "_sword"
+      },
+      {
+        "endsWith": "_pickaxe"
+      },
+      {
+        "endsWith": "_shovel"
+      },
+      {
+        "endsWith": "_axe"
+      },
+      {
+        "endsWith": "_hoe"
+      },
+      {
+        "endsWith": "_armor"
+      },
+      {
+        "endsWith": "_helmet"
+      },
+      {
+        "endsWith": "_chestplate"
+      },
+      {
+        "endsWith": "_leggings"
+      },
+      {
+        "endsWith": "_boots"
+      }
+    ],
+    "wool": [
+      {
+        "endsWith": "_wool"
+      },
+      {
+        "endsWith": "_carpet"
+      }
+    ],
+    "glass": [
+      {
+        "endsWith": "glass"
+      },
+      {
+        "endsWith": "glass_pane"
+      }
+    ],
+    "clay": [
+      {
+        "endsWith": "terracotta"
+      },
+      {
+        "endsWith": "concrete"
+      },
+      {
+        "endsWith": "concrete_powder"
+      }
+    ],
+    "ore": [
+      { "endsWith": "_ore"},
+      
+      {
+        "startsWith": "raw_"
+      }
+    ]
+  },
+  "exact_name": {
+    "dirt": [
+      "crimson_nylium",
+      "warped_nylium",
+      "dirt",
+      "coarse_dirt",
+      "podzol",
+      "rooted_dirt",
+      "mud",
+      "packed_mud",
+      "mycelium",
+      "dirt_path",
+      "dripstone_block",
+      "grass_block"
+    ],
+    "junk": [
+      "air",
+      "filled_map",
+      "bamboo_mosaic",
+      "bamboo_block",
+      "gold_nugget",
+      "powder_snow_bucket",
+      "end_crystal",
+      "iron_nugget",
+      "debug_stick",
+      "disc_fragment_5",
+      "phantom_membrane",
+      "nautilus_shell",
+      "heart_of_the_sea",
+      "goat_horn",
+      "spawner",
+      "small_amethyst_bud",
+      "medium_amethyst_bud",
+      "large_amethyst_bud",
+      "amethyst_cluster",
+      "pointed_dripstone",
+      "frogspawn",
+      "echo_shard",
+      "farmland",
+      "sculk",
+      "sculk_vein",
+      "repeating_command_block",
+      "chain_command_block",
+      "sculk_catalyst",
+      "sculk_shrieker",
+      "end_portal_frame",
+      "end_stone",
+      "dragon_egg",
+      "command_block",
+      "barrier",
+      "light",
+      "structure_void",
+      "dragon_breath",
+      "splash_potion",
+      "spectral_arrow",
+      "tipped_arrow",
+      "lingering_potion",
+      "structure_block",
+      "jigsaw"
+    ],
+    "plant": [
+      "nether_sprouts",
+      "wheat",
+      "grass",
+      "fern",
+      "azalea",
+      "flowering_azalea",
+      "dead_bush",
+      "seagrass",
+      "sea_pickle",
+      "dandelion",
+      "poppy",
+      "blue_orchid",
+      "allium",
+      "azure_bluet",
+      "red_tulip",
+      "orange_tulip",
+      "white_tulip",
+      "pink_tulip",
+      "oxeye_daisy",
+      "cornflower",
+      "lily_of_the_valley",
+      "wither_rose",
+      "brown_mushroom",
+      "red_mushroom",
+      "crimson_fungus",
+      "warped_fungus",
+      "crimson_roots",
+      "warped_roots",
+      "weeping_vines",
+      "twisting_vines",
+      "sugar_cane",
+      "kelp",
+      "beetroot_seeds",
+      "beetroot",
+      "melon_seeds",
+      "pumpkin_seeds",
+      "pumpkin",
+      "carved_pumpkin",
+      "cactus",
+      "melon",
+      "vine",
+      "lily_pad",
+      "sunflower",
+      "lilac",
+      "rose_bush",
+      "peony",
+      "tall_grass",
+      "large_fern",
+      "hay_block",
+      "dried_kelp",
+      "mangrove_propagule",
+      "scute",
+      "mangrove_roots",
+      "muddy_mangrove_roots",
+      "dried_kelp_block",
+      "cocoa_beans",
+      "crimson_stem",
+      "warped_stem",
+      "wheat_seeds",
+      "hanging_roots",
+      "bamboo",
+      "brown_mushroom_block",
+      "red_mushroom_block",
+      "mushroom_stem"
+    ],
+    "riches": [
+      "coal",
+      "diamond",
+      "emerald",
+      "lapis_lazuli",
+      "coal_block",
+      "iron_block",
+      "gold_block",
+      "diamond_block",
+      "lapis_block",
+      "netherite_block",
+      "emerald_block",
+      "ancient_debris",
+      "skeleton_skull",
+      "wither_skeleton_skull",
+      "amethyst_block",
+      "budding_amethyst",
+      "charcoal",
+      "netherite_scrap",
+      "amethyst_shard"
+    ],
+    "wood": [
+      "stripped_crimson_stem",
+      "stripped_warped_stem",
+      "stripped_crimson_hyphae",
+      "stripped_warped_hyphae",
+      "stripped_bamboo_block"
+    ],
+    "sand":[
+  "sand",
+  "red_sand",
+  "sandstone",
+  "chiseled_sandstone",
+  "cut_sandstone",
+  "smooth_red_sandstone",
+  "smooth_sandstone",
+  "red_sandstone",
+  "chiseled_red_sandstone",
+  "cut_red_sandstone"
+    ],
+    "nether": [
+      "crimson_hyphae",
+      "warped_hyphae",
+      "magma_block",
+      "warped_wart_block",
+      "soul_sand",
+      "netherrack",
+      "soul_soil",
+      "basalt",
+      "polished_basalt",
+      "smooth_basalt",
+      "nether_wart_block",
+      "nether_wart",
+      "nether_star",
+      "nether_brick",
+      "blackstone",
+      "gilded_blackstone",
+      "polished_blackstone",
+      "chiseled_polished_blackstone"
+    ],
+    "func": [
+  "ender_chest",
+  "ice",
+  "packed_ice",
+  "blue_ice",
+        "furnace",
+        "blast_furnace",
+        "chest",
+        "trapped_chest",
+      "soul_campfire",
+      "crafting_table",
+      "stonecutter",
+      "cartography_table",
+      "fletching_table",
+      "smithing_table",
+      "grindstone",
+      "loom",
+      "smoker",
+      "anvil",
+      "composter",
+      "jukebox",
+      "enchanting_table",
+      "cauldron",
+      "beacon",
+      "ladder",
+      "scaffolding",
+      "bee_nest",
+      "beehive",
+      "lectern",
+      "bookshelf",
+      "iron_bars",
+      "barrel",
+      "bell",
+      "campfire",
+      "chain",
+      "sponge",
+      "painting",
+      "wet_sponge",
+      "cobweb",
+      "turtle_egg",
+      "conduit",
+      "brewing_stand",
+      "lightning_rod",
+      "honeycomb_block",
+      "lodestone",
+      "crying_obsidian",
+      "respawn_anchor",
+      "daylight_detector",
+      "item_frame",
+      "glow_item_frame",
+      "flower_pot"
+    ],
+    "odd": [
+      "moss_block",
+      "snow",
+      "snow_block",
+      "clay",
+      "bone_block"
+    ],
+    "light": [
+  "sea_lantern",
+        "shroomlight",
+        "lantern",
+        "soul_lantern",
+        "torch",
+        "jack_o_lantern",
+      "glowstone",
+      "glow_lichen",
+      "end_rod"
+    ],
+    "mobdrop": [
+      "ink_sac",
+      "glow_ink_sac",
+      "spider_eye",
+      "fermented_spider_eye",
+      "blaze_powder",
+      "bone",
+      "magma_cream",
+      "rotten_flesh",
+      "ender_pearl",
+      "blaze_rod",
+      "ghast_tear"
+    ],
+    "craft": [
+        "quartz",
+      "stick",
+      "leather",
+      "string",
+      "brick",
+      "clay_ball",
+      "feather",
+      "gunpowder",
+      "egg",
+      "paper",
+      "slime_ball",
+      "snowball",
+      "fire_charge",
+      "milk_bucket",
+      "salmon_bucket",
+      "name_tag",
+      "cod_bucket",
+      "firework_star",
+      "axolotl_bucket",
+      "tadpole_bucket",
+      "sugar",
+      "flint",
+      "glowstone_dust",
+      "honeycomb",
+      "honey_bottle",
+      "ender_eye",
+      "bone_meal",
+      "experience_bottle",
+  "shulker_shell"
+    ],
+    "tool": [
+  "elytra",
+      "flint_and_steel",
+  "trident",
+  "crossbow",
+  "bowl",
+  "fishing_rod",
+  "bow",
+      "bucket",
+      "compass",
+      "bundle",
+      "clock",
+      "recovery_compass",
+      "arrow",
+      "water_bucket",
+      "lava_bucket",
+      "saddle",
+      "carrot_on_a_stick",
+      "warped_fungus_on_a_stick",
+      "shield",
+      "totem_of_undying",
+      "firework_rocket",
+      "shears",
+      "map",
+      "lead"
+    ],
+    "raw_food":[
+  "porkchop",
+  "cake",
+  "beef",
+  "rabbit_stew",
+  "rabbit_foot",
+  "chorus_fruit",
+  "popped_chorus_fruit",
+      "chicken",
+      "cod",
+      "salmon",
+      "potato",
+      "beetroot_soup",
+      "poisonous_potato",
+      "mushroom_stew",
+  "enchanted_golden_apple",
+  "golden_apple",
+  "rabbit",
+  "mutton",
+      "suspicious_stew",
+      "glow_berries"
+    ],
+    "food": [
+  "cooked_porkchop",
+  "melon_slice",
+  "cooked_beef",
+  "glistering_melon_slice",
+  "apple",
+  "cooked_rabbit",
+  "cooked_mutton",
+      "bread",
+      "cooked_chicken",
+      "golden_carrot",
+      "pumpkin_pie",
+      "carrot",
+      "baked_potato",
+
+
+      "cooked_cod",
+      "cookie",
+      "cooked_salmon",
+      "sweet_berries"
+    ],
+    "potion": [
+      "potion"
+    ],
+    "redstone":[
+  "redstone",
+  "redstone_torch",
+  "redstone_block",
+  "repeater",
+  "comparator",
+  "piston",
+  "sticky_piston",
+  "slime_block",
+  "honey_block",
+  "observer",
+  "hopper",
+  "dispenser",
+  "dropper",
+  "target",
+  "lever",
+  "sculk_sensor",
+  "tripwire_hook",
+  "tnt",
+  "redstone_lamp",
+  "note_block",
+  "minecart",
+  "chest_minecart",
+  "furnace_minecart",
+  "tnt_minecart",
+  "hopper_minecart"
+    ],
+    "stone": [
+  "deepslate",
+  "cobbled_deepslate",
+  "polished_deepslate",
+  "deepslate_bricks",
+  "cracked_deepslate_bricks",
+  "deepslate_tiles",
+  "cracked_deepslate_tiles",
+  "chiseled_deepslate",
+  "reinforced_deepslate",
+  "bedrock",
+      "smooth_stone",
+      "mossy_cobblestone",
+      "obsidian",
+      "stone",
+      "granite",
+      "polished_granite",
+      "diorite",
+      "polished_diorite",
+      "andesite",
+      "polished_andesite",
+      "calcite",
+      "tuff",
+      "cobblestone",
+      "gravel"
+    ]
+  }
+}

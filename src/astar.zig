@@ -69,7 +69,7 @@ pub const AStarContext = struct {
             pub const Match = union(enum) {
                 by_id: Reg.ItemId,
                 tag_list: []const u32, //Owned by TagRegistry, list of item ids
-                category: ItemCategory,
+                category: usize,
                 match_any: void,
             };
 
