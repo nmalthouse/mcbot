@@ -88,7 +88,13 @@ pub const McWorld = struct {
         const name = try self.alloc.dupe(u8, sign_name);
         log.info("Putting waypoint \"{s}\"", .{name});
         errdefer self.alloc.free(name);
-        try self.sign_waypoints.put(name, waypoint);
+        const gpr = try self.sign_waypoints.getOrPut(name);
+        if (gpr.found_existing) {
+            self.alloc.free(gpr.key_ptr.*);
+            gpr.key_ptr.* = name;
+            log.warn("Clobbering waypoint: {s}", .{name});
+        }
+        gpr.value_ptr.* = waypoint;
     }
 
     pub fn getSignWaypoint(self: *Self, sign_name: []const u8) ?Waypoint {

@@ -92,9 +92,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     const arena_alloc = arena_allocs.allocator();
     var comp_thresh: i32 = -1;
 
-    const P = AutoParse.P;
-    const PT = AutoParse.parseType;
-
     while (bot1.connection_state == .login) {
         const pd = try mc.recvPacket(alloc, s.reader(), comp_thresh);
         defer alloc.free(pd);
@@ -108,18 +105,18 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 log.warn("Disconnected: {s}\n", .{reason});
             },
             .compress => {
-                const threshold = parse.varInt();
-                comp_thresh = threshold;
-                log.info("Setting Compression threshhold: {d}\n", .{threshold});
-                if (threshold < 0) {
-                    unreachable;
+                const d = try Proto.Login_Clientbound.packet_compress.parse(&parse);
+                comp_thresh = d.threshold;
+                log.info("Setting Compression threshhold: {d}\n", .{d.threshold});
+                if (d.threshold < 0) {
+                    log.err("Invalid compression threshold from server: {d}", .{d.threshold});
+                    return error.invalidCompressionThreshold;
                 } else {
-                    bot1.compression_threshold = threshold;
-                    pctx.packet.comp_thresh = threshold;
+                    bot1.compression_threshold = d.threshold;
+                    pctx.packet.comp_thresh = d.threshold;
                 }
             },
             .encryption_begin => {
-                //log.err("Encryption_request: {s} {s} {s} EXITING\n", .{ server_id, public_key, verify_token });
                 std.debug.print("\n!!!!!!!!!!!\n", .{});
                 std.debug.print("ONLINE MODE NOT SUPPORTED\nDISABLE with online-mode=false in server.properties\n", .{});
                 std.process.exit(1);
@@ -146,16 +143,12 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 bot1.connection_state = .play;
             },
             .login_plugin_request => {
-                const data = parse.auto(PT(&.{
-                    P(.varInt, "message_id"),
-                    P(.identifier, "channel"),
-                }));
-                const payload = fbs_.buffer[fbs_.pos..];
-                log.info("Login plugin request {d} {s}", .{ data.message_id, data.channel });
-                log.info("Payload {s}", .{payload});
+                const data = try Proto.Login_Clientbound.packet_login_plugin_request.parse(&parse);
+                log.info("Login plugin request {d} {s}", .{ data.messageId, data.channel });
+                log.info("Payload {s}", .{data.data});
 
                 try pctx.loginPluginResponse(
-                    data.message_id,
+                    data.messageId,
                     false, // We tell the server we don't understand any plugin requests, might be a problem
                     &.{}, //No payload data
                 );
@@ -245,19 +238,19 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     switch (penum) {
         //WORLD specific packets
         .custom_payload => {
-            const channel_name = try parse.string(null);
-            log.info("{s}: {s}", .{ @tagName(penum), channel_name });
+            const d = try CB.packet_custom_payload.parse(&parse);
+            log.info("{s}: {s}", .{ @tagName(penum), d.channel });
 
             try pctx.pluginMessage("tony:brand");
             try pctx.clientInfo("en_US", bot1.view_dist, 1);
         },
         .difficulty => {
-            const diff = parse.int(u8);
-            const locked = parse.int(u8);
-            log.info("Set difficulty: {d}, Locked: {d}", .{ diff, locked });
+            const d = try CB.packet_difficulty.parse(&parse);
+            log.info("Set difficulty: {d}, Locked: {any}", .{ d.difficulty, d.difficultyLocked });
         },
         .abilities => {
-            log.info("Player Abilities packet", .{});
+            const d = try CB.packet_abilities.parse(&parse);
+            log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
         },
         .feature_flags => {
             const num_feature = parse.varInt();
@@ -270,9 +263,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .named_entity_spawn => {
-            //const data = parse.auto(Proto.)
             const data = try CB.packet_named_entity_spawn.parse(&parse);
-            //log.info("Spawn player: {any}", .{data});
             try world.putEntity(data.entityId, .{
                 .kind = .@"minecraft:player",
                 .uuid = data.playerUUID,
@@ -283,23 +274,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .spawn_entity => {
             const data = try CB.packet_spawn_entity.parse(&parse);
-            //const Lt = PT(&.{
-            //    P(.varInt, "ent_id"),
-            //    P(.uuid, "ent_uuid"),
-            //    P(.varInt, "ent_type"),
-            //    P(.V3f, "pos"),
-            //    P(.angle, "pitch"),
-            //    P(.angle, "yaw"),
-            //    P(.angle, "head_yaw"),
-            //    P(.varInt, "data"),
-            //    P(.shortV3i, "vel"),
-            //});
-            //const data = parse.auto(Lt);
-            //std.debug.print("Spawn ent {any}\n", .{data});
-            //std.debug.print("ent t: {s}\n", .{@tagName(ent_t)});
-
             try world.entities.put(data.entityId, .{
-                .kind = @enumFromInt(data.type),
+                .kind = .@"minecraft:cod",
+                //.kind = @enumFromInt(data.type),
                 .uuid = data.objectUUID,
                 .pos = V3f.new(data.x, data.y, data.z),
                 .pitch = data.pitch,
@@ -323,13 +300,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .entity_move_look => {
             const data = try CB.packet_entity_move_look.parse(&parse);
-            //const data = parse.auto(PT(&.{
-            //    P(.varInt, "ent_id"),
-            //    P(.shortV3i, "del"),
-            //    P(.angle, "yaw"),
-            //    P(.angle, "pitch"),
-            //    P(.boolean, "grounded"),
-            //}));
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
             if (world.entities.getPtr(data.entityId)) |e| {
@@ -388,11 +358,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const e_id = parse.varInt();
             _ = e_id;
         },
-        //.game_state_change => {
-        //    const event = parse.int(u8);
-        //    const value = parse.float(f32);
-        //    //log.info("Game event: {d} {d}", .{ event, value });
-        //},
         .multi_block_change => {
             const chunk_pos = parse.chunk_position();
             const sup_light = parse.boolean();
@@ -505,6 +470,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                         if (be.nbt.compound.get("Text1")) |e| {
                             if (e == .string) {
                                 const j = try std.json.parseFromSlice(struct { text: []const u8 }, arena_alloc, e.string, .{});
+                                if (j.value.text.len == 0) continue;
                                 if (b.getState(id, .facing)) |facing| {
                                     const fac = facing.sub.facing;
                                     const dvec = facing.sub.facing.reverse().toVec();

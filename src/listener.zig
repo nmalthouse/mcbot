@@ -631,8 +631,16 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return slice;
         }
 
+        pub fn parse_string(self: *Self) ![]const u8 {
+            return try self.string(null);
+        }
+
         pub fn parse_bool(self: *Self) !bool {
             return self.int(u8) == 1;
+        }
+
+        pub fn parse_restBuffer(self: *Self) ![]const u8 {
+            return try self.reader.readAllAlloc(self.alloc, std.math.maxInt(usize));
         }
 
         pub fn parse_i16(self: *Self) !i16 {
@@ -655,6 +663,10 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
         pub fn parse_i8(self: *Self) !i8 {
             return self.int(i8);
+        }
+
+        pub fn parse_u8(self: *Self) !u8 {
+            return self.int(u8);
         }
 
         pub fn parse_UUID(self: *Self) !u128 {
