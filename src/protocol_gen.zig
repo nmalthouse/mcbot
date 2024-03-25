@@ -162,8 +162,13 @@ pub const ParseStructGen = struct {
             return switch (self) {
                 .primitive => |p| p,
                 .compound => |co| {
-                    if (co.d == ._array)
-                        return try printString("[]{s}", .{co.name});
+                    if (co.d == ._array) {
+                        switch (co.d._array.emit_kind) {
+                            .array_count => |count| return try printString("[{d}]{s}", .{ count, co.name }),
+                            else => {},
+                        }
+                        return try printString("[]const {s}", .{co.name});
+                    }
                     return co.name;
                 },
             };
@@ -327,6 +332,8 @@ pub const ParseStructGen = struct {
                         .primitive => |p| try w.print("try pk.send_{s}(self.{s});\n", .{ p, unwrapped_optional }),
                         .compound => |co| {
                             if (co.d == ._array) {
+                                if (co.d._array.emit_kind == .array_varint)
+                                    try w.print("try pk.send_varint(@intCast(self.{s}.len));\n", .{unwrapped_optional});
                                 try w.print("for(self.{s})|i_{s}|{{", .{ unwrapped_optional, f.name });
                                 try w.print("try i_{s}.send(pk);\n", .{f.name});
                                 try w.print("}}\n", .{});
@@ -393,7 +400,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._array = .{ .s = ParseStructGen.init(parent.alloc), .emit_kind = ekind } };
                     try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), true, false);
-                    try parent.fields.append(.{ .name = fname, .type = .{ .compound = child } });
+                    try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
                 },
                 .option => {
                     try newGenType(a.items[1], parent, fname, true, true);

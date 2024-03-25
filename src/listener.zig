@@ -115,36 +115,31 @@ pub const PacketCtx = struct {
         slot: u32,
         button: u8,
         mode: u8,
-        new_slot_data: []const struct { sloti: u32, slot: ?Slot },
+        new_slot_data: []const Play.packets.Type_packet_window_click.Array_changedSlots,
+        //new_slot_data: []const struct { sloti: u32, slot: ?Slot },
         held_slot: ?Slot,
     ) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.window_click);
-        try self.packet.ubyte(win);
-        try self.packet.varInt(state_id);
-        try self.packet.short(@as(u16, @intCast(slot)));
-        try self.packet.ubyte(button);
-        try self.packet.varInt(mode);
-        try self.packet.varInt(@as(i32, @intCast(new_slot_data.len)));
-        for (new_slot_data) |item| {
-            try self.packet.short(@as(u16, @intCast(item.sloti)));
-            try self.packet.slot(item.slot);
-        }
-        try self.packet.slot(held_slot);
-
-        try self.wr();
+        try self.sendAuto(Play, .window_click, .{
+            .windowId = win,
+            .stateId = state_id,
+            .slot = @as(i16, @intCast(slot)),
+            .mouseButton = @as(i8, @intCast(button)),
+            .mode = @as(i32, @intCast(mode)),
+            .changedSlots = new_slot_data,
+            .cursorItem = held_slot,
+        });
     }
 
     pub fn sendChat(self: *@This(), msg: []const u8) !void {
         const len = if (msg.len > MAX_CHAT_LEN) MAX_CHAT_LEN else msg.len;
-        try self.packet.clear();
-        try self.packet.packetId(Play.chat_message);
-        try self.packet.string(msg[0..len]);
-        try self.packet.long(0);
-        try self.packet.long(0);
-        try self.packet.boolean(false);
-        try self.packet.int32(0);
-        try self.wr();
+
+        try self.sendAuto(Play, .chat_message, .{
+            .message = msg[0..len],
+            .timestamp = 0,
+            .salt = 0,
+            .offset = 0,
+            .acknowledged = [_]Play.packets.Type_packet_chat_message.Array_acknowledged{.{ .i_acknowledged = 0 }} ** 3,
+        });
 
         if (len < msg.len)
             try self.sendChat(msg[len..msg.len]);
@@ -177,20 +172,11 @@ pub const PacketCtx = struct {
     }
 
     pub fn clientCommand(self: *@This(), action: u8) !void {
-        //action == 0, player respawn, action == 1, player opened stats window
-        try self.packet.clear();
-        try self.packet.packetId(Play.client_command);
-        try self.packet.varInt(action);
-        try self.wr();
+        try self.sendAuto(Play, .client_command, .{ .actionId = @as(i32, @intCast(action)) });
     }
 
-    pub fn loginPluginResponse(self: *@This(), message_id: i32, understood_request: bool, payload: []const u8) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Proto.Login_Serverbound.login_plugin_response);
-        try self.packet.varInt(message_id);
-        try self.packet.boolean(understood_request);
-        try self.packet.slice(payload);
-        try self.wr();
+    pub fn loginPluginResponse(self: *@This(), message_id: i32, payload: ?[]const u8) !void {
+        try self.sendAuto(Proto.Login_Serverbound, .login_plugin_response, .{ .messageId = message_id, .data = payload });
     }
 
     pub fn completeLogin(self: *@This()) !void {
@@ -205,46 +191,34 @@ pub const PacketCtx = struct {
     }
 
     pub fn keepAlive(self: *@This(), id: i64) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.keep_alive);
-        try self.packet.long(id);
-        try self.wr();
+        try self.sendAuto(Play, .keep_alive, .{ .keepAliveId = id });
     }
 
     pub fn setPlayerRot(self: *@This(), yaw: f32, pitch: f32, grounded: bool) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.look);
-        try self.packet.float(yaw);
-        try self.packet.float(pitch);
-        try self.packet.boolean(grounded);
-        try self.wr();
+        try self.sendAuto(Play, .look, .{
+            .yaw = yaw,
+            .pitch = pitch,
+            .onGround = grounded,
+        });
     }
 
     pub fn setPlayerPositionRot(self: *@This(), pos: V3f, yaw: f32, pitch: f32, grounded: bool) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.position_look);
-        try self.packet.double(pos.x);
-        try self.packet.double(pos.y);
-        try self.packet.double(pos.z);
-        try self.packet.float(yaw);
-        try self.packet.float(pitch);
-        try self.packet.boolean(grounded);
-        //std.debug.print("MOVE PACKET {d} {d} {d} {any}\n", .{ pos.x, pos.y, pos.z, grounded });
-        try self.wr();
+        try self.sendAuto(Play, .position_look, .{
+            .x = pos.x,
+            .y = pos.y,
+            .z = pos.z,
+            .yaw = yaw,
+            .pitch = pitch,
+            .onGround = grounded,
+        });
     }
 
     pub fn confirmTeleport(self: *@This(), id: i32) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.teleport_confirm);
-        try self.packet.varInt(id);
-        try self.wr();
+        try self.sendAuto(Play, .teleport_confirm, .{ .teleportId = id });
     }
 
     pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.custom_payload);
-        try self.packet.string(brand);
-        try self.wr();
+        try self.sendAuto(Play, .custom_payload, .{ .channel = brand, .data = &.{} });
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
@@ -332,6 +306,7 @@ pub const Packet = struct {
         _ = try wr.write(val.getSlice());
     }
 
+    pub const send_slot = slot;
     pub const send_bool = boolean;
     pub const send_varint = varInt;
     pub const send_string = string;
@@ -339,6 +314,8 @@ pub const Packet = struct {
     pub const send_position = iposition;
     pub const send_u8 = ubyte;
     pub const send_f32 = float;
+    pub const send_f64 = double;
+    pub const send_restBuffer = slice;
 
     pub fn send_UUID(self: *Self, v: u128) !void {
         const wr = self.buffer.writer();

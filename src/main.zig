@@ -151,8 +151,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
 
                 try pctx.loginPluginResponse(
                     data.messageId,
-                    false, // We tell the server we don't understand any plugin requests, might be a problem
-                    &.{}, //No payload data
+                    null, // We tell the server we don't understand any plugin requests, might be a problem
                 );
             },
         }
@@ -656,7 +655,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             if (std.ascii.eqlIgnoreCase(message_it.next() orelse return, bot1.name)) {
                 //try pctx.sendChatFmt("Hello: {d}", .{header.sender_uuid});
                 const a = message_it.next() orelse return;
-                if (eql(u8, a, "say")) {}
+                if (eql(u8, a, "say")) {
+                    try pctx.sendChat("CRASS");
+                }
             }
         },
         else => {
