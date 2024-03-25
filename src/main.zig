@@ -234,11 +234,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;
+    const Ap = mc.AutoParseFromEnum.parseFromEnum;
+    const Penum = Proto.Play_Clientbound;
     const penum = @as(Proto.Play_Clientbound, @enumFromInt(pid));
     switch (penum) {
         //WORLD specific packets
         .custom_payload => {
-            const d = try CB.Type_packet_custom_payload.parse(&parse);
+            const d = try Ap(Penum, .custom_payload, &parse);
             log.info("{s}: {s}", .{ @tagName(penum), d.channel });
 
             try pctx.pluginMessage("tony:brand");
@@ -253,14 +255,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
         },
         .feature_flags => {
-            const num_feature = parse.varInt();
+            const d = try CB.Type_packet_feature_flags.parse(&parse);
             log.info("Feature_Flags:", .{});
 
-            var i: u32 = 0;
-            while (i < num_feature) : (i += 1) {
-                const feat = try parse.string(null);
-                log.info("\t{s}", .{feat});
-            }
+            for (d.features) |f|
+                log.info("\t{s}", .{f.i_features});
         },
         .named_entity_spawn => {
             const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
@@ -284,11 +283,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             });
         },
         .entity_destroy => {
-            const num_ent = parse.varInt();
-            var n: u32 = 0;
-            while (n < num_ent) : (n += 1) {
-                const e_id = parse.varInt();
-                world.removeEntity(e_id);
+            const d = try CB.Type_packet_entity_destroy.parse(&parse);
+            for (d.entityIds) |e| {
+                world.removeEntity(e.i_entityIds);
             }
         },
         .entity_look => {
@@ -511,38 +508,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             try pctx.keepAlive(data.keepAliveId);
         },
         .login => {
-            const data = parse.auto(PT(&.{
-                P(.int, "ent_id"),
-                P(.boolean, "is_hardcore"),
-                P(.ubyte, "gamemode"),
-                P(.byte, "prev_gamemode"),
-                P(.stringList, "dimension_names"),
-                P(.nbtTag, "reg"),
-                P(.identifier, "dimension_type"),
-                P(.identifier, "dimension_name"),
-                P(.long, "hashed_seed"),
-                P(.varInt, "max_players"),
-                P(.varInt, "view_dist"),
-                P(.varInt, "sim_dist"),
-                P(.boolean, "reduced_debug_info"),
-                P(.boolean, "enable_respawn_screen"),
-                P(.boolean, "is_debug"),
-                P(.boolean, "is_flat"),
-                P(.boolean, "has_death_location"),
-            }));
-            bot1.view_dist = @as(u8, @intCast(data.sim_dist));
+            const d = try CB.Type_packet_login.parse(&parse);
+            bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
         },
         .death_combat_event => {
-            const id = parse.varInt();
-            const killer_id = parse.int(i32);
-            const msg = try parse.string(null);
-            log.warn("Combat death, id: {d}, killer_id: {d}, msg: {s}", .{ id, killer_id, msg });
-
+            const d = try CB.Type_packet_death_combat_event.parse(&parse);
+            log.warn("Combat death, id: {d}, killer_id: {d}, msg: {s}", .{ d.playerId, d.entityId, d.message });
             try pctx.clientCommand(0);
         },
         .kick_disconnect => {
-            const reason = try parse.string(null);
-            log.warn("Disconnected. Reason:  {s}", .{reason});
+            const d = try CB.Type_packet_kick_disconnect.parse(&parse);
+            log.warn("Disconnected. Reason:  {s}", .{d.reason});
         },
         .held_item_slot => {
             bot1.selected_slot = parse.int(u8);

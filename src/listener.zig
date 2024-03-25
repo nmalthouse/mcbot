@@ -1,6 +1,6 @@
 const std = @import("std");
 const Proto = @import("protocol.zig");
-const nbt_zig = @import("nbt.zig");
+pub const nbt_zig = @import("nbt.zig");
 const dreg = @import("data_reg.zig");
 
 const vector = @import("vector.zig");
@@ -12,6 +12,20 @@ const Queue = std.atomic.Queue;
 const com = @import("common.zig");
 
 //TODO Edit api to use vector structs for everything
+
+pub const AutoParseFromEnum = struct {
+    fn getPacketType(comptime protocol_enum: type, comptime value: protocol_enum) type {
+        return @field(protocol_enum.packets, "Type_packet_" ++ @tagName(value));
+    }
+
+    pub fn parseFromEnum(comptime protocol_enum: type, comptime value: protocol_enum, pctx: anytype) !getPacketType(protocol_enum, value) {
+        return try @field(protocol_enum.packets, "Type_packet_" ++ @tagName(value)).parse(pctx);
+    }
+};
+
+test "autoparsefromenum" {
+    _ = AutoParseFromEnum.getPacketType(Proto.Play_Clientbound, .block_action);
+}
 
 const Serv = std.net.Stream.Writer;
 pub const PacketCtx = struct {
@@ -610,6 +624,10 @@ pub fn packetParseCtx(comptime readerT: type) type {
             };
         }
 
+        pub fn parse_position(self: *Self) !vector.V3i {
+            return self.position();
+        }
+
         pub fn v3f(self: *Self) V3f {
             return .{
                 .x = self.float(f64),
@@ -704,6 +722,11 @@ pub fn packetParseCtx(comptime readerT: type) type {
                 .type = btype,
                 .nbt = nbt.entry,
             };
+        }
+
+        pub fn parse_nbt(self: *Self) !nbt_zig.Entry {
+            var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
+            return nbt_data;
         }
 
         pub fn slot(self: *Self) ?Slot {
@@ -1382,8 +1405,8 @@ test "chunk section" {
     try section.mapping.resize(32);
     section.bits_per_entry = 5;
     try section.data.resize(@divTrunc(4096, 12) + 1);
-    std.mem.set(BLOCK_ID_INT, section.mapping.items, 0);
-    std.mem.set(u64, section.data.items, 0);
+    @memset(section.mapping.items, 0);
+    @memset(section.data.items, 0);
 
     try section.setBlock(0, 0, 0, 1);
 }
