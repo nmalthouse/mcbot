@@ -724,9 +724,14 @@ pub fn packetParseCtx(comptime readerT: type) type {
             };
         }
 
-        pub fn parse_nbt(self: *Self) !nbt_zig.Entry {
-            var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
-            return nbt_data;
+        pub fn parse_nbt(self: *Self) !nbt_zig.EntryWithName {
+            const nbt = try nbt_zig.parse(self.alloc, self.reader);
+            //var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
+            return nbt;
+        }
+
+        pub fn parse_slot(self: *Self) !?Slot {
+            return self.slot();
         }
 
         pub fn slot(self: *Self) ?Slot {

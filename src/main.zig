@@ -20,6 +20,7 @@ const math = std.math;
 
 const vector = @import("vector.zig");
 const V3f = vector.V3f;
+const shortV3i = vector.shortV3i;
 const V3i = vector.V3i;
 const V2i = vector.V2i;
 
@@ -306,23 +307,16 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .entity_effect => {
-            const data = parse.auto(PT(&.{
-                P(.varInt, "ent_id"),
-                P(.varInt, "effect_id"),
-                P(.byte, "amplifier"),
-                P(.varInt, "duration_ticks"),
-                P(.byte, "flags"),
-            }));
-            _ = data;
-            //if (data.id == bot1.e_id) {}
+            const d = try Ap(Penum, .entity_effect, &parse);
+            _ = d;
         },
         //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
         .rel_entity_move => {
-            const data = parse.auto(PT(&.{ P(.varInt, "ent_id"), P(.shortV3i, "del"), P(.boolean, "grounded") }));
+            const d = try Ap(Penum, .rel_entity_move, &parse);
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
-            if (world.entities.getPtr(data.ent_id)) |e| {
-                e.pos = vector.deltaPosToV3f(e.pos, data.del);
+            if (world.entities.getPtr(d.entityId)) |e| {
+                e.pos = vector.deltaPosToV3f(e.pos, shortV3i.new(d.dX, d.dY, d.dZ));
             }
         },
         .tile_entity_data => {
@@ -371,9 +365,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .block_change => {
-            const pos = parse.position();
-            const new_id = parse.varInt();
-            try world.chunk_data.setBlock(pos, @as(mc.BLOCK_ID_INT, @intCast(new_id)));
+            const d = try Ap(Penum, .block_change, &parse);
+            try world.chunk_data.setBlock(d.location, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
         },
         .map_chunk => {
             const cx = parse.int(i32);
@@ -499,8 +492,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
         .unload_chunk => {
-            const data = parse.auto(PT(&.{ P(.int, "cx"), P(.int, "cz") }));
-            try world.chunk_data.removeChunkColumn(data.cx, data.cz, bot1.uuid);
+            const d = try Ap(Penum, .unload_chunk, &parse);
+            try world.chunk_data.removeChunkColumn(d.chunkX, d.chunkZ, bot1.uuid);
         },
         //BOT specific packets
         .keep_alive => {
@@ -545,36 +538,28 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .open_window => {
-            const win_id = parse.varInt();
-            const win_type = parse.varInt();
-            bot1.interacted_inventory.win_type = @as(u32, @intCast(win_type));
-            //bot1.interacted_inventory.win_id = win_id;
-            const win_title = try parse.string(null);
-            inv_log.info("open_win: win_id: {d}, win_type: {d}, title: {s}", .{ win_id, win_type, win_title });
+            const d = try Ap(Penum, .open_window, &parse);
+            bot1.interacted_inventory.win_type = @as(u32, @intCast(d.inventoryType));
+            inv_log.info("open_win: win_id: {d}, win_type: {d}, title: {s}", .{ d.windowId, d.inventoryType, d.windowTitle });
         },
         .window_items => {
             inv_log.info("set content packet", .{});
-            const win_id = parse.int(u8);
-            const state_id = parse.varInt();
-            const item_count = @as(u32, @intCast(parse.varInt()));
-            var i: u32 = 0;
-            if (win_id == 0) {
-                while (i < item_count) : (i += 1) {
-                    bot1.container_state = state_id;
-                    const s = parse.slot();
-                    try bot1.inventory.setSlot(i, s);
+            const d = try Ap(Penum, .window_items, &parse);
+            if (d.windowId == 0) {
+                for (d.items, 0..) |it, i| {
+                    bot1.container_state = d.stateId;
+                    try bot1.inventory.setSlot(@intCast(i), it.i_items);
                 }
             } else {
-                try bot1.interacted_inventory.setSize(item_count);
-                bot1.interacted_inventory.win_id = win_id;
-                bot1.container_state = state_id;
+                try bot1.interacted_inventory.setSize(@intCast(d.items.len));
+                bot1.interacted_inventory.win_id = d.windowId;
+                bot1.container_state = d.stateId;
                 const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
-                while (i < item_count) : (i += 1) {
-                    const s = parse.slot();
-                    try bot1.interacted_inventory.setSlot(i, s);
+                for (d.items, 0..) |it, i| {
+                    try bot1.interacted_inventory.setSlot(@intCast(i), it.i_items);
                     const ii: i16 = @intCast(i);
                     if (i >= player_inv_start)
-                        try bot1.inventory.setSlot(@intCast(ii - player_inv_start + 9), s);
+                        try bot1.inventory.setSlot(@intCast(ii - player_inv_start + 9), it.i_items);
                 }
             }
         },

@@ -33,11 +33,11 @@ pub fn main() !void {
         .{ "varint", "i32" },
         .{ "vec3f64", "Vector.V3f" },
         .{ "UUID", "u128" },
-        .{ "slot", "mc.Slot" },
+        .{ "slot", "?mc.Slot" },
         .{ "string", "[]const u8" },
         .{ "position", "Vector.V3i" },
         .{ "restBuffer", "[]const u8" },
-        .{ "nbt", "mc.nbt_zig.Entry" },
+        .{ "nbt", "mc.nbt_zig.EntryWithName" },
         .{ "optionalNbt", em },
         .{ "command_node", em },
         .{ "packedChunkPos", em },
@@ -370,7 +370,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         //};
                     }
                     if (gen_fields)
-                        try parent.fields.append(.{ .name = fname, .type = .{ .compound = child } });
+                        try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
                 },
                 .buffer, .array => {
                     const array_def = getV(a.items[1], .object);

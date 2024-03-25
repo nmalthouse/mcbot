@@ -20,7 +20,7 @@ function loop()
         local po = lms.pos:add(dnorm:smul(i))
         gotoCoord(po)
         for yi = 0, y do
-            interactInv(po:sub(norm):add(Vec3:New(0,yi,0)), {"deposit all category" .. cats[ci], "withdraw 1 category food"})
+            interactInv(po:sub(norm):add(Vec3:New(0,yi,0)), {"deposit all category " .. cats[ci], "withdraw 1 category food"})
             ci = ci + 1
         end
     end
