@@ -77,7 +77,7 @@ pub fn myLogFn(
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
 }
 
-pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16, version_id: u32) !Bot {
+pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16, version_id: i32) !Bot {
     const log = std.log.scoped(.parsing);
     var bot1 = try Bot.init(alloc, bot_name, script_name);
     errdefer bot1.deinit();
@@ -85,7 +85,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     bot1.fd = s.handle;
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc, -1), .server = s.writer(), .mutex = &bot1.fd_mutex };
     defer pctx.packet.deinit();
-    try pctx.handshake(ip, port, version_id);
+    try pctx.setProtocol(ip, port, version_id);
     try pctx.loginStart(bot1.name);
     bot1.connection_state = .login;
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
@@ -104,6 +104,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
             .disconnect => {
                 const reason = try parse.string(null);
                 log.warn("Disconnected: {s}\n", .{reason});
+                return error.disconnectedDuringLogin;
             },
             .compress => {
                 const d = try Proto.Login_Clientbound.packets.Type_packet_compress.parse(&parse);
@@ -498,7 +499,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //BOT specific packets
         .keep_alive => {
             const data = try Proto.Play_Clientbound.packets.Type_packet_keep_alive.parse(&parse);
-            try pctx.keepAlive(data.keepAliveId);
+            //try pctx.keepAlive(data.keepAliveId);
+            try pctx.sendAuto(Proto.Play_Serverbound, .keep_alive, .{ .keepAliveId = data.keepAliveId });
         },
         .login => {
             const d = try CB.Type_packet_login.parse(&parse);

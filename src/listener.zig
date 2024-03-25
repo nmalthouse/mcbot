@@ -46,6 +46,18 @@ pub const PacketCtx = struct {
     server: Serv,
     mutex: *std.Thread.Mutex,
 
+    pub fn sendAuto(
+        self: *@This(),
+        comptime proto_enum: type,
+        comptime value: proto_enum,
+        to_send: AutoParseFromEnum.getPacketType(proto_enum, value),
+    ) !void {
+        try self.packet.clear();
+        try self.packet.packetId(value);
+        try to_send.send(&self.packet);
+        try self.wr();
+    }
+
     pub fn deinit(self: *@This()) void {
         self.packet.deinit();
     }
@@ -55,11 +67,10 @@ pub const PacketCtx = struct {
     }
 
     pub fn useItem(self: *@This(), hand: enum { main, off_hand }, sequence: i32) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.use_item);
-        try self.packet.varInt(@intFromEnum(hand));
-        try self.packet.varInt(sequence);
-        try self.wr();
+        try self.sendAuto(Proto.Play_Serverbound, .use_item, .{
+            .hand = @as(i32, @intFromEnum(hand)),
+            .sequence = sequence,
+        });
     }
 
     pub fn useItemOn(
@@ -73,41 +84,28 @@ pub const PacketCtx = struct {
         head_in_block: bool,
         sequence: i32,
     ) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.block_place);
-        try self.packet.varInt(@intFromEnum(hand));
-        try self.packet.iposition(block_pos);
-        try self.packet.varInt(@intFromEnum(face));
-        try self.packet.float(cx);
-        try self.packet.float(cy);
-        try self.packet.float(cz);
-        try self.packet.boolean(head_in_block);
-        try self.packet.varInt(sequence);
-        try self.wr();
+        try self.sendAuto(Play, .block_place, .{
+            .hand = @as(i32, @intFromEnum(hand)),
+            .location = block_pos,
+            .direction = @as(i32, @intFromEnum(face)),
+            .cursorX = cx,
+            .cursorY = cy,
+            .cursorZ = cz,
+            .insideBlock = head_in_block,
+            .sequence = sequence,
+        });
     }
 
     pub fn pickItem(self: *@This(), sloti: usize) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.pick_item);
-        try self.packet.varInt(@as(i32, @intCast(sloti)));
-
-        //try self.packet.writeToServer(self.server);
-        try self.wr();
+        try self.sendAuto(Play, .pick_item, .{ .slot = @as(i32, @intCast(sloti)) });
     }
 
     pub fn setHeldItem(self: *@This(), index: u8) !void {
-        try self.packet.clear();
-
-        try self.packet.packetId(Play.held_item_slot);
-        try self.packet.short(@as(u16, @intCast(index)));
-        try self.wr();
+        try self.sendAuto(Play, .held_item_slot, .{ .slotId = index });
     }
 
     pub fn closeContainer(self: *@This(), win_id: u8) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.close_window);
-        try self.packet.ubyte(win_id);
-        try self.wr();
+        try self.sendAuto(Play, .close_window, .{ .windowId = win_id });
     }
 
     pub fn clickContainer(
@@ -161,23 +159,21 @@ pub const PacketCtx = struct {
     }
 
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.block_dig); //Packet id
-        try self.packet.varInt(@intFromEnum(status));
-        try self.packet.iposition(block_pos);
-        try self.packet.ubyte(0); //Face of block
-        try self.packet.varInt(0);
-        try self.wr();
+        try self.sendAuto(Proto.Play_Serverbound, .block_dig, .{
+            .status = @as(i32, @intFromEnum(status)),
+            .location = block_pos,
+            .face = 0,
+            .sequence = 0,
+        });
     }
 
-    pub fn handshake(self: *@This(), hostname: []const u8, port: u16, protocol_version: u32) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Proto.Handshake_Serverbound.set_protocol); //Packet id
-        try self.packet.varInt(@intCast(protocol_version)); //Protocol version
-        try self.packet.string(hostname);
-        try self.packet.short(port);
-        try self.packet.varInt(2); //Next state
-        try self.wr();
+    pub fn setProtocol(self: *@This(), hostname: []const u8, port: u16, protocol_version: i32) !void {
+        try self.sendAuto(Proto.Handshake_Serverbound, .set_protocol, .{
+            .protocolVersion = protocol_version,
+            .serverHost = hostname,
+            .serverPort = port,
+            .nextState = 2,
+        });
     }
 
     pub fn clientCommand(self: *@This(), action: u8) !void {
@@ -198,18 +194,14 @@ pub const PacketCtx = struct {
     }
 
     pub fn completeLogin(self: *@This()) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.client_command);
-        try self.packet.varInt(0x0);
-        try self.wr();
+        try self.sendAuto(Play, .client_command, .{ .actionId = 0 });
     }
 
     pub fn loginStart(self: *@This(), username: []const u8) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Proto.Login_Serverbound.login_start); //Packet id
-        try self.packet.string(username);
-        try self.packet.boolean(false); //No uuid
-        try self.wr();
+        try self.sendAuto(Proto.Login_Serverbound, .login_start, .{
+            .username = username,
+            .playerUUID = null,
+        });
     }
 
     pub fn keepAlive(self: *@This(), id: i64) !void {
@@ -256,17 +248,16 @@ pub const PacketCtx = struct {
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
-        try self.packet.clear();
-        try self.packet.packetId(Play.settings); //client info packet
-        try self.packet.string(locale);
-        try self.packet.ubyte(render_dist);
-        try self.packet.varInt(0); //Chat mode, enabled
-        try self.packet.boolean(true); //Chat colors enabled
-        try self.packet.ubyte(0); // what parts are shown of skin
-        try self.packet.varInt(main_hand);
-        try self.packet.boolean(false); //No text filtering
-        try self.packet.boolean(true); //Allow this bot to be listed
-        try self.wr();
+        try self.sendAuto(Proto.Play_Serverbound, .settings, .{
+            .locale = locale,
+            .viewDistance = @as(i8, @intCast(render_dist)),
+            .chatFlags = 0,
+            .chatColors = true,
+            .skinParts = 0,
+            .mainHand = @as(i32, @intCast(main_hand)),
+            .enableTextFiltering = false,
+            .enableServerListing = true,
+        });
     }
 };
 
@@ -341,6 +332,28 @@ pub const Packet = struct {
         _ = try wr.write(val.getSlice());
     }
 
+    pub const send_bool = boolean;
+    pub const send_varint = varInt;
+    pub const send_string = string;
+    pub const send_u16 = short;
+    pub const send_position = iposition;
+    pub const send_u8 = ubyte;
+    pub const send_f32 = float;
+
+    pub fn send_UUID(self: *Self, v: u128) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(u128, v, .Big);
+    }
+
+    pub fn send_i8(self: *Self, v: i8) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(i8, v, .Big);
+    }
+    pub fn send_i16(self: *Self, v: i16) !void {
+        const wr = self.buffer.writer();
+        _ = try wr.writeInt(i16, v, .Big);
+    }
+
     pub fn iposition(self: *Self, v: vector.V3i) !void {
         try self.long((@as(i64, v.x & 0x3FFFFFF) << 38) | ((v.z & 0x3FFFFFF) << 12) | (v.y & 0xFFF));
     }
@@ -383,6 +396,14 @@ pub const Packet = struct {
     pub fn short(self: *Self, val: u16) !void {
         const wr = self.buffer.writer();
         _ = try wr.writeInt(u16, val, .Big);
+    }
+
+    pub fn send_i32(self: *Self, val: i32) !void {
+        _ = try self.buffer.writer().writeInt(i32, val, .Big);
+    }
+
+    pub fn send_i64(self: *Self, val: i64) !void {
+        _ = try self.buffer.writer().writeInt(i64, val, .Big);
     }
 
     pub fn writeToServer(self: *Self, server: std.net.Stream.Writer, mutex: *std.Thread.Mutex) !void {

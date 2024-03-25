@@ -82,7 +82,7 @@ pub const StateId = u16;
 
 const VersionJson = struct {
     minecraftVersion: []const u8,
-    version: u32,
+    version: i32,
     majorVersion: []const u8,
 };
 
@@ -347,7 +347,7 @@ pub const DataReg = struct {
 
     alloc: std.mem.Allocator,
     item_categories: ItemCategories,
-    version_id: u32,
+    version_id: i32,
     item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[]. name strings are stored in items[]
     items: []Item,
     foods: []Food,
