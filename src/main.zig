@@ -519,23 +519,20 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             try pctx.setHeldItem(bot1.selected_slot);
         },
         .set_slot => {
-            const win_id = parse.int(u8);
-            const state_id = parse.varInt();
-            const slot_i = parse.int(i16);
-            const data = parse.slot();
-            inv_log.info("set_slot: win_id: {d}, state: {d}: slot_i: {d}, data: {any}", .{ win_id, state_id, slot_i, data });
-            if (win_id == -1 and slot_i == -1) {
-                bot1.held_item = data;
-            } else if (win_id == 0) {
-                bot1.container_state = state_id;
-                try bot1.inventory.setSlot(@intCast(slot_i), data);
-            } else if (bot1.interacted_inventory.win_id != null and win_id == bot1.interacted_inventory.win_id.?) {
-                bot1.container_state = state_id;
-                try bot1.interacted_inventory.setSlot(@intCast(slot_i), data);
+            const d = try Ap(Penum, .set_slot, &parse);
+            inv_log.info("set_slot: win_id: data: {any}", .{d});
+            if (d.windowId == -1 and d.slot == -1) {
+                bot1.held_item = d.item;
+            } else if (d.windowId == 0) {
+                bot1.container_state = d.stateId;
+                try bot1.inventory.setSlot(@intCast(d.slot), d.item);
+            } else if (bot1.interacted_inventory.win_id != null and d.windowId == bot1.interacted_inventory.win_id.?) {
+                bot1.container_state = d.stateId;
+                try bot1.interacted_inventory.setSlot(@intCast(d.slot), d.item);
 
                 const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
-                if (slot_i >= player_inv_start)
-                    try bot1.inventory.setSlot(@intCast(slot_i - player_inv_start + 9), data);
+                if (d.slot >= player_inv_start)
+                    try bot1.inventory.setSlot(@intCast(d.slot - player_inv_start + 9), d.item);
             }
         },
         .open_window => {
@@ -596,9 +593,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //TODO use this to advance to next break_block item
         },
         .update_health => {
-            bot1.health = parse.float(f32);
-            bot1.food = @as(u8, @intCast(parse.varInt()));
-            bot1.food_saturation = parse.float(f32);
+            const d = try Ap(Penum, .update_health, &parse);
+            bot1.health = d.health;
+            bot1.food = @as(u8, @intCast(d.food));
+            bot1.food_saturation = d.foodSaturation;
         },
         .tags => {
             if (!world.has_tag_table) {
@@ -661,7 +659,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         else => {
-            //std.debug.print("Packet {s}\n", .{id_list.packet_ids[@intCast(u32, pid)]});
+            //std.debug.print("Packet {s}\n", .{@tagName(penum)});
         },
     }
 }
