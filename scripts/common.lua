@@ -74,13 +74,14 @@ function Vec3:sub(b)
 end
 Vec3:new() --For some reason I have to call this otherwise zig -> lua can't see Vec3 methods
 
-function handleHunger()
+function handleHunger(chest_name)
+    local ch = chest_name or "food"
     local food_amount = itemCount("category food")
     if food_amount < 10 then
         local pos = getPosition()
-        gotoLandmark("food")
+        gotoLandmark(ch)
         while food_amount < 10 do
-            interactChest("food_chest", {"withdraw 1 category food"})
+            interactChest(ch .. "_chest", {"withdraw 1 category food"})
             food_amount = itemCount("category food")
         end
         gotoCoord(pos)

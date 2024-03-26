@@ -1,3 +1,4 @@
 function loop()
-    sleepms(100)
+    sleepms(1000)
 end
+

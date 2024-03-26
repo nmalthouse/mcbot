@@ -245,7 +245,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             log.info("{s}: {s}", .{ @tagName(penum), d.channel });
 
             try pctx.pluginMessage("tony:brand");
-            try pctx.clientInfo("en_US", bot1.view_dist, 1);
+            try pctx.clientInfo("en_US", 6, 1);
         },
         .difficulty => {
             const d = try CB.Type_packet_difficulty.parse(&parse);
@@ -309,6 +309,12 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .entity_effect => {
             const d = try Ap(Penum, .entity_effect, &parse);
             _ = d;
+        },
+        .update_time => {
+            const d = try Ap(Penum, .update_time, &parse);
+            world.modify_mutex.lock();
+            defer world.modify_mutex.unlock();
+            world.time = d.time;
         },
         //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
         .rel_entity_move => {
@@ -411,7 +417,12 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                             var i: u32 = 0;
                             while (i < num_pal_entry) : (i += 1) {
                                 const mapping = mc.readVarInt(cr);
-                                try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
+                                if (mapping > std.math.maxInt(mc.BLOCK_ID_INT)) {
+                                    std.debug.print("CORRUPT BLOCK\n", .{});
+                                    try chunk_section.mapping.append(0);
+                                } else {
+                                    try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
+                                }
                             }
                         }
 
@@ -829,6 +840,15 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub export fn getMcTime(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.world.modify_mutex.lock();
+            defer self.world.modify_mutex.unlock();
+
+            Lua.pushV(L, self.world.time);
+            return 1;
+        }
+
         pub export fn directionToVec(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -1051,6 +1071,12 @@ pub const LuaApi = struct {
                 errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
                 errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(found.index)) } })) orelse return 0;
                 self.thread_data.setActions(actions, pos);
+            } else {
+                if (eql(u8, "use", item_name)) {
+                    var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
+                    errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
+                    self.thread_data.setActions(actions, pos);
+                }
             }
             return 0;
         }

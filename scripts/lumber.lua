@@ -9,6 +9,12 @@ function chop_loop()
         end
     end
 
+    if itemCount("item birch_sapling") < 10 then
+        gotoLandmark("junk")
+        interactChest("junk_chest", {"withdraw 1 item birch_sapling"})
+    end
+
+
     if chopNearestTree() then
         local pos = getPosition()
         placeBlock(pos, "birch_sapling")
@@ -45,7 +51,25 @@ function chop_loop()
 end
 
 function onYield()
-    handleHunger()
+    handleSleep()
+    handleHunger("$food")
+end
+
+function handleSleep()
+    local sleep_time = 12542
+    local time = getMcTime() % 24000
+
+    if time > sleep_time then
+        local old_pos = getPosition()
+        local bl = gotoLandmark("bed")
+        local bed_block = bl.pos:sub(directionToVec(bl.facing))
+        placeBlock(bed_block, "use")
+
+        while getMcTime() % 24000  > sleep_time do
+            sleepms(1000)
+        end
+        gotoCoord(old_pos)
+    end
 end
 
 function loop()

@@ -40,6 +40,7 @@ pub const McWorld = struct {
         pos: vector.V3i,
         facing: Reg.Direction,
     };
+    modify_mutex: std.Thread.Mutex = .{},
 
     chunk_data: mc.ChunkMap,
 
@@ -52,6 +53,8 @@ pub const McWorld = struct {
 
     mine_index: u8 = 1,
     mine_mutex: std.Thread.Mutex = .{},
+
+    time: i64 = 0,
 
     bot_reload_mutex: std.Thread.Mutex = .{},
     reload_bot_id: ?i32 = null,
