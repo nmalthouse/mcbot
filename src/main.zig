@@ -142,7 +142,8 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 }
 
                 bot1.uuid = uuid;
-                bot1.connection_state = .play;
+                bot1.connection_state = .configuration;
+                try pctx.sendAuto(Proto.Login_Serverbound, .login_acknowledged, .{});
             },
             .login_plugin_request => {
                 const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);
@@ -233,9 +234,95 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bot1.compression_threshold), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
     //defer pctx.packet.deinit();
 
+    const Ap = mc.AutoParseFromEnum.parseFromEnum;
+    if (bot1.connection_state == .configuration) {
+        const Pen = Proto.Config_Clientbound;
+        const pen = @as(Proto.Config_Clientbound, @enumFromInt(pid));
+        switch (pen) {
+            .disconnect => {
+                const d = try Ap(Pen, .disconnect, &parse);
+
+                log.warn("Disconnected during config: {any}\n", .{d.reason});
+                return error.disconnectedDuringConfig;
+            },
+            .feature_flags => {
+                const d = try Ap(Pen, .feature_flags, &parse);
+                log.info("Feature_Flags:", .{});
+
+                for (d.features) |f|
+                    log.info("\t{s}", .{f.i_features});
+            },
+            .custom_payload => {
+                const d = try Ap(Pen, .custom_payload, &parse);
+                log.info("Payload: {s}: {s}", .{ d.channel, d.data });
+                try pctx.sendAuto(Proto.Config_Serverbound, .settings, .{
+                    .locale = "en_US",
+                    .viewDistance = @as(i8, 6),
+                    .chatFlags = 0,
+                    .chatColors = true,
+                    .skinParts = 0,
+                    .mainHand = @as(i32, 0),
+                    .enableTextFiltering = false,
+                    .enableServerListing = true,
+                });
+            },
+            .registry_data => {
+                std.debug.print("REG PCAKTEU\n", .{});
+                const nbt = try parse.parse_anonymousNbt();
+                //const d = try Ap(Pen, .registry_data, &parse);
+                std.debug.print("Reg data {any}\n", .{nbt});
+            },
+            .tags => {
+                if (!world.has_tag_table) {
+                    world.has_tag_table = true;
+
+                    //TODO Does this packet replace all the tags or does it append to an existing
+                    const num_tags = parse.varInt();
+
+                    var n: u32 = 0;
+                    while (n < num_tags) : (n += 1) {
+                        const identifier = try parse.string(null);
+                        { //TAG
+                            const n_tags = parse.varInt();
+                            var nj: u32 = 0;
+
+                            while (nj < n_tags) : (nj += 1) {
+                                const ident = try parse.string(null);
+                                const num_ids = parse.varInt();
+
+                                var ids = std.ArrayList(u32).init(alloc);
+                                defer ids.deinit();
+                                try ids.resize(@as(usize, @intCast(num_ids)));
+                                var ni: u32 = 0;
+                                while (ni < num_ids) : (ni += 1)
+                                    ids.items[ni] = @as(u32, @intCast(parse.varInt()));
+                                //std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
+                                try world.tag_table.addTag(identifier, ident, ids.items);
+                            }
+                        }
+                    }
+                    log.info("Tags added {d} namespaces", .{num_tags});
+                }
+            },
+            .finish_configuration => {
+                try pctx.sendAuto(Proto.Config_Serverbound, .finish_configuration, .{});
+                bot1.connection_state = .play;
+                if (true)
+                    std.process.exit(0);
+            },
+            .keep_alive => {
+                const data = try Ap(Pen, .keep_alive, &parse);
+                try pctx.sendAuto(Proto.Config_Serverbound, .keep_alive, .{ .keepAliveId = data.keepAliveId });
+            },
+            else => {
+                std.debug.print("Unhandled configuration packet: {s}\n", .{@tagName(pen)});
+            },
+        }
+        return;
+    }
+
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;
-    const Ap = mc.AutoParseFromEnum.parseFromEnum;
     const Penum = Proto.Play_Clientbound;
     const penum = @as(Proto.Play_Clientbound, @enumFromInt(pid));
     switch (penum) {
@@ -254,23 +341,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .abilities => {
             const d = try CB.Type_packet_abilities.parse(&parse);
             log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
-        },
-        .feature_flags => {
-            const d = try CB.Type_packet_feature_flags.parse(&parse);
-            log.info("Feature_Flags:", .{});
-
-            for (d.features) |f|
-                log.info("\t{s}", .{f.i_features});
-        },
-        .named_entity_spawn => {
-            const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
-            try world.putEntity(data.entityId, .{
-                .kind = .@"minecraft:player",
-                .uuid = data.playerUUID,
-                .pos = V3f.new(data.x, data.y, data.z),
-                .pitch = data.pitch,
-                .yaw = data.yaw,
-            });
         },
         .spawn_entity => {
             const data = try CB.Type_packet_spawn_entity.parse(&parse);
@@ -305,10 +375,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
             }
-        },
-        .entity_effect => {
-            const d = try Ap(Penum, .entity_effect, &parse);
-            _ = d;
         },
         //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
         .rel_entity_move => {
@@ -368,9 +434,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const d = try Ap(Penum, .block_change, &parse);
             try world.chunk_data.setBlock(d.location, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
         },
+        .chunk_batch_start => {
+            std.debug.print("BATCH STARTED\n", .{});
+        },
+        .chunk_batch_finished => {
+            const d = try Ap(Penum, .chunk_batch_finished, &parse);
+            std.debug.print("BATCH END {d}\n", .{d.batchSize});
+        },
         .map_chunk => {
             const cx = parse.int(i32);
             const cy = parse.int(i32);
+            std.debug.print("Recieving chunk at {d} {d}, {d} {d}\n", .{ cx, cy, cx * 16, cy * 16 });
             if (!try world.chunk_data.tryOwn(cx, cy, bot1.uuid)) {
                 //TODO keep track of owners better
                 return;
@@ -378,6 +452,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
             var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
             _ = nbt_data;
+            std.debug.print("have nbt\n", .{});
             const data_size = parse.varInt();
             var chunk_data = std.ArrayList(u8).init(alloc);
             defer chunk_data.deinit();
@@ -446,6 +521,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 }
             }
 
+            std.debug.print("Inserted chunk column\n", .{});
             try world.chunk_data.insertChunkColumn(cx, cy, chunk);
 
             const num_block_ent = parse.varInt();
@@ -507,7 +583,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .death_combat_event => {
             const d = try CB.Type_packet_death_combat_event.parse(&parse);
-            log.warn("Combat death, id: {d}, killer_id: {d}, msg: {s}", .{ d.playerId, d.entityId, d.message });
+            log.warn("Combat death, id: {d}, msg: {any}", .{ d.playerId, d.message });
             try pctx.clientCommand(0);
         },
         .kick_disconnect => {

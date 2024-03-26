@@ -186,7 +186,7 @@ pub const PacketCtx = struct {
     pub fn loginStart(self: *@This(), username: []const u8) !void {
         try self.sendAuto(Proto.Login_Serverbound, .login_start, .{
             .username = username,
-            .playerUUID = null,
+            .playerUUID = 0,
         });
     }
 
@@ -726,6 +726,11 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const nbt = try nbt_zig.parse(self.alloc, self.reader);
             //var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
             return nbt;
+        }
+
+        pub fn parse_anonymousNbt(self: *Self) !nbt_zig.Entry {
+            var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
+            return nbt_data;
         }
 
         pub fn parse_slot(self: *Self) !?Slot {
