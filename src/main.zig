@@ -1728,7 +1728,7 @@ pub fn basicPathfindThread(
     std.debug.print("PATHFIND FINISHED\n", .{});
 }
 
-fn drawTextCube(win: *graph.SDL.Window, gctx: *graph.NewCtx, cmatrix: graph.za.Mat4, cubes: *graph.Cubes, pos: V3f, tr: graph.Rect, text: []const u8, font: *graph.Font) !void {
+fn drawTextCube(win: *graph.SDL.Window, gctx: *graph.ImmediateDrawingContext, cmatrix: graph.za.Mat4, cubes: *graph.Cubes, pos: V3f, tr: graph.Rect, text: []const u8, font: *graph.Font) !void {
     _ = cubes;
     _ = tr;
     //try cubes.cubeVec(pos, .{ .x = 0.5, .y = 0.5, .z = 0.5 }, tr);
@@ -1759,8 +1759,6 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
     var win = try graph.SDL.Window.createWindow("Debug mcbot Window", .{});
     defer win.destroyWindow();
-    var ctx = try graph.GraphicsContext.init(alloc, 163);
-    defer ctx.deinit();
 
     const mc_atlas = try mcBlockAtlas.buildAtlasGeneric(
         alloc,
@@ -1827,14 +1825,13 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
     var draw_nodes: bool = false;
 
-    var cubes = graph.Cubes.init(alloc, mc_atlas.texture, ctx.tex_shad);
-    defer cubes.deinit();
-
     const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
     const grass_block_id = world.reg.getBlockFromName("grass_block");
 
-    var gctx = graph.NewCtx.init(alloc, 123);
+    var gctx = graph.ImmediateDrawingContext.init(alloc, 123);
     defer gctx.deinit();
+    var cubes = graph.Cubes.init(alloc, mc_atlas.texture, gctx.textured_tri_3d_shader);
+    defer cubes.deinit();
 
     var astar_ctx_mutex: std.Thread.Mutex = .{};
     var astar_ctx = astar.AStarContext.init(alloc, world);
@@ -1862,7 +1859,16 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         try cubes.indicies.resize(0);
         try cubes.vertices.resize(0);
         win.pumpEvents();
-        camera.update(&win);
+        camera.updateDebugMove(.{
+            .down = win.keydown(.LSHIFT),
+            .up = win.keydown(.SPACE),
+            .left = win.keydown(.A),
+            .right = win.keydown(.D),
+            .fwd = win.keydown(.W),
+            .bwd = win.keydown(.S),
+            .mouse_delta = win.mouse.delta,
+            .scroll_delta = win.mouse.wheel_delta.y,
+        });
         const cmatrix = camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000);
 
         for (win.keys.slice()) |key| {
@@ -2036,7 +2042,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 }
                 const vz = try vx.value_ptr.getOrPut(item.y);
                 if (!vz.found_existing) {
-                    vz.value_ptr.cubes = graph.Cubes.init(alloc, mc_atlas.texture, ctx.tex_shad);
+                    vz.value_ptr.cubes = graph.Cubes.init(alloc, mc_atlas.texture, gctx.textured_tri_3d_shader);
                 } else {
                     try vz.value_ptr.cubes.indicies.resize(0);
                     try vz.value_ptr.cubes.vertices.resize(0);
@@ -2169,13 +2175,13 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             const area = graph.Rec(0, 0, @divTrunc(win.screen_dimensions.x, 3), @divTrunc(win.screen_dimensions.x, 3));
             const sx = area.w / @as(f32, @floatFromInt(invtex.w));
             const sy = area.h / @as(f32, @floatFromInt(invtex.h));
-            gctx.rectTex(area, invtex.rect(), 0xffffffff, invtex);
+            gctx.rectTex(area, invtex.rect(), invtex);
             for (bot1.inventory.slots.items, 0..) |slot, i| {
                 const rr = inv_map.value.default[i];
                 const rect = graph.Rec(area.x + rr[0] * sx, area.y + rr[1] * sy, 16 * sx, 16 * sy);
                 if (slot) |s| {
                     if (item_atlas.getTextureRecO(s.item_id)) |tr| {
-                        gctx.rectTex(rect, tr, 0xffffffff, item_atlas.texture);
+                        gctx.rectTex(rect, tr, item_atlas.texture);
                     } else {
                         const item = world.reg.getItem(s.item_id);
                         gctx.text(rect.pos(), item.name, &font, 14, 0xff);
@@ -2228,7 +2234,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 }
 
 fn drawInventory(
-    gctx: *graph.NewCtx,
+    gctx: *graph.ImmediateDrawingContext,
     item_atlas: *const mcBlockAtlas.McAtlas,
     reg: *const Reg.DataReg,
     font: *graph.Font,
@@ -2250,7 +2256,7 @@ fn drawInventory(
         gctx.rect(rr, 0xffffffff);
         if (slot) |s| {
             if (item_atlas.getTextureRecO(s.item_id)) |tr| {
-                gctx.rectTex(rr, tr, 0xffffffff, item_atlas.texture);
+                gctx.rectTex(rr, tr, item_atlas.texture);
             } else {
                 const item = reg.getItem(s.item_id);
                 gctx.text(rr.pos(), item.name, font, 12, 0xff);
