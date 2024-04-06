@@ -397,34 +397,41 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const cr = chunk_fbs.reader();
             while (chunk_i < mc.NUM_CHUNK_SECTION) : (chunk_i += 1) {
                 const block_count = try cr.readInt(i16, .Big);
-                _ = block_count;
                 const chunk_section = &chunk.sections[chunk_i];
 
                 { //BLOCK STATES palated container
                     const bp_entry = try cr.readInt(u8, .Big);
                     if (bp_entry > 15) {
                         std.debug.print("IMPOSSIBLE BPE {d} [{d},{d}, {d}]\n", .{ bp_entry, cx, @as(i64, @intCast(chunk_i * 16)) - 64, cy });
+                        std.debug.print("Info block_count {d}\n", .{block_count});
                         chunk.deinit();
                         return;
                     }
                     {
-                        if (bp_entry == 0) {
-                            try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mc.readVarInt(cr))));
-                        } else {
-                            const num_pal_entry = mc.readVarInt(cr);
-                            chunk_section.bits_per_entry = bp_entry;
+                        chunk_section.bits_per_entry = bp_entry;
+                        chunk_section.palatte_t = if (bp_entry > 8) .direct else .map;
+                        switch (bp_entry) {
+                            0 => try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mc.readVarInt(cr)))),
+                            4...8 => {
+                                const num_pal_entry = mc.readVarInt(cr);
 
-                            var i: u32 = 0;
-                            while (i < num_pal_entry) : (i += 1) {
-                                const mapping = mc.readVarInt(cr);
-                                if (mapping > std.math.maxInt(mc.BLOCK_ID_INT)) {
-                                    std.debug.print("CORRUPT BLOCK\n", .{});
-                                    chunk.deinit();
-                                    return;
-                                } else {
-                                    try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
+                                var i: u32 = 0;
+                                while (i < num_pal_entry) : (i += 1) {
+                                    const mapping = mc.readVarInt(cr);
+                                    if (mapping > std.math.maxInt(mc.BLOCK_ID_INT)) {
+                                        std.debug.print("CORRUPT BLOCK\n", .{});
+                                        chunk.deinit();
+                                        return;
+                                    } else {
+                                        try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
+                                    }
                                 }
-                            }
+                            },
+                            else => {
+                                //std.debug.print("Can't handle this many bpe {d}\n", .{bp_entry});
+                                //chunk.deinit();
+                                //return;
+                            }, // Direct indexing
                         }
 
                         const num_longs = mc.readVarInt(cr);

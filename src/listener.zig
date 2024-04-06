@@ -1292,6 +1292,7 @@ pub const ChunkSection = struct {
     mapping: std.ArrayList(BLOCK_ID_INT),
     data: std.ArrayList(u64),
     bits_per_entry: u8,
+    palatte_t: enum { direct, map } = .map,
 
     pub fn init(alloc: std.mem.Allocator) Self {
         return .{ .mapping = std.ArrayList(BLOCK_ID_INT).init(alloc), .data = std.ArrayList(u64).init(alloc), .bits_per_entry = 0 };
@@ -1320,7 +1321,13 @@ pub const ChunkSection = struct {
         const shift_index = @rem(i, blocks_per_long);
 
         const id = (self.data.items[data_index] >> @as(u6, @intCast(shift_index * self.bits_per_entry))) & getBitMask(self.bits_per_entry);
-        return .{ .block = self.mapping.items[id], .pos = V3i.new(@as(i32, @intCast(i & 0xf)), @as(i32, @intCast(i >> 8)), @as(i32, @intCast(i >> 4)) & 0xf) };
+        return .{
+            .block = switch (self.palatte_t) {
+                .map => self.mapping.items[id],
+                .direct => @intCast(id),
+            },
+            .pos = V3i.new(@as(i32, @intCast(i & 0xf)), @as(i32, @intCast(i >> 8)), @as(i32, @intCast(i >> 4)) & 0xf),
+        };
     }
 
     //This function sets the data array to whatever index is mapped to id,
@@ -1335,8 +1342,7 @@ pub const ChunkSection = struct {
 
     //TODO Modify all relevent functions to support direct indexing for bits_per_entry > 8
     pub fn setBlock(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) !void {
-        if (self.hasMapping(id)) { //No need to update just set relevent data
-            self.setData(rx, ry, rz, id);
+        if (self.hasMapping(id) or self.palatte_t == .direct) { //No need to update just set relevent data
         } else {
             const max_mapping = std.math.pow(BLOCK_ID_INT, 2, self.bits_per_entry);
             if (max_mapping < self.mapping.items.len + 1) {
@@ -1374,24 +1380,24 @@ pub const ChunkSection = struct {
                     }
                 }
 
-                try self.mapping.append(id);
                 self.data.deinit();
                 self.data = new_data;
                 self.bits_per_entry = @as(u8, @intCast(new_bpe));
-                self.setData(rx, ry, rz, id);
-            } else {
-                try self.mapping.append(id);
-                self.setData(rx, ry, rz, id);
             }
+            try self.mapping.append(id);
         }
+        self.setData(rx, ry, rz, id);
     }
 
     pub fn hasMapping(self: *Self, id: BLOCK_ID_INT) bool {
         return (std.mem.indexOfScalar(BLOCK_ID_INT, self.mapping.items, id) != null);
     }
 
-    pub fn getMapping(self: *Self, id: BLOCK_ID_INT) ?usize {
-        return std.mem.indexOfScalar(BLOCK_ID_INT, self.mapping.items, id);
+    pub fn getMapping(self: *const Self, id: BLOCK_ID_INT) ?BLOCK_ID_INT {
+        return switch (self.palatte_t) {
+            .map => @intCast(std.mem.indexOfScalar(BLOCK_ID_INT, self.mapping.items, id) orelse return null),
+            .direct => id,
+        };
     }
 
     pub fn deinit(self: *Self) void {
