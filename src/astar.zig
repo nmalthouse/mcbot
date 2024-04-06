@@ -7,6 +7,7 @@ const McWorld = mcTypes.McWorld;
 const Vector = @import("vector.zig");
 const V3f = Vector.V3f;
 const V3i = Vector.V3i;
+const ITERATION_LIMIT = 10000;
 
 //TODO move to vector class
 pub const V2i = struct {
@@ -41,6 +42,25 @@ const ADJ_COST = [8]u32{
 pub const AStarContext = struct {
     const Self = @This();
     pub const Node = struct {
+        pub const HashPos = struct {
+            x: i32,
+            y: i32,
+            z: i32,
+
+            pub fn eql(ctx: HashPos, a: @This(), b: @This()) bool {
+                _ = ctx;
+                return a.x == b.x and a.y == b.y and a.z == b.z;
+            }
+
+            pub fn hash(ctx: HashPos, a: @This()) u64 {
+                _ = ctx;
+                var hasher = std.hash.Wyhash.init(0);
+                std.hash.autoHashStrat(hasher, a.x, .Shallow);
+                std.hash.autoHashStrat(hasher, a.y, .Shallow);
+                std.hash.autoHashStrat(hasher, a.z, .Shallow);
+                return hasher.final();
+            }
+        };
         pub const Ntype = enum {
             freemove,
             blocked,
@@ -60,6 +80,12 @@ pub const AStarContext = struct {
         z: i32,
 
         ntype: Ntype = .walk,
+
+        pub fn compare(ctx: void, a: *Node, b: *Node) std.math.Order {
+            _ = ctx;
+            const fac = 20;
+            return std.math.order(a.G + a.H * fac, b.G + b.H * fac);
+        }
     };
 
     pub const PlayerActionItem = union(enum) {
@@ -149,35 +175,47 @@ pub const AStarContext = struct {
     pub const BlockColumn = struct {
         col: u8,
     };
+    const QType = std.PriorityQueue(*Node, void, Node.compare);
+    //const ClosedType = std.HashMap(*Node, void, Node, std.hash_map.default_max_load_percentage);
+    const ClosedType = std.AutoHashMap(Node.HashPos, *Node);
 
     alloc: std.mem.Allocator,
     world: *McWorld,
 
-    open: std.ArrayList(*Node),
-    closed: std.ArrayList(*Node),
+    openq: QType,
+    //open: std.ArrayList(*Node),
+    //closed: std.ArrayList(*Node),
+    closed: ClosedType,
 
     pub fn init(alloc: std.mem.Allocator, world: *McWorld) Self {
         return Self{
-            .open = std.ArrayList(*Node).init(alloc),
-            .closed = std.ArrayList(*Node).init(alloc),
+            .openq = QType.init(alloc, {}),
+            .closed = ClosedType.init(alloc),
+            //.open = std.ArrayList(*Node).init(alloc),
+            //.closed = std.ArrayList(*Node).init(alloc),
             .world = world,
             .alloc = alloc,
         };
     }
 
     pub fn reset(self: *Self) !void {
-        for (self.closed.items) |cl|
+        var cit = self.closed.valueIterator();
+        while (cit.next()) |cl|
+            self.closed.allocator.destroy(cl.*);
+        var it = self.openq.iterator();
+        while (it.next()) |cl|
             self.closed.allocator.destroy(cl);
-        for (self.open.items) |cl|
-            self.closed.allocator.destroy(cl);
-        try self.open.resize(0);
-        try self.closed.resize(0);
+        //try self.open.resize(0);
+        self.closed.clearRetainingCapacity();
+        self.openq.deinit();
+        self.openq = QType.init(self.closed.allocator, {});
     }
 
     pub fn deinit(self: *Self) void {
         self.reset() catch unreachable;
-        self.open.deinit();
+        //self.open.deinit();
         self.closed.deinit();
+        self.openq.deinit();
     }
 
     pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId) !?std.ArrayList(V3i) {
@@ -204,10 +242,11 @@ pub const AStarContext = struct {
                     }
                 }
             }
-            if (self.open.items.len == 0) {
+            if (self.openq.len == 0) {
                 var tiles = std.ArrayList(V3i).init(self.alloc);
-                for (self.closed.items) |p| {
-                    try tiles.append(V3i.new(p.x, p.y, p.z));
+                var cit = self.closed.valueIterator();
+                while (cit.next()) |p| {
+                    try tiles.append(V3i.new(p.*.x, p.*.y, p.*.z));
                 }
                 return tiles;
             }
@@ -223,7 +262,6 @@ pub const AStarContext = struct {
             .z = @as(i32, @intFromFloat(@floor(start.z))),
         });
 
-        const ITERATION_LIMIT = 3000;
         var iter_count: usize = 0;
         while (iter_count < ITERATION_LIMIT) : (iter_count += 1) {
             const current_n = self.popLowestFOpen() orelse break;
@@ -301,7 +339,6 @@ pub const AStarContext = struct {
         const gpz = @as(i32, @intFromFloat(@round(goal.z)));
 
         var i: u32 = 0;
-        const ITERATION_LIMIT = 3000;
         while (i < ITERATION_LIMIT) : (i += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
@@ -372,63 +409,39 @@ pub const AStarContext = struct {
     pub fn addNode(self: *Self, node: Node, parent: *Node) !void {
         var new_node = node;
         var is_on_closed = false;
-        for (self.closed.items) |cl| {
-            if (cl.x == new_node.x and cl.y == new_node.y and cl.z == new_node.z) {
-                is_on_closed = true;
-                //std.debug.print("CLOSED\n", .{});
-                break;
-            }
+        if (self.closed.get(.{ .x = node.x, .y = node.y, .z = node.z }) != null) {
+            return;
         }
         new_node.parent = parent;
         if (!is_on_closed) {
-            var old_open: ?*AStarContext.Node = null;
-            for (self.open.items) |op| {
+            var it = self.openq.iterator();
+            while (it.next()) |op| {
                 if (op.x == new_node.x and op.y == new_node.y and op.z == new_node.z) {
-                    old_open = op;
+                    if (new_node.G < op.G) { //Destroy old node
+                        self.closed.allocator.destroy(self.openq.removeIndex(it.count - 1));
+                    } else { //Discard new node, already exists with lower G
+                        return;
+                    }
                     //std.debug.print("EXISTS BEFORE\n", .{});
-                    break;
                 }
             }
 
-            if (old_open) |op| {
-                //TODO is it correct to fully replace the node?
-                if (new_node.G < op.G) {
-                    op.* = new_node;
-                }
-                //if (new_node.G < op.G) {
-                //    op.parent = parent;
-                //    op.G = new_node.G;
-                //}
-            } else {
-                try self.addOpen(new_node);
-            }
+            try self.addOpen(new_node);
         }
     }
 
     pub fn addOpen(self: *Self, node: Node) !void {
-        const new_node = try self.open.allocator.create(Node);
+        const new_node = try self.openq.allocator.create(Node);
         new_node.* = node;
-        try self.open.append(new_node);
+        try self.openq.add(new_node);
     }
 
     pub fn popLowestFOpen(self: *Self) ?*Node {
-        var lowest: u32 = std.math.maxInt(u32);
-        var lowest_index: ?usize = null;
-        for (self.open.items, 0..) |node, i| {
-            const fac = 20;
-            if (node.G + (node.H * fac) < lowest) {
-                lowest = node.G + (node.H * fac);
-                lowest_index = i;
-            }
-        }
-
-        if (lowest_index) |ind| {
-            const n = self.open.swapRemove(ind);
-            self.closed.append(n) catch unreachable;
-            return n;
-        } else {
-            return null;
-        }
+        const lowest = self.openq.removeOrNull();
+        if (lowest) |l|
+            self.closed.put(.{ .x = l.x, .y = l.y, .z = l.z }, l) catch unreachable;
+        //self.closed.append(l) catch unreachable;
+        return lowest;
     }
 
     pub fn addAdjNodes(self: *Self, node: *Node, goal: V3f, override_h: ?u32) !void {

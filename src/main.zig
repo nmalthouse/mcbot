@@ -419,7 +419,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                 const mapping = mc.readVarInt(cr);
                                 if (mapping > std.math.maxInt(mc.BLOCK_ID_INT)) {
                                     std.debug.print("CORRUPT BLOCK\n", .{});
-                                    try chunk_section.mapping.append(0);
+                                    chunk.deinit();
+                                    return;
                                 } else {
                                     try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
                                 }
@@ -1704,11 +1705,13 @@ pub fn basicPathfindThread(
     var pathctx = astar.AStarContext.init(alloc, world);
     errdefer pathctx.deinit();
 
+    //const found = try pathctx.findTree(start, 0, 0);
     const found = try pathctx.pathfind(start, goal);
     if (found) |*actions| {
         const player_actions = actions;
         for (player_actions.items) |pitem| {
-            std.debug.print("action: {any}\n", .{pitem});
+            _ = pitem;
+            //std.debug.print("action: {any}\n", .{pitem});
         }
 
         const botp = world.bots.getPtr(bot_handle) orelse return error.invalidBotHandle;
@@ -1898,7 +1901,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         }
 
         if (draw_nodes and astar_ctx_mutex.tryLock()) {
-            for (astar_ctx.open.items) |item| {
+            var it = astar_ctx.openq.iterator();
+            while (it.next()) |item| {
                 try cubes.cube(
                     @as(f32, @floatFromInt(item.x)),
                     @as(f32, @floatFromInt(item.y)),
@@ -1910,7 +1914,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
                 );
             }
-            for (astar_ctx.closed.items) |item| {
+            var cit = astar_ctx.closed.valueIterator();
+            while (cit.next()) |itemp| {
+                const item = itemp.*;
                 const vv = V3f.newi(item.x, item.y, item.z);
                 try cubes.cube(
                     @as(f32, @floatFromInt(item.x)),
