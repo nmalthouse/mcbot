@@ -4,6 +4,7 @@ Linux only because of epoll() usage, can easily be changed
 [Lua API documentation](lua_doc.md)
 
 ## Running:
+        # Install zig version 0.12.0
         # make sure you have the following libraries installed system-wide:
         # libepoxy
         # sdl2
@@ -11,8 +12,6 @@ Linux only because of epoll() usage, can easily be changed
         # 
         # Setup a 1.19.4 Minecraft server and ensure the following is set in server.properties:
         # online-mode=false
-        # 
-        # compression is supported but unstable
 
         git clone https://github.com/nmalthouse/mcbot.git
         cd mcbot

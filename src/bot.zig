@@ -130,7 +130,7 @@ pub const MovementState = struct {
             },
             .fall => {
                 //if (mvec.magnitude() != 1) unreachable; //Only allow falls in cardinal directions for now
-                const fall_time = quadFR(gravity / 2, 0, @fabs(iv.y)) orelse unreachable;
+                const fall_time = quadFR(gravity / 2, 0, @abs(iv.y)) orelse unreachable;
                 const fall_start = (0.5 + (PlayerBounds / 2)) / speed;
                 const max_t = fall_time + fall_start;
                 const fall_walk_v = (0.5 - (PlayerBounds / 2)) / fall_time;
@@ -187,7 +187,7 @@ pub const MovementState = struct {
             .ladder => {
                 const climb_speed = 3;
                 if (mvec.magnitude() != 0) unreachable; //we can only climb up or down
-                const max_t = @fabs(iv.y) / climb_speed;
+                const max_t = @abs(iv.y) / climb_speed;
                 if (max_t < self.time + dt) {
                     const r = (self.time + dt) - max_t;
                     self.time = max_t;
@@ -244,8 +244,7 @@ pub const Inventory = struct {
         self.slots.items[index] = slot;
         if (slot) |*s| {
             if (s.nbt_buffer) |buf| {
-                self.slots.items[index].?.nbt_buffer = try self.alloc.alloc(u8, buf.len);
-                std.mem.copy(u8, self.slots.items[index].?.nbt_buffer.?, buf);
+                self.slots.items[index].?.nbt_buffer = try self.alloc.dupe(u8, buf);
             }
         }
     }

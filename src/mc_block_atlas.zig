@@ -46,7 +46,7 @@ pub fn buildAtlasGeneric(
     const blocks = name_id_slice;
     var pack_dir = try dir.openDir(texture_pack_filename, .{});
     defer pack_dir.close();
-    var itdir = try pack_dir.openIterableDir(res_path, .{});
+    var itdir = try pack_dir.openDir(res_path, .{ .iterate = true });
     defer itdir.close();
 
     var pngs = std.ArrayList([]const u8).init(alloc);
@@ -61,8 +61,7 @@ pub fn buildAtlasGeneric(
     var item = try it.next();
     while (item != null) : (item = try it.next()) {
         if (item.?.kind == .file) {
-            const slice = try alloc.alloc(u8, item.?.name.len);
-            std.mem.copy(u8, slice, item.?.name);
+            const slice = try alloc.dupe(u8, item.?.name);
             try pngs.append(slice);
         }
     }
@@ -104,7 +103,7 @@ pub fn buildAtlasGeneric(
             try strcat.append('/');
             try strcat.appendSlice(pngs.items[matches.items[0].index]);
 
-            var bmp = try graph.Bitmap.initFromPngFile(alloc, itdir.dir, pngs.items[matches.items[0].index]);
+            var bmp = try graph.Bitmap.initFromPngFile(alloc, itdir, pngs.items[matches.items[0].index]);
             defer bmp.data.deinit();
             bmp.copySub(
                 0,

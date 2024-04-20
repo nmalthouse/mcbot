@@ -371,7 +371,6 @@ pub const AStarContext = struct {
 
     pub fn addAdjLadderNodes(self: *Self, node: *Node, goal: V3i, override_h: ?u32) !void {
         var y_offset: i32 = 1;
-        //const h = if (override_h != null) override_h.? else @as(u32, @intCast(try std.math.absInt(goal.x - (node.x)) + try std.math.absInt(goal.z - (node.z))));
         const h = override_h orelse 0;
         _ = goal;
         while (self.hasBlockTag("minecraft:climbable", V3i.new(node.x, node.y + y_offset, node.z))) : (y_offset += 1) {
@@ -381,11 +380,8 @@ pub const AStarContext = struct {
                     .x = node.x,
                     .z = node.z,
                     .y = node.y + y_offset + 1,
-                    //.G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
                     .G = node.G + 10,
                     .H = h,
-                    //.H = @intCast(u32, try std.math.absInt(goal.x - (node.x)) +
-                    //    try std.math.absInt(goal.z - (node.z))),
                 }, node);
         }
 
@@ -398,9 +394,6 @@ pub const AStarContext = struct {
                     .z = node.z,
                     .y = node.y + y_offset + 1,
                     .G = node.G + 10,
-                    //.G = node.G + @as(u32, @intCast(try std.math.absInt(y_offset))),
-                    //.H = @intCast(u32, try std.math.absInt(goal.x - (node.x)) +
-                    //try std.math.absInt(goal.z - (node.z))),
                     .H = h,
                 }, node);
         }
@@ -408,7 +401,7 @@ pub const AStarContext = struct {
 
     pub fn addNode(self: *Self, node: Node, parent: *Node) !void {
         var new_node = node;
-        var is_on_closed = false;
+        const is_on_closed = false;
         if (self.closed.get(.{ .x = node.x, .y = node.y, .z = node.z }) != null) {
             return;
         }
@@ -468,9 +461,8 @@ pub const AStarContext = struct {
 
         for (acat, 0..) |cat, i| {
             const avec = ADJ[i];
-            const abs = std.math.absInt;
-            const h = if (override_h != null) override_h.? else @as(u32, @intCast(try abs(@as(i32, @intFromFloat(goal.x)) - (node.x + avec.x)) +
-                try abs(@as(i32, @intFromFloat(goal.z)) - (node.z + avec.y)) + try abs(@as(i32, @intFromFloat(goal.y)) - node.y)));
+            const h = if (override_h != null) override_h.? else @as(u32, @intCast(@abs(@as(i32, @intFromFloat(goal.x)) - (node.x + avec.x)) +
+                @abs(@as(i32, @intFromFloat(goal.z)) - (node.z + avec.y)) + @abs(@as(i32, @intFromFloat(goal.y)) - node.y)));
             if (cat.cat == .blocked)
                 continue;
             if (cat.cat == .jump and (block_above != 0 or i % 2 == 0))
@@ -501,7 +493,7 @@ pub const AStarContext = struct {
                     .fall => 40,
                     .jump => 40,
                     .gap => 30,
-                    else => ADJ_COST[i] + @as(u32, @intCast((try std.math.absInt(cat.y_offset)) * 1)),
+                    else => ADJ_COST[i] + @as(u32, @intCast((@abs(cat.y_offset)) * 1)),
                 },
                 .H = h,
             }, node);
@@ -521,7 +513,7 @@ pub const AStarContext = struct {
             var i: i32 = 0;
             while (y + i >= -64) : (i -= 1) {
                 if (col.walkable(i)) {
-                    if (@as(u32, @intCast((std.math.absInt(i) catch unreachable))) <= max_fall_dist)
+                    if (@as(u32, @intCast(@abs(i))) <= max_fall_dist)
                         return .{ .cat = .fall, .y_offset = i };
                     break;
                 }

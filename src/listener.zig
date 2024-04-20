@@ -262,7 +262,7 @@ pub const Packet = struct {
     comp_thresh: i32 = -1,
 
     pub fn init(alloc: std.mem.Allocator, comp_thresh: i32) !Self {
-        var ret = Self{
+        const ret = Self{
             .comp_thresh = comp_thresh,
             .buffer = std.ArrayList(u8).init(alloc),
         };
@@ -319,16 +319,16 @@ pub const Packet = struct {
 
     pub fn send_UUID(self: *Self, v: u128) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u128, v, .Big);
+        _ = try wr.writeInt(u128, v, .big);
     }
 
     pub fn send_i8(self: *Self, v: i8) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(i8, v, .Big);
+        _ = try wr.writeInt(i8, v, .big);
     }
     pub fn send_i16(self: *Self, v: i16) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(i16, v, .Big);
+        _ = try wr.writeInt(i16, v, .big);
     }
 
     pub fn iposition(self: *Self, v: vector.V3i) !void {
@@ -347,40 +347,40 @@ pub const Packet = struct {
 
     pub fn float(self: *Self, f: f32) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u32, @as(u32, @bitCast(f)), .Big);
+        _ = try wr.writeInt(u32, @as(u32, @bitCast(f)), .big);
     }
 
     pub fn ubyte(self: *Self, b: u8) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u8, b, .Big);
+        _ = try wr.writeInt(u8, b, .big);
     }
 
     pub fn long(self: *Self, l: i64) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(i64, l, .Big);
+        _ = try wr.writeInt(i64, l, .big);
     }
 
     pub fn int32(self: *Self, i: u32) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u32, i, .Big);
+        _ = try wr.writeInt(u32, i, .big);
     }
 
     pub fn double(self: *Self, f: f64) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u64, @as(u64, @bitCast(f)), .Big);
+        _ = try wr.writeInt(u64, @as(u64, @bitCast(f)), .big);
     }
 
     pub fn short(self: *Self, val: u16) !void {
         const wr = self.buffer.writer();
-        _ = try wr.writeInt(u16, val, .Big);
+        _ = try wr.writeInt(u16, val, .big);
     }
 
     pub fn send_i32(self: *Self, val: i32) !void {
-        _ = try self.buffer.writer().writeInt(i32, val, .Big);
+        _ = try self.buffer.writer().writeInt(i32, val, .big);
     }
 
     pub fn send_i64(self: *Self, val: i64) !void {
-        _ = try self.buffer.writer().writeInt(i64, val, .Big);
+        _ = try self.buffer.writer().writeInt(i64, val, .big);
     }
 
     pub fn writeToServer(self: *Self, server: std.net.Stream.Writer, mutex: *std.Thread.Mutex) !void {
@@ -488,7 +488,7 @@ pub const BlockEntityP = struct {
 
 pub const AutoParse = struct {
     ///Defines names of types we can parse, the .Type indicates what this field will be in the returned struct
-    const TypeItem = struct { name: []const u8, Type: type };
+    const TypeItem = struct { name: [:0]const u8, Type: type };
     pub const TypeList = [_]TypeItem{
         .{ .name = "boolean", .Type = bool },
 
@@ -544,10 +544,10 @@ pub const AutoParse = struct {
 
     pub const ParseItem = struct {
         type_: Types,
-        name: []const u8,
+        name: [:0]const u8,
     };
 
-    pub fn P(comptime type_: Types, comptime name: []const u8) ParseItem {
+    pub fn P(comptime type_: Types, comptime name: [:0]const u8) ParseItem {
         return .{ .type_ = type_, .name = name };
     }
 
@@ -568,7 +568,7 @@ pub const AutoParse = struct {
         }
         return .{ .t = @Type(std.builtin.Type{
             .Struct = .{
-                .layout = .Auto,
+                .layout = .auto,
                 .backing_integer = null,
                 .fields = &struct_fields,
                 .decls = &.{},
@@ -635,7 +635,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn int(self: *Self, comptime intT: type) intT {
-            return self.reader.readInt(intT, .Big) catch unreachable;
+            return self.reader.readInt(intT, .big) catch unreachable;
         }
 
         pub fn string(self: *Self, max_len: ?usize) ![]const u8 {
@@ -764,9 +764,9 @@ pub fn packetParseCtx(comptime readerT: type) type {
                 @field(ret, info[i].name) = blk: {
                     switch (item.type_) {
                         .long, .byte, .ubyte, .short, .ushort, .int, .uuid => {
-                            break :blk self.reader.readInt(info[i].type, .Big) catch unreachable;
+                            break :blk self.reader.readInt(info[i].type, .big) catch unreachable;
                         },
-                        .boolean => break :blk (r.readInt(u8, .Big) catch unreachable == 0x1),
+                        .boolean => break :blk (r.readInt(u8, .big) catch unreachable == 0x1),
                         .string, .chat, .identifier => break :blk self.string(null) catch unreachable,
                         .float, .double => break :blk self.float(info[i].type),
                         .varInt => break :blk readVarInt(r),
@@ -987,8 +987,7 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
             const ret_buf = try alloc.dupe(u8, buf[in_stream.pos..]);
             return ret_buf;
         }
-        var zlib_stream = try std.compress.zlib.decompressStream(alloc, in_stream.reader());
-        defer zlib_stream.deinit();
+        var zlib_stream = std.compress.zlib.decompressor(in_stream.reader());
         const ubuf = try zlib_stream.reader().readAllAlloc(alloc, std.math.maxInt(usize));
         return ubuf;
     }
@@ -1239,8 +1238,8 @@ pub fn lookAtBlock(pos: V3f, block: V3f) struct { yaw: f32, pitch: f32 } {
     const asin = std.math.asin;
     const atan2 = std.math.atan2;
     return .{
-        .pitch = -rads(f32, @as(f32, @floatCast(asin(vect.y / vect.magnitude())))),
-        .yaw = -rads(f32, @as(f32, @floatCast(atan2(f64, vect.x, vect.z)))),
+        .pitch = -rads(@as(f32, @floatCast(asin(vect.y / vect.magnitude())))),
+        .yaw = -rads(@as(f32, @floatCast(atan2(vect.x, vect.z)))),
     };
 }
 

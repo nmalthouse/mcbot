@@ -1,10 +1,12 @@
 .{
-    .name = "example",
+    .name = "mcbot",
     .version = "0.0.1",
     .dependencies = .{
-        .zalgebra = .{
-            .url = "https://github.com/kooparse/zalgebra/archive/refs/heads/main.tar.gz",
-            .hash = "1220e7feb5be6842dbc0d20a2a9922e5a61610bfbd3039d7497b0722be5662c603e4",
+        .ratgraph = .{
+            .path = "ratgraph",
         },
+    },
+    .paths = .{
+        "",
     },
 }

@@ -1,7 +1,7 @@
 const std = @import("std");
 const builtin = std.builtin;
 
-pub fn genEnum(comptime id_strings: []const []const u8) type {
+pub fn genEnum(comptime id_strings: []const [:0]const u8) type {
     var enum_fields: [id_strings.len]builtin.Type.EnumField = undefined;
 
     for (id_strings, 0..) |str, i| {
@@ -20,7 +20,7 @@ pub fn genEnum(comptime id_strings: []const []const u8) type {
 
 pub const entity_type_enum = genEnum(Entity_Types[0..]);
 
-pub const Entity_Types = [_][]const u8{
+pub const Entity_Types = [_][:0]const u8{
     "minecraft:allay",
     "minecraft:area_effect_cloud",
     "minecraft:armor_stand",

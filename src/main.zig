@@ -36,9 +36,9 @@ const Lua = graph.Lua;
 
 pub const PacketCache = struct {};
 
-pub const std_options = struct {
-    pub const log_level = .debug;
-    pub const logFn = myLogFn;
+pub const std_options = .{
+    .log_level = .debug,
+    .logFn = myLogFn,
 };
 
 pub fn myLogFn(
@@ -160,7 +160,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
 }
 
 pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8, .scalar)) ?vector.V3f {
-    var ret = V3f{
+    const ret = V3f{
         .x = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
         .y = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
         .z = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
@@ -210,7 +210,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             if (comp_len == 0)
                 break :blk fbs;
 
-            var zlib_stream = try std.compress.zlib.decompressStream(arena_alloc, fbs.reader());
+            var zlib_stream = std.compress.zlib.decompressor(fbs.reader());
             const ubuf = try zlib_stream.reader().readAllAlloc(arena_alloc, std.math.maxInt(usize));
             break :blk fbsT{ .buffer = ubuf, .pos = 0 };
         } else {
@@ -332,7 +332,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var tracker = tr.init(arena_alloc, parse.reader);
             defer tracker.deinit();
 
-            var nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch {
+            const nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch {
                 log.warn("Nbt crashed", .{});
                 return;
             };
@@ -382,7 +382,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 return;
             }
 
-            var nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
+            const nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
             _ = nbt_data;
             const data_size = parse.varInt();
             var chunk_data = std.ArrayList(u8).init(alloc);
@@ -396,11 +396,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = chunk_data.items, .pos = 0 };
             const cr = chunk_fbs.reader();
             while (chunk_i < mc.NUM_CHUNK_SECTION) : (chunk_i += 1) {
-                const block_count = try cr.readInt(i16, .Big);
+                const block_count = try cr.readInt(i16, .big);
                 const chunk_section = &chunk.sections[chunk_i];
 
                 { //BLOCK STATES palated container
-                    const bp_entry = try cr.readInt(u8, .Big);
+                    const bp_entry = try cr.readInt(u8, .big);
                     if (bp_entry > 15) {
                         std.debug.print("IMPOSSIBLE BPE {d} [{d},{d}, {d}]\n", .{ bp_entry, cx, @as(i64, @intCast(chunk_i * 16)) - 64, cy });
                         std.debug.print("Info block_count {d}\n", .{block_count});
@@ -438,13 +438,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                         var j: u32 = 0;
 
                         while (j < num_longs) : (j += 1) {
-                            const d = try cr.readInt(u64, .Big);
+                            const d = try cr.readInt(u64, .big);
                             try chunk_section.data.append(d);
                         }
                     }
                 }
                 { //BIOME palated container
-                    const bp_entry = try cr.readInt(u8, .Big);
+                    const bp_entry = try cr.readInt(u8, .big);
                     {
                         if (bp_entry == 0) {
                             const id = mc.readVarInt(cr);
@@ -1530,13 +1530,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                     if (th_d.action_index) |action| {
                         switch (th_d.actions.items[action]) {
                             .movement => |move_| {
-                                var move = move_;
-                                var adt = dt;
+                                const move = move_;
+                                const adt = dt;
                                 var grounded = true;
                                 var moved = false;
-                                var pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
+                                const pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
                                 while (true) {
-                                    var move_vec = th_d.move_state.update(adt);
+                                    const move_vec = th_d.move_state.update(adt);
                                     grounded = move_vec.grounded;
 
                                     bo.pos = move_vec.new_pos;
@@ -1752,7 +1752,7 @@ fn drawTextCube(win: *graph.SDL.Window, gctx: *graph.ImmediateDrawingContext, cm
     const z = tpos.z();
     const pp = graph.Vec2f.new(tpos.x() / w, tpos.y() / -w);
     const dist_in_blocks = 10;
-    if (z < dist_in_blocks and z > 0 and @fabs(pp.x) < 1 and @fabs(pp.y) < 1) {
+    if (z < dist_in_blocks and z > 0 and @abs(pp.x) < 1 and @abs(pp.y) < 1) {
         const sw = win.screen_dimensions.toF().smul(0.5);
         const spos = pp.mul(sw).add(sw);
         gctx.text(spos, text, font, 12, 0xffffffff);
@@ -1825,11 +1825,13 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var font = try graph.Font.init(alloc, std.fs.cwd(), "ratgraph/fonts/roboto.ttf", 16, 163, .{});
     defer font.deinit();
 
+    const M = graph.SDL.keycodes.Keymod;
+    const None = comptime M.mask(&.{.NONE});
     const KeyMap = graph.Bind(&.{
-        .{ "print_coord", "c" },
-        .{ "toggle_draw_nodes", "t" },
-        .{ "toggle_inventory", "e" },
-        .{ "toggle_caves", "f" },
+        .{ .name = "print_coord", .bind = .{ .C, None } },
+        .{ .name = "toggle_draw_nodes", .bind = .{ .T, None } },
+        .{ .name = "toggle_inventory", .bind = .{ .E, None } },
+        .{ .name = "toggle_caves", .bind = .{ .F, None } },
     });
     var testmap = KeyMap.init();
 
@@ -1882,12 +1884,11 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         const cmatrix = camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000);
 
         for (win.keys.slice()) |key| {
-            switch (testmap.get(key.scancode)) {
+            switch (testmap.getWithMod(key.scancode, 0) orelse continue) {
                 .print_coord => std.debug.print("Camera pos: {any}\n", .{camera.pos}),
                 .toggle_draw_nodes => draw_nodes = !draw_nodes,
                 .toggle_inventory => draw_inventory = !draw_inventory,
                 .toggle_caves => display_caves = !display_caves,
-                else => {},
             }
         }
         {
@@ -1973,9 +1974,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     const mz = camera.front.data[2];
                     t += 0.001;
 
-                    const next_xt = if (@fabs(mx) < 0.001) 100000 else ((if (mx > 0) @ceil(mx * t + point_start.data[0]) else @floor(mx * t + point_start.data[0])) - point_start.data[0]) / mx;
-                    const next_yt = if (@fabs(my) < 0.001) 100000 else ((if (my > 0) @ceil(my * t + point_start.data[1]) else @floor(my * t + point_start.data[1])) - point_start.data[1]) / my;
-                    const next_zt = if (@fabs(mz) < 0.001) 100000 else ((if (mz > 0) @ceil(mz * t + point_start.data[2]) else @floor(mz * t + point_start.data[2])) - point_start.data[2]) / mz;
+                    const next_xt = if (@abs(mx) < 0.001) 100000 else ((if (mx > 0) @ceil(mx * t + point_start.data[0]) else @floor(mx * t + point_start.data[0])) - point_start.data[0]) / mx;
+                    const next_yt = if (@abs(my) < 0.001) 100000 else ((if (my > 0) @ceil(my * t + point_start.data[1]) else @floor(my * t + point_start.data[1])) - point_start.data[1]) / my;
+                    const next_zt = if (@abs(mz) < 0.001) 100000 else ((if (mz > 0) @ceil(mz * t + point_start.data[2]) else @floor(mz * t + point_start.data[2])) - point_start.data[2]) / mz;
                     if (i > 10) break;
 
                     t = @min(next_xt, next_yt, next_zt);
@@ -2002,6 +2003,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 mc_atlas.getTextureRec(1),
                                 &[_]graph.CharColor{graph.itc(0xcb41db66)} ** 6,
                             );
+                            if (win.keydown(.LSHIFT)) {
+                                const center = win.screen_dimensions.toF().smul(0.5);
+                                gctx.textFmt(center, "{d}", .{block}, &font, 14, 0xffffffff);
+                            }
 
                             if (win.mouse.left == .rising) {
                                 bot1.modify_mutex.lock();
@@ -2227,14 +2232,14 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         gctx.rect(graph.Rec(@divTrunc(win.screen_dimensions.x, 2), @divTrunc(win.screen_dimensions.y, 2), 10, 10), 0xffffffff);
 
         { //binding info draw
-            const num_lines = KeyMap.Map.len;
+            const num_lines = KeyMap.bindlist.len;
             const fs = 12;
             const px_per_line = font.ptToPixel(12);
             const h = num_lines * px_per_line;
             const area = graph.Rec(0, @as(f32, @floatFromInt(win.screen_dimensions.y)) - h, 500, h);
             var y = area.y;
-            for (KeyMap.Map) |binding| {
-                gctx.textFmt(.{ .x = area.x, .y = y }, "{s}: {s}", .{ binding[0], binding[1] }, &font, fs, 0xffffffff);
+            for (KeyMap.bindlist) |b| {
+                gctx.textFmt(.{ .x = area.x, .y = y }, "{s}: {s}", .{ b.name, @tagName(b.bind[0]) }, &font, fs, 0xffffffff);
                 y += px_per_line;
             }
         }
@@ -2309,8 +2314,8 @@ pub fn main() !void {
     const port: u16 = @intFromFloat(args.port orelse config_vm.getGlobal(config_vm.state, "port", f32));
     const ip = args.ip orelse config_vm.getGlobal(config_vm.state, "ip", []const u8);
 
-    const epoll_fd = try std.os.epoll_create1(0);
-    defer std.os.close(epoll_fd);
+    const epoll_fd = try std.posix.epoll_create1(0);
+    defer std.posix.close(epoll_fd);
 
     var world = McWorld.init(alloc, &dr);
     defer world.deinit();
@@ -2319,13 +2324,13 @@ pub fn main() !void {
     defer event_structs.deinit();
     try event_structs.resize(bot_names.len);
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
-    try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
+    try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
         const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id);
         event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
-        try std.os.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
+        try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
         try world.bots.put(mb.fd, mb);
         if (bot_fd == 0)
             bot_fd = mb.fd;
@@ -2355,11 +2360,11 @@ pub fn main() !void {
             //std.debug.print("KBps: {d}\n", .{@divTrunc(bytes_read, 1000)});
             bytes_read = 0;
         }
-        const e_count = std.os.epoll_wait(epoll_fd, &events, 10);
+        const e_count = std.posix.epoll_wait(epoll_fd, &events, 10);
         for (events[0..e_count]) |eve| {
             if (eve.data.fd == std.io.getStdIn().handle) {
                 var msg: [256]u8 = undefined;
-                const n = try std.os.read(eve.data.fd, &msg);
+                const n = try std.posix.read(eve.data.fd, &msg);
                 var itt = std.mem.tokenize(u8, msg[0 .. n - 1], " ");
                 const key = itt.next() orelse continue;
                 std.debug.print("\"{s}\"\n", .{key});
@@ -2422,7 +2427,7 @@ pub fn main() !void {
                 switch (pp.state) {
                     .len => {
                         var buf: [1]u8 = .{0xff};
-                        const n = try std.os.read(eve.data.fd, &buf);
+                        const n = try std.posix.read(eve.data.fd, &buf);
                         if (n == 0)
                             unreachable;
                         //break :local;
@@ -2441,7 +2446,8 @@ pub fn main() !void {
                             pp.state = .data;
                             if (pp.data_len.? > pbuf.len - pp.len_len.?) {
                                 try pp.buf.resize(pp.data_len.? + pp.len_len.?);
-                                std.mem.copy(u8, pp.buf.items, pbuf[0..ppos]);
+
+                                @memcpy(pp.buf.items[0..ppos], pbuf[0..ppos]);
                                 bytes_read += pp.data_len.?;
                             }
                         }
@@ -2452,7 +2458,7 @@ pub fn main() !void {
 
                         if (pp.data_len.? > pbuf.len - pp.len_len.?) {
                             //TODO set this read to nonblocking?
-                            const nr = try std.os.read(eve.data.fd, pp.buf.items[start .. start + num_left_to_read]);
+                            const nr = try std.posix.read(eve.data.fd, pp.buf.items[start .. start + num_left_to_read]);
 
                             pp.num_read += @as(u32, @intCast(nr));
                             if (nr == 0) //TODO properly support partial reads
@@ -2469,7 +2475,7 @@ pub fn main() !void {
                                 break :local;
                             }
                         } else {
-                            const nr = try std.os.read(eve.data.fd, pbuf[start .. start + num_left_to_read]);
+                            const nr = try std.posix.read(eve.data.fd, pbuf[start .. start + num_left_to_read]);
                             pp.num_read += @as(u32, @intCast(nr));
 
                             if (nr == 0) //TODO properly support partial reads

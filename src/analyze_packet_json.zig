@@ -33,7 +33,7 @@ pub fn analyzeWalk(parent_alloc: std.mem.Allocator, dump_file_name: []const u8) 
     defer out_csv.close();
     const ow = out_csv.writer();
     if (f) |cont| {
-        var buf: []const u8 = try cont.readToEndAlloc(alloc, 1024 * 1024 * 1024);
+        const buf: []const u8 = try cont.readToEndAlloc(alloc, 1024 * 1024 * 1024);
         //std.json.Parser is used rather than std.json.parse because the wireshark packet json is too complicated to parse into a zig struct
         var parser = std.json.Parser.init(alloc, false);
         const vtree = try parser.parse(buf);

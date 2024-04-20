@@ -7,7 +7,7 @@ pub fn readJson(dir: std.fs.Dir, filename: []const u8, alloc: std.mem.Allocator,
     defer file.close();
     const slice = try file.reader().readAllAlloc(alloc, std.math.maxInt(usize));
     defer alloc.free(slice);
-    var parsed = try J.parseFromSlice(T, alloc, slice, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
+    const parsed = try J.parseFromSlice(T, alloc, slice, .{ .ignore_unknown_fields = true, .allocate = .alloc_always });
     return parsed;
 }
 

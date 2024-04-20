@@ -44,7 +44,7 @@ pub fn TrackingReader(comptime readerT: type) type {
         }
 
         pub fn read(self: *Self, buffer: []u8) readerT.Error!usize {
-            var num_read = try self.child_reader.read(buffer);
+            const num_read = try self.child_reader.read(buffer);
             self.buffer.appendSlice(buffer[0..num_read]) catch unreachable;
             return num_read;
         }
@@ -200,7 +200,7 @@ pub fn parse(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(r
 }
 
 pub fn parseAsCompoundEntry(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(reader))!Entry {
-    var result = try parse(allocator, reader);
+    const result = try parse(allocator, reader);
     var com = Entry.Compound{};
     try com.put(allocator, result.name orelse return error.InvalidNbt, result.entry);
     return Entry{ .compound = com };
@@ -209,29 +209,29 @@ pub fn parseAsCompoundEntry(allocator: std.mem.Allocator, reader: anytype) Parse
 /// Caller owns returned memory. Using an Arena is recommended.
 pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compound: bool, tag_type: ?Tag) ParseError(@TypeOf(reader))!EntryWithName {
     const tag = tag_type orelse (std.meta.intToEnum(Tag, try reader.readByte()) catch return error.InvalidNbt);
-    var name = if (in_compound and tag != .end) n: {
-        var nn = try allocator.alloc(u8, try reader.readIntBig(u16));
+    const name = if (in_compound and tag != .end) n: {
+        const nn = try allocator.alloc(u8, try reader.readInt(u16, .big));
         _ = try reader.readAll(nn);
         break :n nn;
     } else null;
 
     const entry: Entry = switch (tag) {
         .end => .end,
-        .byte => .{ .byte = try reader.readIntBig(i8) },
-        .short => .{ .short = try reader.readIntBig(i16) },
-        .int => .{ .int = try reader.readIntBig(i32) },
-        .long => .{ .long = try reader.readIntBig(i64) },
-        .float => .{ .float = @as(f32, @bitCast(try reader.readIntBig(u32))) },
-        .double => .{ .double = @as(f64, @bitCast(try reader.readIntBig(u64))) },
+        .byte => .{ .byte = try reader.readInt(i8, .big) },
+        .short => .{ .short = try reader.readInt(i16, .big) },
+        .int => .{ .int = try reader.readInt(i32, .big) },
+        .long => .{ .long = try reader.readInt(i64, .big) },
+        .float => .{ .float = @as(f32, @bitCast(try reader.readInt(u32, .big))) },
+        .double => .{ .double = @as(f64, @bitCast(try reader.readInt(u64, .big))) },
         .byte_array => ba: {
-            const len = try reader.readIntBig(i32);
+            const len = try reader.readInt(i32, .big);
             std.debug.assert(len >= 0);
-            var array = try allocator.alloc(i8, @as(usize, @intCast(len)));
+            const array = try allocator.alloc(i8, @as(usize, @intCast(len)));
             _ = try reader.readAll(@as([]u8, @ptrCast(array)));
             break :ba .{ .byte_array = array };
         },
         .string => str: {
-            var string = try allocator.alloc(u8, try reader.readIntBig(u16));
+            const string = try allocator.alloc(u8, try reader.readInt(u16, .big));
             _ = try reader.readAll(string);
             break :str .{ .string = string };
         },
@@ -240,7 +240,7 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
             const @"type" = std.meta.intToEnum(Tag, try reader.readByte()) catch return error.InvalidNbt;
 
             // TODO: Handle negatives, ends
-            const len = try reader.readIntBig(i32);
+            const len = try reader.readInt(i32, .big);
             std.debug.assert(len >= 0);
             try entries.ensureTotalCapacity(allocator, @as(usize, @intCast(len)));
             entries.items.len = @as(usize, @intCast(len));
@@ -260,17 +260,17 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
             break :com .{ .compound = hashmap };
         },
         .int_array => ia: {
-            const len = try reader.readIntBig(i32);
+            const len = try reader.readInt(i32, .big);
             std.debug.assert(len >= 0);
-            var array = try allocator.alloc(i32, @as(usize, @intCast(len)));
-            for (array) |*i| i.* = try reader.readIntBig(i32);
+            const array = try allocator.alloc(i32, @as(usize, @intCast(len)));
+            for (array) |*i| i.* = try reader.readInt(i32, .big);
             break :ia .{ .int_array = array };
         },
         .long_array => la: {
-            const len = try reader.readIntBig(i32);
+            const len = try reader.readInt(i32, .big);
             std.debug.assert(len >= 0);
-            var array = try allocator.alloc(i64, @as(usize, @intCast(len)));
-            for (array) |*i| i.* = try reader.readIntBig(i64);
+            const array = try allocator.alloc(i64, @as(usize, @intCast(len)));
+            for (array) |*i| i.* = try reader.readInt(i64, .big);
             break :la .{ .long_array = array };
         },
     };
@@ -311,6 +311,6 @@ test "servers.dat" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
 
-    var data = try parseAsCompoundEntry(arena.allocator(), ungzip.reader());
+    const data = try parseAsCompoundEntry(arena.allocator(), ungzip.reader());
     std.debug.print("\n\n{}\n\n", .{data});
 }

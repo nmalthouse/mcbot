@@ -290,7 +290,8 @@ pub const ParseStructGen = struct {
                     },
                     .none => {
                         try w.print("\npub fn parse(pctx:anytype)!@This() {{\n", .{});
-                        try w.print("var ret: @This() = undefined;\n", .{});
+                        const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
+                        try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                         var discard_pctx = true;
                         for (self.fields.items) |f| {
                             if (f.optional) {
