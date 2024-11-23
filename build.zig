@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
 
     const proto_gen = b.addExecutable(.{
         .name = "proto_gen",
-        .root_source_file = .{ .path = "src/protocol_gen.zig" },
+        .root_source_file = b.path("src/protocol_gen.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -24,7 +24,7 @@ pub fn build(b: *std.Build) void {
 
     const exe = b.addExecutable(.{
         .name = "mcbot",
-        .root_source_file = .{ .path = "src/main.zig" },
+        .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -64,8 +64,8 @@ pub fn dotracy(b: *std.Build, exe: *std.Build.Step.Compile) void {
         // On mingw, we need to opt into windows 7+ to get some features required by tracy.
         const tracy_c_flags = &[_][]const u8{ "-DTRACY_ENABLE=1", "-fno-sanitize=undefined" };
 
-        exe.addIncludePath(.{ .path = tracy_path });
-        exe.addCSourceFile(.{ .file = .{ .path = client_cpp }, .flags = tracy_c_flags });
+        exe.addIncludePath(b.path(tracy_path));
+        exe.addCSourceFile(.{ .file = b.path(client_cpp), .flags = tracy_c_flags });
         exe.linkSystemLibrary("c++");
         exe.linkLibC();
     }

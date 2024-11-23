@@ -47,15 +47,6 @@ pub fn myLogFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    // Ignore all non-error logging from sources other than
-    // .my_project, .nice_library and the default
-    //const scope_prefix = "(" ++ switch (scope) {
-    //    .my_project, .nice_library, std.log.default_log_scope => @tagName(scope),
-    //    else => if (@intFromEnum(level) <= @intFromEnum(std.log.Level.err))
-    //        @tagName(scope)
-    //    else
-    //        return,
-    //} ++ "): ";
     if (level == .info) {
         switch (scope) {
             .inventory,
@@ -71,8 +62,8 @@ pub fn myLogFn(
     const prefix = "[" ++ comptime level.asText() ++ "] " ++ scope_prefix;
 
     // Print the message to stderr, silently ignoring any errors
-    std.debug.getStderrMutex().lock();
-    defer std.debug.getStderrMutex().unlock();
+    std.debug.lockStdErr();
+    defer std.debug.unlockStdErr();
     const stderr = std.io.getStdErr().writer();
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
 }
@@ -1853,7 +1844,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         win.pumpEvents();
         graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
         gctx.text(.{ .x = 40, .y = 30 }, "LOADING CHUNKS", &font, 72, 0xffffffff);
-        try gctx.end();
+        try gctx.end(null);
         win.swap();
     }
     const wheat_id = world.reg.getBlockFromName("wheat") orelse 0;
@@ -1872,16 +1863,16 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         try cubes.vertices.resize(0);
         win.pumpEvents();
         camera.updateDebugMove(.{
-            .down = win.keydown(.LSHIFT),
-            .up = win.keydown(.SPACE),
-            .left = win.keydown(.A),
-            .right = win.keydown(.D),
-            .fwd = win.keydown(.W),
-            .bwd = win.keydown(.S),
+            .down = win.keyHigh(.LSHIFT),
+            .up = win.keyHigh(.SPACE),
+            .left = win.keyHigh(.A),
+            .right = win.keyHigh(.D),
+            .fwd = win.keyHigh(.W),
+            .bwd = win.keyHigh(.S),
             .mouse_delta = win.mouse.delta,
             .scroll_delta = win.mouse.wheel_delta.y,
         });
-        const cmatrix = camera.getMatrix(3840.0 / 2160.0, 85, 0.1, 100000);
+        const cmatrix = camera.getMatrix(3840.0 / 2160.0, 0.1, 100000);
 
         for (win.keys.slice()) |key| {
             switch (testmap.getWithMod(key.scancode, 0) orelse continue) {
@@ -1911,7 +1902,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         if (draw_nodes and astar_ctx_mutex.tryLock()) {
             var it = astar_ctx.openq.iterator();
             while (it.next()) |item| {
-                try cubes.cube(
+                try cubes.cubeExtra(
                     @as(f32, @floatFromInt(item.x)),
                     @as(f32, @floatFromInt(item.y)),
                     @as(f32, @floatFromInt(item.z)),
@@ -1919,14 +1910,15 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     0.2,
                     0.6,
                     mc_atlas.getTextureRec(1),
-                    &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
+                    0,
+                    [_]u32{0xcb41dbff} ** 6,
                 );
             }
             var cit = astar_ctx.closed.valueIterator();
             while (cit.next()) |itemp| {
                 const item = itemp.*;
                 const vv = V3f.newi(item.x, item.y, item.z);
-                try cubes.cube(
+                try cubes.cubeExtra(
                     @as(f32, @floatFromInt(item.x)),
                     @as(f32, @floatFromInt(item.y)),
                     @as(f32, @floatFromInt(item.z)),
@@ -1934,7 +1926,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     0.2,
                     0.6,
                     mc_atlas.getTextureRec(1),
-                    &[_]graph.CharColor{graph.itc(0xff0000ff)} ** 6,
+                    0,
+                    [_]u32{0xff0000ff} ** 6,
                 );
                 fbs.reset();
                 const H = item.H * 20;
@@ -1946,7 +1939,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
         if (wheat_pos) |wh| {
             for (wh.items) |pos| {
-                try cubes.cube(
+                try cubes.cubeExtra(
                     @as(f32, @floatFromInt(pos.x)),
                     @as(f32, @floatFromInt(pos.y)) + 2,
                     @as(f32, @floatFromInt(pos.z)),
@@ -1954,7 +1947,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     0.2,
                     0.6,
                     mc_atlas.getTextureRec(1),
-                    &[_]graph.CharColor{graph.itc(0xfffff0ff)} ** 6,
+                    0,
+                    [_]u32{0xfffff0ff} ** 6,
                 );
             }
         }
@@ -1993,7 +1987,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     if (world.chunk_data.getBlock(pi)) |block| {
                         const cam_pos = world.chunk_data.getBlock(V3f.fromZa(camera.pos).toIFloor()) orelse 0;
                         if (block != 0 and cam_pos == 0) {
-                            try cubes.cube(
+                            try cubes.cubeExtra(
                                 @as(f32, @floatFromInt(pi.x)),
                                 @as(f32, @floatFromInt(pi.y)),
                                 @as(f32, @floatFromInt(pi.z)),
@@ -2001,9 +1995,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 1.2,
                                 1.1,
                                 mc_atlas.getTextureRec(1),
-                                &[_]graph.CharColor{graph.itc(0xcb41db66)} ** 6,
+                                0,
+                                [_]u32{0xcb41db66} ** 6,
                             );
-                            if (win.keydown(.LSHIFT)) {
+                            if (win.keyHigh(.LSHIFT)) {
                                 const center = win.screen_dimensions.toF().smul(0.5);
                                 gctx.textFmt(center, "{d}", .{block}, &font, 14, 0xffffffff);
                             }
@@ -2029,7 +2024,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 }
             }
 
-            if (win.keyPressed(.G)) {
+            if (win.keyRising(.G)) {
                 bot1.modify_mutex.lock();
                 defer bot1.modify_mutex.unlock();
                 try astar_ctx.reset();
@@ -2078,18 +2073,17 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 var i: u32 = 0;
                                 while (i < 16 * 16 * 16) : (i += 1) {
                                     const block = sec.getBlockFromIndex(i);
-                                    const itc = graph.itc;
                                     const bid = world.reg.getBlockIdFromState(block.block);
                                     if (bid == 0)
                                         continue;
-                                    const colors = if (bid == grass_block_id) [_]graph.CharColor{itc(0x77c05aff)} ** 6 else null;
+                                    const colors = if (bid == grass_block_id) [_]u32{0x77c05aff} ** 6 else null;
                                     const co = block.pos;
                                     const x = co.x + item.x * 16;
                                     const y = (co.y + @as(i32, @intCast(sec_i)) * 16) - 64;
                                     const z = co.z + item.y * 16;
                                     if (world.chunk_data.isOccluded(V3i.new(x, y, z)))
                                         continue;
-                                    try vz.value_ptr.cubes.cube(
+                                    try vz.value_ptr.cubes.cubeExtra(
                                         @as(f32, @floatFromInt(x)),
                                         @as(f32, @floatFromInt(y)),
                                         @as(f32, @floatFromInt(z)),
@@ -2097,7 +2091,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                         1,
                                         1,
                                         mc_atlas.getTextureRec(bid),
-                                        if (colors) |col| &col else null,
+                                        0,
+                                        if (colors) |col| col else null,
                                     );
                                 }
                             }
@@ -2120,7 +2115,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             while (it.next()) |kv| {
                 var zit = kv.value_ptr.iterator();
                 while (zit.next()) |kv2| {
-                    kv2.value_ptr.cubes.draw(win.screen_dimensions, cmatrix);
+                    kv2.value_ptr.cubes.draw(cmatrix, graph.za.Mat4.identity());
+
+                    //kv2.value_ptr.cubes.draw(win.screen_dimensions, cmatrix);
                 }
             }
         }
@@ -2134,7 +2131,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     camera.pos = graph.za.Vec3.new(@floatCast(bpos.x), @floatCast(bpos.y + 3), @floatCast(bpos.z));
                 }
                 const p = bpos.toF32();
-                try cubes.cube(
+                try cubes.cubeExtra(
                     p.x - 0.3,
                     p.y,
                     p.z - 0.3,
@@ -2142,7 +2139,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     1.8,
                     0.6,
                     mc_atlas.getTextureRec(1),
-                    &[_]graph.CharColor{graph.itc(0xcb41dbff)} ** 6,
+                    0,
+                    [_]u32{0xcb41dbff} ** 6,
                 );
             }
             if (bot1.action_list.items.len > 0) {
@@ -2162,9 +2160,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                             };
                             const p = move.pos.toF32();
                             const lp = last_pos.toF32();
-                            gctx.line3D(graph.Vec3f.new(lp.x, lp.y + 1, lp.z), graph.Vec3f.new(p.x, p.y + 1, p.z), 0xffffffff);
+                            gctx.line3D(graph.za.Vec3.new(lp.x, lp.y + 1, lp.z), graph.za.Vec3.new(p.x, p.y + 1, p.z), 0xffffffff);
                             last_pos = move.pos;
-                            try cubes.cube(
+                            try cubes.cubeExtra(
                                 p.x,
                                 p.y,
                                 p.z,
@@ -2172,7 +2170,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 0.2,
                                 0.2,
                                 mc_atlas.getTextureRec(1),
-                                &[_]graph.CharColor{graph.itc(color)} ** 6,
+                                0,
+                                [_]u32{color} ** 6,
                             );
                         },
                         else => {},
@@ -2182,7 +2181,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         }
 
         cubes.setData();
-        cubes.draw(win.screen_dimensions, cmatrix);
+        cubes.draw(graph.za.Mat4.identity(), cmatrix);
+        //cubes.draw(win.screen_dimensions, cmatrix);
 
         graph.c.glClear(graph.c.GL_DEPTH_BUFFER_BIT);
         if (draw_inventory) {
@@ -2243,7 +2243,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 y += px_per_line;
             }
         }
-        try gctx.end();
+        try gctx.end(null);
         //try ctx.beginDraw(graph.itc(0x2f2f2fff));
         //ctx.drawText(40, 40, "hello", &font, 16, graph.itc(0xffffffff));
         //ctx.endDraw(win.screen_width, win.screen_height);
@@ -2367,7 +2367,6 @@ pub fn main() !void {
                 const n = try std.posix.read(eve.data.fd, &msg);
                 var itt = std.mem.tokenize(u8, msg[0 .. n - 1], " ");
                 const key = itt.next() orelse continue;
-                std.debug.print("\"{s}\"\n", .{key});
                 if (eql(u8, "exit", key)) {
                     update_bots_exit_mutex.unlock();
                     run = false;
@@ -2412,6 +2411,8 @@ pub fn main() !void {
                             std.debug.print("\t{s}\n", .{ke.?.*});
                         }
                     }
+                } else {
+                    std.debug.print("Unknown command: \"{s}\"\n", .{key});
                 }
                 continue;
             }

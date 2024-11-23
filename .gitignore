@@ -1,6 +1,7 @@
 massif*
 zig-out
 zig-cache
+.zig-cache
 callgrind*
 debug
 src/protocol.zig

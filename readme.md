@@ -4,7 +4,7 @@ Linux only because of epoll() usage, can easily be changed
 [Lua API documentation](lua_doc.md)
 
 ## Running:
-        # Install zig version 0.12.0
+        # Install zig version 0.13.0
         # make sure you have the following libraries installed system-wide:
         # libepoxy
         # sdl2

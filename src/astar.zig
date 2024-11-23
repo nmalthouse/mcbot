@@ -242,7 +242,7 @@ pub const AStarContext = struct {
                     }
                 }
             }
-            if (self.openq.len == 0) {
+            if (self.openq.items.len == 0) {
                 var tiles = std.ArrayList(V3i).init(self.alloc);
                 var cit = self.closed.valueIterator();
                 while (cit.next()) |p| {
