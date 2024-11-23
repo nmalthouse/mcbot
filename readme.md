@@ -21,7 +21,9 @@ Linux only because of epoll() usage, can easily be changed
 The file bot_config.lua sets port, ip, and bots that will be added.
 
 ## Current features:
+- Code generation for the Minecraft protocol.
 - Pathfinding, (includes: ladders, gaps)
+- Debug rendering
 - Block breaking
 - Basic inventory interaction
 - Multiple bots
