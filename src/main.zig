@@ -703,6 +703,49 @@ pub const LuaApi = struct {
     }
 
     pub fn init(alloc: std.mem.Allocator, world: *McWorld, bo: *Bot, thread_data: *bot.BotScriptThreadData, vm: *Lua) Self {
+        //vm.setGlobal("LUA_PATH", Api.LUA_PATH);
+        //vm.reg("reverseDirection", Api.reverseDirection);
+        //vm.setGlobal("DOC_getMcTime", Api.DOC_getMcTime);
+        //vm.reg("getMcTime", Api.getMcTime);
+        //vm.setGlobal("DOC_directionToVec", Api.DOC_directionToVec);
+        //vm.reg("directionToVec", Api.directionToVec);
+        //vm.reg("freemovetest", Api.freemovetest);
+        //vm.reg("floodFindColumn", Api.floodFindColumn);
+        //vm.setGlobal("DOC_blockInfo", Api.DOC_blockInfo);
+        //vm.reg("blockInfo", Api.blockInfo);
+        //vm.setGlobal("DOC_sleepms", Api.DOC_sleepms);
+        //vm.reg("sleepms", Api.sleepms);
+        //vm.setGlobal("DOC_gotoLandmark", Api.DOC_gotoLandmark);
+        //vm.reg("gotoLandmark", Api.gotoLandmark);
+        //vm.reg("assignMine", Api.assignMine);
+        //vm.reg("findNearbyItems", Api.findNearbyItems);
+        //vm.reg("getLandmark", Api.getLandmark);
+        //vm.reg("placeBlock", Api.placeBlock);
+        //vm.reg("breakBlock", Api.breakBlock);
+        //vm.reg("gotoCoord", Api.gotoCoord);
+        //vm.reg("chopNearestTree", Api.chopNearestTree);
+        //vm.reg("getBlockId", Api.getBlockId);
+        //vm.reg("getBlock", Api.getBlock);
+        //vm.reg("getFieldFlood", Api.getFieldFlood);
+        //vm.reg("craft", Api.craft);
+        //vm.setGlobal("DOC_interactChest", Api.DOC_interactChest);
+        //vm.reg("interactChest", Api.interactChest);
+        //vm.reg("interactInv", Api.interactInv);
+        //vm.setGlobal("DOC_getSortCategories", Api.DOC_getSortCategories);
+        //vm.reg("getSortCategories", Api.getSortCategories);
+        //vm.setGlobal("DOC_getPosition", Api.DOC_getPosition);
+        //vm.reg("getPosition", Api.getPosition);
+        //vm.setGlobal("DOC_getHunger", Api.DOC_getHunger);
+        //vm.reg("getHunger", Api.getHunger);
+        //vm.setGlobal("DOC_timestamp", Api.DOC_timestamp);
+        //vm.reg("timestamp", Api.timestamp);
+        //vm.setGlobal("DOC_itemCount", Api.DOC_itemCount);
+        //vm.reg("itemCount", Api.itemCount);
+        //vm.setGlobal("DOC_countFreeSlots", Api.DOC_countFreeSlots);
+        //vm.reg("countFreeSlots", Api.countFreeSlots);
+        //vm.setGlobal("DOC_eatFood", Api.DOC_eatFood);
+        //vm.reg("eatFood", Api.eatFood);
+        //vm.reg("sleepms", Api.sleepms);
         vm.registerAllStruct(Api);
         return .{
             .thread_data = thread_data,
@@ -829,6 +872,21 @@ pub const LuaApi = struct {
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
         pub const LUA_PATH: []const u8 = "?;?.lua;scripts/?.lua;scripts/?";
+        //pub export const LUA_PATH = "?;?.lua;scripts/?.lua;scripts/?";
+
+        pub const DOC_inv_interact_action: []const u8 =
+            \\A action is a string of words: "DIRECTION COUNT MATCH_TYPE MATCH_PARAMS"
+            \\DIRECTION can be, "deposit", "withdraw"
+            \\COUNT can be a number or "all"
+            \\MATCH_TYPE can be:                            "item", "any", "category", "tag"
+            \\MATCH_PARAM is an argument to MATCH_TYPE :     NAME           CAT_NAME   TAG_NAME
+            \\
+            \\CAT_NAME comes from item_sort.json
+            \\Example actions:
+            \\"withdraw 1 item iron_pickaxe"
+            \\"deposit all any" --deposit all items
+            \\"deposit all category dye" --deposit any items defined as dye in item_sort.json
+        ;
 
         pub export fn reverseDirection(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
@@ -839,6 +897,7 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub const DOC_getMcTime: []const u8 = "returns minecraft world time";
         pub export fn getMcTime(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.world.modify_mutex.lock();
@@ -848,6 +907,7 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub const DOC_directionToVec: []const u8 = "Test";
         pub export fn directionToVec(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -898,8 +958,7 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        ///Args: x, y, z
-        ///returns nothing
+        pub const DOC_blockInfo: []const u8 = "Args:[vec3:block_coord], returns name and state info for a block in world";
         pub export fn blockInfo(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             const vm = self.vm;
@@ -936,6 +995,7 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub const DOC_sleepms: []const u8 = "Args: [int: time in ms], sleep lua script, scripts onYield is still called during sleep";
         pub export fn sleepms(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -956,6 +1016,7 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub const DOC_gotoLandmark: []const u8 = "Args: [string: landmark name] returns (vec3) landmark coord. Make the bot pathfind to the landmark";
         pub export fn gotoLandmark(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -1225,6 +1286,7 @@ pub const LuaApi = struct {
 
         //Arg chest_waypoint_name
         //TODO support globbing *_axe matches diamond_axe, stone_axe
+        pub const DOC_interactChest: []const u8 = "Arg:[landmark_name, []inv_interact_action]";
         pub export fn interactChest(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
@@ -1245,12 +1307,14 @@ pub const LuaApi = struct {
             return self.interactChest(bpos, to_move);
         }
 
+        pub const DOC_getSortCategories: []const u8 = "Args: [], returns []string, Names of all sorting categories defined in item_sort.json";
         pub export fn getSortCategories(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.pushV(L, self.world.reg.item_categories.categories.items);
             return 1;
         }
 
+        pub const DOC_getPosition: []const u8 = "Args: [], return (Vec3) of bots current world position";
         pub export fn getPosition(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
@@ -1263,6 +1327,7 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub const DOC_getHunger: []const u8 = "Args: [], returns (int 0-20) bots hunger";
         pub export fn getHunger(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
@@ -1275,11 +1340,13 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub const DOC_timestamp: []const u8 = "Args: [], returns (int) a real world timestamp in seconds";
         pub export fn timestamp(L: Lua.Ls) c_int {
             Lua.pushV(L, std.time.timestamp());
             return 1;
         }
 
+        pub const DOC_itemCount: []const u8 = "Args: item_predicate, returns (int),\n\titem_predicate is a string [[item, any, category] argument] where argument depends on the predicate. Examples: \"category food\" or \"item stone_bricks\"";
         pub export fn itemCount(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
@@ -1354,6 +1421,7 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub const DOC_countFreeSlots: []const u8 = "Args:[], returns (int) number of usable free slots in bots inventory";
         pub export fn countFreeSlots(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
@@ -1370,6 +1438,7 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub const DOC_eatFood: []const u8 = "Args:[], searches for first food item in inventory and eats returns true if bot ate.";
         pub export fn eatFood(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
@@ -2284,6 +2353,13 @@ fn drawInventory(
     }
 }
 
+pub const ConsoleCommands = enum {
+    query,
+    exit,
+    reload,
+    draw,
+};
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 16 }){};
     defer _ = gpa.detectLeaks();
@@ -2296,9 +2372,25 @@ pub fn main() !void {
     const Arg = graph.ArgGen.Arg;
     const args = try graph.ArgGen.parseArgs(&.{
         Arg("draw", .flag, "Draw debug graphics"),
+        Arg("doc", .flag, "print generated documentation and exit"),
         Arg("ip", .string, "Override ip"),
         Arg("port", .number, "Override port"),
     }, &arg_it);
+
+    if (args.doc != null) {
+        const info = @typeInfo(LuaApi.Api);
+        const seperator = "";
+        inline for (info.Struct.decls) |d| {
+            if (std.mem.startsWith(u8, d.name, "DOC_")) {
+                const f = @field(LuaApi.Api, d.name);
+                if (@typeInfo(@TypeOf(f)) == .Pointer) {
+                    std.debug.print("{s}: {s}\n", .{ d.name["DOC_".len..], f });
+                    std.debug.print("{s}\n", .{seperator});
+                }
+            }
+        }
+        return;
+    }
 
     var dr = try Reg.DataReg.init(alloc, Proto.minecraftVersion);
     defer dr.deinit();
@@ -2367,52 +2459,63 @@ pub fn main() !void {
                 const n = try std.posix.read(eve.data.fd, &msg);
                 var itt = std.mem.tokenize(u8, msg[0 .. n - 1], " ");
                 const key = itt.next() orelse continue;
-                if (eql(u8, "exit", key)) {
-                    update_bots_exit_mutex.unlock();
-                    run = false;
-                } else if (eql(u8, "reload", key)) {
-                    const bname = itt.next() orelse continue;
-                    var b_it = world.bots.valueIterator();
-                    while (b_it.next()) |b| {
-                        if (eql(u8, b.name, bname)) {
-                            std.debug.print("Reloading bot: {s}\n", .{b.name});
-                            world.bot_reload_mutex.lock();
-                            defer world.bot_reload_mutex.unlock();
-                            world.reload_bot_id = b.fd;
-                            break;
-                        }
-                    }
-                } else if (eql(u8, "draw", key)) {
-                    const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
-                    draw_thread.detach();
-                } else if (eql(u8, "query", key)) { //query the tag table, "query ?namespace ?tag"
-                    if (itt.next()) |tag_type| {
-                        const tags = world.tag_table.tags.getPtr(tag_type) orelse unreachable;
-                        if (itt.next()) |wanted_tag| {
-                            if (tags.get(wanted_tag)) |t| {
-                                std.debug.print("Ids for: {s} {s}\n", .{ tag_type, wanted_tag });
-                                for (t.items) |item| {
-                                    std.debug.print("\t{d}\n", .{item});
+                if (std.meta.stringToEnum(ConsoleCommands, key)) |k| {
+                    switch (k) {
+                        .exit => {
+                            update_bots_exit_mutex.unlock();
+                            run = false;
+                        },
+                        .reload => {
+                            const bname = itt.next() orelse continue;
+                            var b_it = world.bots.valueIterator();
+                            while (b_it.next()) |b| {
+                                if (eql(u8, b.name, bname)) {
+                                    std.debug.print("Reloading bot: {s}\n", .{b.name});
+                                    world.bot_reload_mutex.lock();
+                                    defer world.bot_reload_mutex.unlock();
+                                    world.reload_bot_id = b.fd;
+                                    break;
                                 }
                             }
-                        } else {
-                            var kit = tags.keyIterator();
-                            var ke = kit.next();
-                            std.debug.print("Possible sub tag: \n", .{});
-                            while (ke != null) : (ke = kit.next()) {
-                                std.debug.print("\t{s}\n", .{ke.?.*});
+                        },
+                        .draw => {
+                            const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
+                            draw_thread.detach();
+                        },
+                        .query => { //query the tag table, "query ?namespace ?tag"
+                            if (itt.next()) |tag_type| {
+                                const tags = world.tag_table.tags.getPtr(tag_type) orelse unreachable;
+                                if (itt.next()) |wanted_tag| {
+                                    if (tags.get(wanted_tag)) |t| {
+                                        std.debug.print("Ids for: {s} {s}\n", .{ tag_type, wanted_tag });
+                                        for (t.items) |item| {
+                                            std.debug.print("\t{d}\n", .{item});
+                                        }
+                                    }
+                                } else {
+                                    var kit = tags.keyIterator();
+                                    var ke = kit.next();
+                                    std.debug.print("Possible sub tag: \n", .{});
+                                    while (ke != null) : (ke = kit.next()) {
+                                        std.debug.print("\t{s}\n", .{ke.?.*});
+                                    }
+                                }
+                            } else {
+                                var kit = world.tag_table.tags.keyIterator();
+                                var ke = kit.next();
+                                std.debug.print("Possible tags: \n", .{});
+                                while (ke != null) : (ke = kit.next()) {
+                                    std.debug.print("\t{s}\n", .{ke.?.*});
+                                }
                             }
-                        }
-                    } else {
-                        var kit = world.tag_table.tags.keyIterator();
-                        var ke = kit.next();
-                        std.debug.print("Possible tags: \n", .{});
-                        while (ke != null) : (ke = kit.next()) {
-                            std.debug.print("\t{s}\n", .{ke.?.*});
-                        }
+                        },
                     }
                 } else {
                     std.debug.print("Unknown command: \"{s}\"\n", .{key});
+                    std.debug.print("Possible commands: \n", .{});
+                    inline for (@typeInfo(ConsoleCommands).Enum.fields) |f| {
+                        std.debug.print("\t{s}\n", .{f.name});
+                    }
                 }
                 continue;
             }
