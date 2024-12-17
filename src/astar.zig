@@ -106,8 +106,10 @@ pub const AStarContext = struct {
 
         eat: void,
         movement: MoveItem,
+        block_break_pos: V3i,
         block_break: BreakBlock,
         wait_ms: u32,
+        hold_item_name: Reg.ItemId,
         hold_item: struct { slot_index: u16 },
         place_block: struct {
             pos: V3i,
@@ -334,9 +336,10 @@ pub const AStarContext = struct {
             .y = @as(i32, @intFromFloat(@floor(start.y))),
             .z = @as(i32, @intFromFloat(@floor(start.z))),
         });
-        const gpx = @as(i32, @intFromFloat(@round(goal.x)));
-        const gpy = @as(i32, @intFromFloat(@round(goal.y)));
-        const gpz = @as(i32, @intFromFloat(@round(goal.z)));
+        //Is there a reason this is round
+        const gpx = @as(i32, @intFromFloat(@floor(goal.x)));
+        const gpy = @as(i32, @intFromFloat(@floor(goal.y)));
+        const gpz = @as(i32, @intFromFloat(@floor(goal.z)));
 
         var i: u32 = 0;
         while (i < ITERATION_LIMIT) : (i += 1) {

@@ -3,7 +3,7 @@ ip = "localhost"
 port = 25565
 
 local bots_list = {
-        { name = "John1",        script_name = "scripts/do_nothing.lua" },
+        { name = "John1",        script_name = "scripts/slicer.lua" },
         { name = "James",       script_name = "scripts/bot.lua" },
         { name = "Charles",     script_name = "scripts/ethel.lua" },
         { name = "George",      script_name = "scripts/ethel.lua" },

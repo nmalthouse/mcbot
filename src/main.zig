@@ -674,6 +674,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     }
 }
 
+pub const BuildLayer = struct {
+    //bitmap: []const Reg.BlockId,
+    bitmap: [][]const u8,
+    offset: V3f,
+    direction: ?Reg.Direction,
+};
+
 threadlocal var lss: ?*LuaApi = null;
 pub const LuaApi = struct {
     const sToE = std.meta.stringToEnum;
@@ -703,49 +710,6 @@ pub const LuaApi = struct {
     }
 
     pub fn init(alloc: std.mem.Allocator, world: *McWorld, bo: *Bot, thread_data: *bot.BotScriptThreadData, vm: *Lua) Self {
-        //vm.setGlobal("LUA_PATH", Api.LUA_PATH);
-        //vm.reg("reverseDirection", Api.reverseDirection);
-        //vm.setGlobal("DOC_getMcTime", Api.DOC_getMcTime);
-        //vm.reg("getMcTime", Api.getMcTime);
-        //vm.setGlobal("DOC_directionToVec", Api.DOC_directionToVec);
-        //vm.reg("directionToVec", Api.directionToVec);
-        //vm.reg("freemovetest", Api.freemovetest);
-        //vm.reg("floodFindColumn", Api.floodFindColumn);
-        //vm.setGlobal("DOC_blockInfo", Api.DOC_blockInfo);
-        //vm.reg("blockInfo", Api.blockInfo);
-        //vm.setGlobal("DOC_sleepms", Api.DOC_sleepms);
-        //vm.reg("sleepms", Api.sleepms);
-        //vm.setGlobal("DOC_gotoLandmark", Api.DOC_gotoLandmark);
-        //vm.reg("gotoLandmark", Api.gotoLandmark);
-        //vm.reg("assignMine", Api.assignMine);
-        //vm.reg("findNearbyItems", Api.findNearbyItems);
-        //vm.reg("getLandmark", Api.getLandmark);
-        //vm.reg("placeBlock", Api.placeBlock);
-        //vm.reg("breakBlock", Api.breakBlock);
-        //vm.reg("gotoCoord", Api.gotoCoord);
-        //vm.reg("chopNearestTree", Api.chopNearestTree);
-        //vm.reg("getBlockId", Api.getBlockId);
-        //vm.reg("getBlock", Api.getBlock);
-        //vm.reg("getFieldFlood", Api.getFieldFlood);
-        //vm.reg("craft", Api.craft);
-        //vm.setGlobal("DOC_interactChest", Api.DOC_interactChest);
-        //vm.reg("interactChest", Api.interactChest);
-        //vm.reg("interactInv", Api.interactInv);
-        //vm.setGlobal("DOC_getSortCategories", Api.DOC_getSortCategories);
-        //vm.reg("getSortCategories", Api.getSortCategories);
-        //vm.setGlobal("DOC_getPosition", Api.DOC_getPosition);
-        //vm.reg("getPosition", Api.getPosition);
-        //vm.setGlobal("DOC_getHunger", Api.DOC_getHunger);
-        //vm.reg("getHunger", Api.getHunger);
-        //vm.setGlobal("DOC_timestamp", Api.DOC_timestamp);
-        //vm.reg("timestamp", Api.timestamp);
-        //vm.setGlobal("DOC_itemCount", Api.DOC_itemCount);
-        //vm.reg("itemCount", Api.itemCount);
-        //vm.setGlobal("DOC_countFreeSlots", Api.DOC_countFreeSlots);
-        //vm.reg("countFreeSlots", Api.countFreeSlots);
-        //vm.setGlobal("DOC_eatFood", Api.DOC_eatFood);
-        //vm.reg("eatFood", Api.eatFood);
-        //vm.reg("sleepms", Api.sleepms);
         vm.registerAllStruct(Api);
         return .{
             .thread_data = thread_data,
@@ -777,6 +741,19 @@ pub const LuaApi = struct {
     pub fn endHalt(self: *Self) void {
         self.thread_data.unlock(.script_thread);
         std.time.sleep(std.time.ns_per_s / 10);
+    }
+
+    //Assumes appropriate mutexs are owned by calling thread
+    //todo make self have a method lock unlock for all owned mutex
+    pub fn addBreakBlockAction(self: *Self, actions: *ActionListT, coord: V3i) void {
+        const sid = self.world.chunk_data.getBlock(coord) orelse return;
+        const block = self.world.reg.getBlockFromState(sid);
+        if (self.bo.inventory.findToolForMaterial(self.world.reg, block.material)) |match| {
+            const hardness = block.hardness orelse return;
+            const btime = Reg.calculateBreakTime(match.mul, hardness, .{});
+            errc(actions.append(.{ .block_break = .{ .pos = coord, .break_time = @as(f64, @floatFromInt(btime)) / 20 } })) orelse return;
+            errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(match.slot_index)) } })) orelse return;
+        }
     }
 
     pub fn interactChest(self: *Self, coord: V3i, to_move: [][]const u8) c_int {
@@ -895,6 +872,114 @@ pub const LuaApi = struct {
 
             Lua.pushV(L, p.reverse());
             return 1;
+        }
+        //TODO every exported lua function should be wrapped in a BEGIN_LUA, END_LUA function pair.
+        //all stack operations are tracked
+        //at compile time we can detect when an error has been made regarding stack discipline
+        //TODO fn for bot to chat or run commands
+
+        pub export fn makeSlice(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 2);
+            const p = self.vm.getArg(L, []const u8, 1);
+            const param = self.vm.getArg(L, [][]const u8, 2);
+
+            std.debug.print("{s} \n", .{p});
+            for (param) |pp| {
+                std.debug.print("{s} \n", .{pp});
+            }
+            //Lua.pushV(L, p.toVec());
+            return 0;
+        }
+
+        pub export fn applySlice(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const p = self.vm.getArg(L, BuildLayer, 1);
+            if (p.bitmap.len != 9) { //todo fix
+                std.debug.print("invalid bmp len\n", .{});
+                return 0;
+            }
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            defer self.bo.modify_mutex.unlock();
+            //for each item in bitmap
+            //calculate world position
+            //add relavant item to action items
+            //
+            //
+            //rotation in x swaps y = -z, z = y
+            //in y x = -z, z = x
+            //in z x = -y, y = x
+            var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
+            const bf = pos.toIFloor();
+            const offset = p.offset.toIFloor();
+            const w = 3;
+            const h = 3;
+            for (p.bitmap, 0..) |bl, i| {
+                //TODO if block already exists, skip it
+                const x: i32 = @intCast(i % w);
+                const y: i32 = @intCast(i / h);
+                var loc = V3i.new(x, 0, y).add(offset);
+                if (p.direction) |dir| {
+                    switch (dir) {
+                        .south => {
+                            const t = loc.y;
+                            loc.y = -loc.z;
+                            loc.z = t;
+                            loc.x = -loc.x;
+                        },
+                        .north => {
+                            const t = loc.y;
+                            loc.y = -loc.z;
+                            loc.z = -t;
+                            loc.x = loc.x;
+                        },
+                        .east => {
+                            const t = loc.x;
+                            loc.x = loc.y;
+                            loc.y = -loc.z;
+                            loc.z = t;
+                        },
+                        .west => {
+                            const t = loc.x;
+                            loc.x = -loc.y;
+                            loc.y = -loc.z;
+                            loc.z = -t;
+                        },
+                    }
+                }
+                const bpos = bf.add(loc);
+                if (self.world.chunk_data.getBlock(bpos)) |id| {
+                    const item = self.world.reg.getItemFromName(bl);
+                    const block = self.world.reg.getBlockFromState(id);
+
+                    if (std.mem.eql(u8, item.?.name, block.name)) {
+                        continue;
+                    }
+
+                    if (!std.mem.eql(u8, "air", bl)) {
+                        errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
+                        errc(actions.append(.{ .hold_item_name = item.?.id })) orelse return 0;
+                    }
+                    if (id != 0) {
+                        errc(actions.append(.{ .block_break_pos = bpos })) orelse return 0;
+                    }
+                    if (std.mem.eql(u8, block.name, "water")) {
+                        errc(actions.append(.{ .block_break_pos = bpos })) orelse return 0;
+                        errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
+                        errc(actions.append(.{ .hold_item_name = self.world.reg.getItemFromName("stone").?.id })) orelse return 0;
+                    }
+                }
+                //errc(actions.append(.{ .wait_ms = 300 })) orelse return 0;
+            }
+            self.thread_data.setActions(actions, pos);
+
+            //Lua.pushV(L, p.toVec());
+            return 0;
         }
 
         pub const DOC_getMcTime: []const u8 = "returns minecraft world time";
@@ -1643,6 +1728,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
                                 th_d.nextAction(0, bo.pos.?);
                             },
+                            .hold_item_name => |in| {
+                                try bp.setHeldItem(0);
+                                if (bo.inventory.findItemFromId(in)) |found| {
+                                    try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, null);
+                                }
+                                th_d.nextAction(0, bo.pos.?);
+                            },
                             .hold_item => |si| {
                                 try bp.setHeldItem(0);
                                 try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
@@ -1732,6 +1824,32 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 //bo.interacted_inventory.win_id = null;
                                 th_d.nextAction(0, bo.pos.?);
                             },
+                            .block_break_pos => |p| {
+                                //TODO catch error
+                                if (th_d.timer == null) {
+                                    const pw = mc.lookAtBlock(bo.pos.?, p.toF());
+                                    th_d.timer = dt;
+                                    const sid = world.chunk_data.getBlock(p).?;
+                                    const block = world.reg.getBlockFromState(sid);
+                                    if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
+                                        const hardness = block.hardness.?;
+                                        const btime = Reg.calculateBreakTime(match.mul, hardness, .{});
+                                        th_d.break_timer_max = @as(f64, @floatFromInt(btime)) / 20.0;
+
+                                        try bp.setHeldItem(0);
+                                        try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, null);
+                                    }
+                                    try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                    try bp.playerAction(.start_digging, p);
+                                } else {
+                                    th_d.timer.? += dt;
+                                    if (th_d.timer.? >= th_d.break_timer_max) {
+                                        th_d.timer = null;
+                                        try bp.playerAction(.finish_digging, p);
+                                        th_d.nextAction(0, bo.pos.?);
+                                    }
+                                }
+                            },
                             .block_break => |bb| {
                                 if (th_d.timer == null) {
                                     const pw = mc.lookAtBlock(bo.pos.?, bb.pos.toF());
@@ -1739,12 +1857,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     try bp.playerAction(.start_digging, bb.pos);
                                     th_d.timer = dt;
                                 } else {
-                                    th_d.timer.? += dt;
                                     if (th_d.timer.? >= bb.break_time) {
                                         th_d.timer = null;
                                         try bp.playerAction(.finish_digging, bb.pos);
                                         th_d.nextAction(0, bo.pos.?);
                                     }
+                                    if (th_d.timer != null)
+                                        th_d.timer.? += dt;
                                 }
                             },
                         }

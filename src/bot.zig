@@ -251,9 +251,13 @@ pub const Inventory = struct {
 
     pub fn findItem(self: *Self, reg: *const Reg, item_name: []const u8) ?FoundSlot {
         const q = reg.getItemFromName(item_name) orelse return null;
+        return self.findItemFromId(q.id);
+    }
+
+    pub fn findItemFromId(self: *Self, item_id: RegD.ItemId) ?FoundSlot {
         for (self.slots.items, 0..) |o_slot, i| {
             if (o_slot) |slot| {
-                if (slot.item_id == q.id)
+                if (slot.item_id == item_id)
                     return .{ .slot = slot, .index = @intCast(i) };
             }
         }
@@ -315,6 +319,7 @@ pub const BotScriptThreadData = struct {
     action_index: ?usize = null,
     move_state: MovementState = undefined,
     timer: ?f64 = null,
+    break_timer_max: f64 = 0,
 
     pub fn init(alloc: std.mem.Allocator, bot_ptr: *Bot) Self {
         return .{

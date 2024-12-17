@@ -56,3 +56,14 @@ How to deal with sand, gravel, water, lava etc
 
 the applySlice routine checks for these things and continues to dig or fill blocks accordingly
 
+
+ladder sink bot psuedocode
+bot walks to landmark
+label:1
+breaks block beneath
+places ladder beneath
+moveDown
+goto 1
+Instead we just applySlice, where slice is a ladder
+
+

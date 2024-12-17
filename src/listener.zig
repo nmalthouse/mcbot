@@ -1332,6 +1332,8 @@ pub const ChunkSection = struct {
     //This function sets the data array to whatever index is mapped to id,
     //The id MUST exist in the mapping.
     pub fn setData(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) void {
+        if (self.bits_per_entry == 0)
+            return;
         const bi = self.getBlockIndex(rx, ry, rz);
         const long = &self.data.items[bi.index];
         const mask = getBitMask(self.bits_per_entry) << @as(u6, @intCast(bi.offset * bi.bit_count));
