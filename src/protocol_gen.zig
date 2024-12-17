@@ -4,6 +4,7 @@ const FbsT = std.io.FixedBufferStream([]u8);
 const JValue = std.json.Value;
 const eql = std.mem.eql;
 const Alloc = std.mem.Allocator;
+const com = @import("common.zig");
 
 fn getV(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) @TypeOf(@field(v, @tagName(tag))) {
     return getVal(v, tag) orelse unreachable;
@@ -91,6 +92,17 @@ pub fn main() !void {
     try emitPacketEnum(arena_alloc, &root, w, "login", "toServer", "Login_Serverbound");
     try emitPacketEnum(arena_alloc, &root, w, "configuration", "toClient", "Config_Clientbound");
     try emitPacketEnum(arena_alloc, &root, w, "configuration", "toServer", "Config_Serverbound");
+
+    { //Entity enums
+        var ents = try com.readJson(mc_data_dir, "entities.json", alloc, []struct { id: u32, name: []const u8 });
+        defer ents.deinit();
+
+        try w.print("pub const EntityEnum = enum(i32){{\n", .{});
+        for (ents.value) |v| {
+            try w.print("{s} = {d},\n", .{ v.name, v.id });
+        }
+        try w.print("}};\n", .{});
+    }
 }
 
 pub fn emitPacketEnum(alloc: std.mem.Allocator, root: *std.json.ObjectMap, writer: anytype, game_state: []const u8, direction: []const u8, enum_name: []const u8) !void {
@@ -134,6 +146,10 @@ const SupportedTypes = enum {
     array,
     option,
     buffer,
+    bitfield,
+    //Unsupported
+    //bitfield
+    //switch
 };
 
 // Handling array type
@@ -349,11 +365,46 @@ pub const ParseStructGen = struct {
     }
 };
 
+//Easy bitfields?
+//just have a struct with single sized integer and let user extract the fields
+
 pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8, gen_fields: bool, optional: bool) !void {
     switch (v) {
         .array => |a| { //An array is some compound type definition
             const t = strToEnum(SupportedTypes, getV(a.items[0], .string)) orelse return error.notSupported;
             switch (t) {
+                .bitfield => { //Bitfield is like a struct/container
+
+                    const Tname = try printString("Type_{s}", .{fname});
+                    const child = try parent.newDecl(Tname);
+
+                    child.d = .{ ._struct = ParseStructGen.init(parent.alloc) };
+                    const fields = getV(a.items[1], .array).items;
+                    var total_size: i64 = 0;
+                    for (fields) |f| {
+                        const ob = getV(f, .object);
+                        //const ident = getV(ob.get("name").?, .string);
+                        const field_size = getV(ob.get("size").?, .integer);
+                        total_size += field_size;
+                        //const is_signed = getV(ob.get("signed").?, .bool);
+                    }
+                    try newGenType(
+                        .{ .string = try printString("u{d}", .{@as(usize, switch (total_size) {
+                            32 => 32,
+                            64 => 64,
+                            8 => 8,
+                            16 => 16,
+                            else => return error.notSupported,
+                        })}) },
+                        &child.d._struct,
+                        "bitfield",
+                        true,
+                        false,
+                    );
+                    std.debug.print("TOTAL BITFIELD SIZE {d}\n", .{total_size});
+                    if (gen_fields)
+                        try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
+                },
                 .container => {
                     const Tname = try printString("Type_{s}", .{fname});
 

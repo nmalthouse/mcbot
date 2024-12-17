@@ -255,11 +255,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .named_entity_spawn => {
             const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
-            try world.putEntity(bot1, data, data.playerUUID);
+            try world.putEntity(bot1, data, data.playerUUID, Proto.EntityEnum.player);
         },
         .spawn_entity => {
             const data = try CB.Type_packet_spawn_entity.parse(&parse);
-            try world.putEntity(bot1, data, data.objectUUID);
+            try world.putEntity(bot1, data, data.objectUUID, @enumFromInt(data.type));
         },
         .entity_destroy => {
             const d = try CB.Type_packet_entity_destroy.parse(&parse);
@@ -1190,7 +1190,7 @@ pub const LuaApi = struct {
             defer self.world.entities_mutex.unlock();
             var e_it = self.world.entities.iterator();
             while (e_it.next()) |e| {
-                if (e.value_ptr.kind == .@"minecraft:item") {
+                if (e.value_ptr.kind == .item) {
                     if (e.value_ptr.pos.subtract(pos).magnitude() < max_dist) {
                         const bpos = V3i.new(
                             @intFromFloat(@floor(e.value_ptr.pos.x)),

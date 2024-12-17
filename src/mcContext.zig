@@ -1,5 +1,6 @@
 const std = @import("std");
 const mc = @import("listener.zig");
+const Proto = @import("protocol.zig");
 const vector = @import("vector.zig");
 const V3f = vector.V3f;
 const Bot = @import("bot.zig").Bot;
@@ -28,7 +29,7 @@ pub fn RingBuf(comptime n: usize, comptime T: type) type {
 pub const Entity = struct {
     const OwnersT = std.bit_set.IntegerBitSet(MAX_BOTS);
     owners: OwnersT,
-    kind: IdList.entity_type_enum,
+    kind: Proto.EntityEnum,
     uuid: u128,
     pos: V3f,
     yaw: i8,
@@ -114,7 +115,7 @@ pub const McWorld = struct {
         return self.sign_waypoints.get(sign_name);
     }
 
-    pub fn putEntity(self: *Self, bot: *Bot, data: anytype, uuid: u128) !void {
+    pub fn putEntity(self: *Self, bot: *Bot, data: anytype, uuid: u128, etype: Proto.EntityEnum) !void {
         self.entities_mutex.lock();
         defer self.entities_mutex.unlock();
 
@@ -127,7 +128,7 @@ pub const McWorld = struct {
             set.set(bot.index_id);
             g.value_ptr.* = .{
                 .owners = set,
-                .kind = .@"minecraft:cod", //TODO fixme
+                .kind = etype, //TODO fixme
                 .uuid = uuid,
                 .pos = V3f.new(data.x, data.y, data.z),
                 .pitch = data.pitch,
