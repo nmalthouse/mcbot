@@ -34,8 +34,8 @@ pub const ItemCatJson = struct {
 // [P] blocks.json
 
 pub const Recipe = struct {
-    inShape: ?[][]?ItemId = null,
-    ingredients: ?[]ItemId = null,
+    inShape: ?[][]?ItemId = null, //if set, shaped
+    ingredients: ?[]ItemId = null, //if set,  Shapeless
     result: struct {
         count: u8,
         id: ItemId,
@@ -43,6 +43,8 @@ pub const Recipe = struct {
 };
 
 pub const RecipeJson = std.json.ArrayHashMap([]Recipe);
+
+pub const RecipeMap = std.AutoHashMap(ItemId, []Recipe);
 
 pub const Food = struct {
     id: ItemId,
@@ -355,6 +357,7 @@ pub const DataReg = struct {
     alloc: std.mem.Allocator,
     item_categories: ItemCategories,
     version_id: i32,
+    block_name_map: std.StringHashMap(BlockId),
     item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[]. name strings are stored in items[]
     items: []Item,
     foods: []Food,
@@ -362,6 +365,7 @@ pub const DataReg = struct {
     entities: EntitiesJson,
     materials: Materials,
     recipes: RecipeJson,
+    rec_map: RecipeMap,
 
     empty_block_ids: std.ArrayList(BlockId),
 
@@ -395,6 +399,14 @@ pub const DataReg = struct {
         defer mat.deinit();
 
         const rec = try com.readJson(data_dir, "recipes.json", alloc, RecipeJson);
+        var rec_map = RecipeMap.init(alloc);
+        {
+            var it = rec.value.map.iterator();
+            while (it.next()) |item| {
+                //Don't realloc just keep contents owned by json rec
+                try rec_map.put(try std.fmt.parseInt(ItemId, item.key_ptr.*, 10), item.value_ptr.*);
+            }
+        }
 
         const blocks = try alloc.alloc(Block, block.value.len);
 
@@ -411,6 +423,11 @@ pub const DataReg = struct {
         std.sort.heap(Block, blocks, {}, Block.asc);
         block.deinit();
 
+        var block_map = std.StringHashMap(BlockId).init(alloc);
+        for (blocks, 0..) |bl, i| {
+            try block_map.put(bl.name, @intCast(i));
+        }
+
         const foodj = try com.readJson(data_dir, "foods.json", alloc, FoodJson);
         defer foodj.deinit();
         const foods = try alloc.alloc(Food, foodj.value.len);
@@ -420,6 +437,7 @@ pub const DataReg = struct {
         //std.sort.heap(Entity, ent.value, {}, Entity.asc);
 
         const ret = Self{
+            .rec_map = rec_map,
             .recipes = rec.value,
             .version_id = version_info.value.version,
             .item_categories = ItemCategories.init(alloc),
@@ -427,6 +445,7 @@ pub const DataReg = struct {
             .entities = ent.value,
             .foods = foods,
             .item_name_map = item_map,
+            .block_name_map = block_map,
             .items = items,
             .blocks = blocks,
             .materials = try Materials.initFromJson(alloc, mat.value),
@@ -497,6 +516,7 @@ pub const DataReg = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        self.rec_map.deinit();
         self.item_categories.deinit();
         for (self.blocks) |b| {
             self.alloc.free(b.name);
@@ -509,6 +529,7 @@ pub const DataReg = struct {
         }
         self.alloc.free(self.items);
         self.item_name_map.deinit();
+        self.block_name_map.deinit();
         self.materials.deinit();
         self.empty_block_ids.deinit();
         self.ent_j.deinit();
@@ -567,19 +588,15 @@ pub const DataReg = struct {
     }
 
     pub fn getBlockFromNameI(self: *const Self, name: []const u8) ?Block {
-        for (self.blocks) |block| {
-            if (std.mem.eql(u8, block.name, name)) {
-                return block;
-            }
+        if (self.block_name_map.get(name)) |index| {
+            return self.blocks[index];
         }
         return null;
     }
 
     pub fn getBlockFromName(self: *const Self, name: []const u8) ?BlockId {
-        for (self.blocks) |block| {
-            if (std.mem.eql(u8, block.name, name)) {
-                return block.id;
-            }
+        if (self.block_name_map.get(name)) |index| {
+            return self.blocks[index].id;
         }
         return null;
     }

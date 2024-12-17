@@ -309,13 +309,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var tracker = tr.init(arena_alloc, parse.reader);
             defer tracker.deinit();
 
+            std.debug.print("TILE ENT DATA {d} {any}\n", .{ btype, pos });
+            if (world.chunk_data.getBlock(pos)) |bl| {
+                const block = world.reg.getBlockFromState(bl);
+                std.debug.print("BBL {s}\n", .{block.name});
+            }
+
             const nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch {
                 log.warn("Nbt crashed", .{});
                 return;
             };
             _ = nbt_data;
-            _ = pos;
-            _ = btype;
             //_ = nbt_data;
         },
         .entity_teleport => {
@@ -437,6 +441,41 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                         const num_longs = @as(u32, @intCast(mc.readVarInt(cr)));
                         try cr.skipBytes(num_longs * @sizeOf(u64), .{});
+                    }
+                }
+
+                //Find all the crafting benches
+                {
+                    //other things to find
+                    //Beds
+                    //furnace
+                    const crafting_bench = world.reg.getBlockFromNameI("crafting_table").?;
+                    var skip = false;
+                    if (chunk_section.palatte_t == .map) {
+                        var none = true;
+                        for (chunk_section.mapping.items) |map| {
+                            if (map >= crafting_bench.minStateId and map <= crafting_bench.maxStateId) {
+                                none = false;
+                                break;
+                            }
+                        }
+                        if (none)
+                            skip = true;
+                    }
+                    var count: usize = 0;
+                    if (!skip) {
+                        var i: u32 = 0;
+                        while (i < 16 * 16 * 16) : (i += 1) {
+                            count += 1;
+                            const block = chunk_section.getBlockFromIndex(i);
+                            const bid = world.reg.getBlockIdFromState(block.block);
+                            if (bid == crafting_bench.id) {
+                                std.debug.print("FOUND BENCH\n", .{});
+                            }
+                        }
+                    }
+                    if (count > 0) {
+                        std.debug.print("COUNT {d}\n", .{count});
                     }
                 }
             }
@@ -1295,7 +1334,8 @@ pub const LuaApi = struct {
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
 
-            return 0;
+            Lua.pushV(L, true);
+            return 1;
         }
 
         pub export fn chopNearestTree(L: Lua.Ls) c_int {
@@ -1378,26 +1418,105 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        pub export fn craft(L: Lua.Ls) c_int {
+        pub const DOC_craftDumb: []const u8 = "Arg: [item_name, count], searches recipes and will craft if it has all necessary ingredients in inventory ";
+        pub export fn craftDumb(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
-            Lua.c.lua_settop(L, 1);
+            Lua.c.lua_settop(L, 2);
             const item_name = self.vm.getArg(L, []const u8, 1);
+            const item_count = self.vm.getArg(L, i32, 2);
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
+            //TODO store all crafting tables in world and find nearest one
             const wp = self.world.getSignWaypoint("craft_craft") orelse return 0;
             if (self.world.reg.getItemFromName(item_name)) |item| {
-                var actions = ActionListT.init(self.world.alloc);
-                errc(actions.append(.{ .close_chest = {} })) orelse return 0;
-                errc(actions.append(.{ .wait_ms = 2000 })) orelse return 0;
-                errc(actions.append(.{ .craft = .{ .product_id = item.id, .count = 1 } })) orelse return 0;
-                errc(actions.append(.{ .open_chest = .{ .pos = wp.pos } })) orelse return 0;
-                self.thread_data.setActions(actions, pos);
+                if (self.world.reg.rec_map.get(item.id)) |recipe_list| {
+                    for (recipe_list) |rec| {
+                        var needed_ingred: [9]struct { count: u32 = 0, id: u32 = 0 } = undefined;
+                        var needed_i: usize = 0;
+                        if (rec.ingredients) |ing| {
+                            for (ing) |in| {
+                                var set = false;
+                                for (0..needed_i) |i| {
+                                    if (needed_ingred[i].id == in) {
+                                        needed_ingred[i].count += 1;
+                                        set = true;
+                                    }
+                                }
+                                if (!set) {
+                                    needed_ingred[needed_i] = .{ .id = in, .count = 1 };
+                                    needed_i += 1;
+                                }
+                            }
+                        }
+                        if (rec.inShape) |shaped| {
+                            for (shaped) |sh1| {
+                                for (sh1) |sh| {
+                                    const s = sh orelse continue;
+                                    var set = false;
+                                    for (0..needed_i) |i| {
+                                        if (needed_ingred[i].id == s) {
+                                            needed_ingred[i].count += 1;
+                                            set = true;
+                                        }
+                                    }
+                                    if (!set) {
+                                        needed_ingred[needed_i] = .{ .id = s, .count = 1 };
+                                        needed_i += 1;
+                                    }
+                                }
+                            }
+                        }
+                        //How many rec to get needed amount
+
+                        const mult: u32 = @intFromFloat(@ceil(@as(f32, @floatFromInt(item_count)) / @as(f32, @floatFromInt(rec.result.count))));
+                        var missing = false;
+                        for (needed_ingred[0..needed_i]) |n| {
+                            std.debug.print("needed {d} {d} {d}\n", .{ n.count, n.id, mult });
+                            if (n.count * mult > self.bo.inventory.getCount(@intCast(n.id))) {
+                                missing = true;
+                            } else {
+                                continue;
+                            }
+                            missing = true;
+                            //std.debug.print("needed {s} {d}\n", .{ self.world.reg.getItem(@intCast(n.id)).name, n.count });
+                        }
+                        if (!missing) {
+                            var grid = [_]?Reg.ItemId{null} ** 9;
+                            if (rec.ingredients) |ing| {
+                                for (ing, 0..) |in, ii|
+                                    grid[ii] = in;
+                            }
+                            if (rec.inShape) |shaped| {
+                                var i: usize = 0;
+                                for (shaped) |row| {
+                                    for (row) |col| {
+                                        grid[i] = col;
+                                        i += 1;
+                                    }
+                                    if (row.len < 3)
+                                        i += 3 - row.len;
+                                }
+                            }
+                            var actions = ActionListT.init(self.world.alloc);
+                            errc(actions.append(.{ .close_chest = {} })) orelse return 0;
+                            errc(actions.append(.{ .wait_ms = 100 })) orelse return 0;
+                            errc(actions.append(.{ .craft = .{ .product_id = item.id, .grid = grid, .count = @intCast(mult) } })) orelse return 0;
+                            errc(actions.append(.{ .wait_ms = 100 })) orelse return 0;
+                            errc(actions.append(.{ .open_chest = .{ .pos = wp.pos } })) orelse return 0;
+                            self.thread_data.setActions(actions, pos);
+                            return 0;
+                        } else {}
+                    }
+                }
             }
-            return 0;
+
+            std.debug.print("CANT CRAFT\n", .{});
+            Lua.pushV(L, "can't craft");
+            return 1;
         }
 
         //Arg chest_waypoint_name
@@ -1606,6 +1725,7 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScr
 //currently we just sleep for some time, a better way would be to wait spawning the threads until some condition.
 //Maybe having n chunks loaded or certain waypoints added
 pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Thread.Mutex) !void {
+    const log = std.log.scoped(.update);
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
     defer arena_allocs.deinit();
     const arena_alloc = arena_allocs.allocator();
@@ -1780,28 +1900,29 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .craft => |cr| {
-                                _ = cr;
                                 if (bo.interacted_inventory.win_id) |wid| {
-                                    const magic_num = 36;
-                                    const inv_len = bo.interacted_inventory.slots.items.len;
-                                    const player_inv_start = inv_len - magic_num;
-                                    const search_i = player_inv_start;
-                                    const search_i_end = inv_len;
-                                    const oak_log = world.reg.getItemFromName("oak_log") orelse unreachable;
-                                    for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
-                                        const s = slot orelse continue;
-                                        if (s.item_id == oak_log.id) {
-                                            try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 0, &.{}, slot);
-
-                                            //Index 5 is middle of crafting table
-                                            try bp.clickContainer(wid, bo.container_state, 5, 0, 0, &.{}, null);
-
-                                            //index 0 is crafting result
-                                            try bp.clickContainer(wid, bo.container_state, 0, 1, 0, &.{}, null);
-                                        }
+                                    if (th_d.craft_item_counter == null) {
+                                        th_d.craft_item_counter = cr.count;
                                     }
+                                    const count = &th_d.craft_item_counter.?;
+                                    const item = world.reg.getItem(cr.product_id);
+                                    if (count.* == 64) {
+                                        try bp.doRecipeBook(wid, item.name, true);
+                                        count.* = 0;
+                                    } else {
+                                        try bp.doRecipeBook(wid, item.name, false);
+                                        if (count.* >= 1)
+                                            count.* -= 1;
+                                    }
+                                    if (count.* == 0) {
+                                        try bp.clickContainer(wid, bo.container_state, 0, 1, 1, &.{}, null);
+                                        th_d.nextAction(0, bo.pos.?);
+                                    } else {
+                                        skip_ticks = 1; //Throttle the packets we are sending
+                                    }
+                                } else {
+                                    th_d.nextAction(0, bo.pos.?);
                                 }
-                                th_d.nextAction(0, bo.pos.?);
                             },
                             .inventory => |inv| {
                                 if (bo.interacted_inventory.win_id) |wid| {
@@ -1859,7 +1980,11 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .close_chest => {
-                                try bp.closeContainer(bo.interacted_inventory.win_id.?);
+                                if (bo.interacted_inventory.win_id) |win| {
+                                    try bp.closeContainer(win);
+                                } else {
+                                    log.warn("Close chest: no open inventory", .{});
+                                }
                                 //bo.interacted_inventory.win_id = null;
                                 th_d.nextAction(0, bo.pos.?);
                             },

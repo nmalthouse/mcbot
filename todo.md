@@ -38,32 +38,8 @@ trunk completion
 mine completion - shaft sealed
 
 A special marker block can be used to store memory in the mc world.
-birch wood planks make a good marker
-
-Template strings in lua code
-
-//All slices are created in xy plane, z is out of page
-mySlice = makeBuildSlice("
-xxx
-x0x
-xxx
-", x = air, 0 = origin)
-
-applySlice(mySlice, positive_z = -z) //Apply the slice downwards
 
 
-How to deal with sand, gravel, water, lava etc
-
-the applySlice routine checks for these things and continues to dig or fill blocks accordingly
-
-
-ladder sink bot psuedocode
-bot walks to landmark
-label:1
-breaks block beneath
-places ladder beneath
-moveDown
-goto 1
-Instead we just applySlice, where slice is a ladder
-
-
+# crafting
+Api looks like this: craft(oak_fence, 1)
+Wow do we do it?

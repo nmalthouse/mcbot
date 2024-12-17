@@ -121,6 +121,7 @@ pub const AStarContext = struct {
         inventory: Inv,
         craft: struct {
             product_id: Reg.ItemId,
+            grid: [9]?Reg.ItemId,
             count: u8,
         },
         //inventory: union(enum) {

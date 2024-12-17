@@ -108,6 +108,14 @@ pub const PacketCtx = struct {
         try self.sendAuto(Play, .close_window, .{ .windowId = win_id });
     }
 
+    pub fn doRecipeBook(self: *@This(), window: u8, rec_id: []const u8, shift_pressed: bool) !void {
+        try self.sendAuto(Play, .craft_recipe_request, .{
+            .windowId = @intCast(window),
+            .recipe = rec_id,
+            .makeAll = shift_pressed,
+        });
+    }
+
     pub fn clickContainer(
         self: *@This(),
         win: u8,
@@ -717,7 +725,6 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn blockEntity(self: *Self) BlockEntityP {
-            //TODO make this actually return something
             const pxz = self.int(u8);
             const y = self.int(i16);
             const btype = self.varInt();

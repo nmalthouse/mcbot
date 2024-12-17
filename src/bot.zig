@@ -236,6 +236,15 @@ pub const Inventory = struct {
         }
     }
 
+    pub fn getCount(self: *Self, item: RegD.ItemId) usize {
+        var total: usize = 0;
+        for (self.slots.items) |it| {
+            if (it != null and it.?.item_id == item)
+                total += it.?.count;
+        }
+        return total;
+    }
+
     pub fn setSlot(self: *Self, index: u32, slot: ?mc.Slot) !void {
         if (self.slots.items[index]) |old| {
             if (old.nbt_buffer) |buf|
@@ -320,6 +329,7 @@ pub const BotScriptThreadData = struct {
     move_state: MovementState = undefined,
     timer: ?f64 = null,
     break_timer_max: f64 = 0,
+    craft_item_counter: ?usize = null, //used to throttle inventory interaction
 
     pub fn init(alloc: std.mem.Allocator, bot_ptr: *Bot) Self {
         return .{
@@ -364,6 +374,7 @@ pub const BotScriptThreadData = struct {
 
     pub fn nextAction(self: *Self, init_dt: f64, pos: V3f) void {
         self.timer = null;
+        self.craft_item_counter = null;
         if (self.action_index == null)
             return;
         self.action_index = if (self.action_index.? == 0) null else self.action_index.? - 1;
