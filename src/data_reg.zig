@@ -51,6 +51,13 @@ pub const Food = struct {
 
 pub const FoodJson = []const Food;
 
+pub const Effect = struct {
+    id: u8,
+    name: []const u8,
+    type: enum { good, bad },
+};
+pub const EffectJson = []const Effect;
+
 pub const Direction = enum {
     north,
     south,

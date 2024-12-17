@@ -412,6 +412,9 @@ pub const Bot = struct {
     pos: ?V3f = null,
     e_id: u32,
 
+    /// This field is used as an index into bot bitsets. See Entity.owners
+    index_id: u32 = 0,
+
     fd: i32 = 0,
 
     modify_mutex: std.Thread.Mutex = .{},

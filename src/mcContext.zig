@@ -5,6 +5,7 @@ const V3f = vector.V3f;
 const Bot = @import("bot.zig").Bot;
 const Reg = @import("data_reg.zig");
 const IdList = @import("list.zig");
+pub const MAX_BOTS = 32;
 
 pub fn RingBuf(comptime n: usize, comptime T: type) type {
     return struct {
@@ -25,6 +26,8 @@ pub fn RingBuf(comptime n: usize, comptime T: type) type {
 }
 
 pub const Entity = struct {
+    const OwnersT = std.bit_set.IntegerBitSet(MAX_BOTS);
+    owners: OwnersT,
     kind: IdList.entity_type_enum,
     uuid: u128,
     pos: V3f,
@@ -51,6 +54,7 @@ pub const McWorld = struct {
     entities: std.AutoHashMap(i32, Entity),
     entities_mutex: std.Thread.Mutex = .{},
 
+    //Todo remove this
     mine_index: u8 = 1,
     mine_mutex: std.Thread.Mutex = .{},
 
@@ -63,13 +67,12 @@ pub const McWorld = struct {
     tag_table: mc.TagRegistry,
     reg: *const Reg.DataReg,
 
+    //TODO what does this do again?
     packet_cache: struct {
         chat_time_stamps: RingBuf(32, i64) = RingBuf(32, i64).init(0),
     },
 
     has_tag_table: bool = false,
-
-    master_id: ?i32,
 
     pub fn init(alloc: std.mem.Allocator, reg: *const Reg.DataReg) Self {
         return Self{
@@ -80,9 +83,14 @@ pub const McWorld = struct {
             .chunk_data = mc.ChunkMap.init(alloc),
             .entities = std.AutoHashMap(i32, Entity).init(alloc),
             .bots = std.AutoHashMap(i32, Bot).init(alloc),
-            .master_id = null,
             .tag_table = mc.TagRegistry.init(alloc),
         };
+    }
+
+    pub fn addBot(self: *Self, bot: Bot) !void {
+        var bb = bot;
+        bb.index_id = self.bots.count() + 1;
+        try self.bots.put(bb.fd, bb);
     }
 
     pub fn putSignWaypoint(self: *Self, sign_name: []const u8, waypoint: Waypoint) !void {
@@ -106,16 +114,55 @@ pub const McWorld = struct {
         return self.sign_waypoints.get(sign_name);
     }
 
-    pub fn putEntity(self: *Self, ent_id: i32, ent: Entity) !void {
+    pub fn putEntity(self: *Self, bot: *Bot, data: anytype, uuid: u128) !void {
         self.entities_mutex.lock();
         defer self.entities_mutex.unlock();
-        try self.entities.put(ent_id, ent);
+
+        const g = try self.entities.getOrPut(data.entityId);
+        if (g.found_existing) {
+            g.value_ptr.owners.set(bot.index_id);
+        } else {
+            g.key_ptr.* = data.entityId;
+            var set = Entity.OwnersT.initEmpty();
+            set.set(bot.index_id);
+            g.value_ptr.* = .{
+                .owners = set,
+                .kind = .@"minecraft:cod", //TODO fixme
+                .uuid = uuid,
+                .pos = V3f.new(data.x, data.y, data.z),
+                .pitch = data.pitch,
+                .yaw = data.yaw,
+            };
+        }
     }
 
-    pub fn removeEntity(self: *Self, ent_id: i32) void {
+    /// Returns a ptr to entity if the bot is considered the owner.
+    /// used for updating state of entity
+    /// The returned pointer should not be stored
+    /// The caller of the function must unlock entites_mutex if nonnull is returned;
+    ///
+    /// The first bot in the set that has this entity alive is considered the owner, this is needed as some packets do a relative update of entity state so packets from multiple bots would cause issues.
+    pub fn modifyEntityLocal(self: *Self, bot_index: u32, ent_id: i32) ?*Entity {
+        self.entities_mutex.lock();
+        if (self.entities.getPtr(ent_id)) |e| {
+            if (e.owners.findFirstSet()) |first| {
+                if (first == bot_index)
+                    return e;
+            }
+        }
+        self.entities_mutex.unlock();
+        return null;
+    }
+
+    pub fn removeEntity(self: *Self, bot_index: u32, ent_id: i32) void {
         self.entities_mutex.lock();
         defer self.entities_mutex.unlock();
-        _ = self.entities.remove(ent_id);
+        if (self.entities.getPtr(ent_id)) |ent| {
+            ent.owners.unset(bot_index);
+            if (ent.owners.mask == 0) { //No bots are owning
+                _ = self.entities.remove(ent_id);
+            }
+        }
     }
 
     pub fn deinit(self: *Self) void {

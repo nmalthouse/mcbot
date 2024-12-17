@@ -255,51 +255,38 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .named_entity_spawn => {
             const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
-            try world.putEntity(data.entityId, .{
-                .kind = .@"minecraft:player",
-                .uuid = data.playerUUID,
-                .pos = V3f.new(data.x, data.y, data.z),
-                .pitch = data.pitch,
-                .yaw = data.yaw,
-            });
+            try world.putEntity(bot1, data, data.playerUUID);
         },
         .spawn_entity => {
             const data = try CB.Type_packet_spawn_entity.parse(&parse);
-            try world.entities.put(data.entityId, .{
-                .kind = .@"minecraft:cod",
-                //.kind = @enumFromInt(data.type),
-                .uuid = data.objectUUID,
-                .pos = V3f.new(data.x, data.y, data.z),
-                .pitch = data.pitch,
-                .yaw = data.yaw,
-            });
+            try world.putEntity(bot1, data, data.objectUUID);
         },
         .entity_destroy => {
             const d = try CB.Type_packet_entity_destroy.parse(&parse);
             for (d.entityIds) |e| {
-                world.removeEntity(e.i_entityIds);
+                world.removeEntity(bot1.index_id, e.i_entityIds);
             }
         },
         .entity_look => {
             const data = try CB.Type_packet_entity_look.parse(&parse);
-            if (world.entities.getPtr(data.entityId)) |e| {
+            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
+                world.entities_mutex.unlock();
             }
         },
         .entity_move_look => {
             const data = try CB.Type_packet_entity_move_look.parse(&parse);
-            world.entities_mutex.lock();
-            defer world.entities_mutex.unlock();
-            if (world.entities.getPtr(data.entityId)) |e| {
+            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
                 e.pos = vector.deltaPosToV3f(e.pos, vector.shortV3i.new(data.dX, data.dY, data.dZ));
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
+                world.entities_mutex.unlock();
             }
         },
         .entity_effect => {
             const d = try Ap(Penum, .entity_effect, &parse);
-            _ = d;
+            std.debug.print("{d}\n", .{d.effectId});
         },
         .update_time => {
             const d = try Ap(Penum, .update_time, &parse);
@@ -310,10 +297,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
         .rel_entity_move => {
             const d = try Ap(Penum, .rel_entity_move, &parse);
-            world.entities_mutex.lock();
-            defer world.entities_mutex.unlock();
-            if (world.entities.getPtr(d.entityId)) |e| {
+            if (world.modifyEntityLocal(bot1.index_id, d.entityId)) |e| {
                 e.pos = vector.deltaPosToV3f(e.pos, shortV3i.new(d.dX, d.dY, d.dZ));
+                world.entities_mutex.unlock();
             }
         },
         .tile_entity_data => {
@@ -334,12 +320,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .entity_teleport => {
             const data = try CB.Type_packet_entity_teleport.parse(&parse);
-            world.entities_mutex.lock();
-            defer world.entities_mutex.unlock();
-            if (world.entities.getPtr(data.entityId)) |e| {
+            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
                 e.pos = V3f.new(data.x, data.y, data.z);
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
+                world.entities_mutex.unlock();
             }
         },
         .entity_metadata => {
@@ -908,7 +893,7 @@ pub const LuaApi = struct {
             var actions = ActionListT.init(self.world.alloc);
             var ar = std.ArrayList(u8).init(self.world.alloc);
             ar.appendSlice(p) catch unreachable;
-            errc(actions.append(.{ .chat = .{ .str = ar, .is_command = true } })) orelse return 0;
+            errc(actions.append(.{ .chat = .{ .str = ar, .is_command = false } })) orelse return 0;
             const pos = self.bo.pos.?;
             self.thread_data.setActions(actions, pos);
 
@@ -2616,7 +2601,7 @@ pub fn main() !void {
         const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id);
         event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
-        try world.bots.put(mb.fd, mb);
+        try world.addBot(mb);
         if (bot_fd == 0)
             bot_fd = mb.fd;
     }
