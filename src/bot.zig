@@ -378,6 +378,8 @@ pub const BotScriptThreadData = struct {
     }
 
     pub fn setActions(self: *Self, new_list: std.ArrayList(astar.AStarContext.PlayerActionItem), pos: V3f) void {
+        for (self.actions.items) |*acc|
+            acc.deinit();
         self.actions.deinit();
         self.actions = new_list;
         self.action_index = new_list.items.len;
@@ -443,6 +445,7 @@ pub const Bot = struct {
     pub fn nextAction(self: *Self, init_dt: f64) void {
         if (self.action_index == null)
             return;
+        self.action_list.items[self.action_index.?].deinit();
         self.action_index = if (self.action_index.? == 0) null else self.action_index.? - 1;
         if (self.action_index) |act| {
             switch (self.action_list.items[act]) {
@@ -457,6 +460,9 @@ pub const Bot = struct {
     pub fn deinit(self: *Self) void {
         if (self.script_filename) |sn| {
             self.alloc.free(sn);
+        }
+        for (self.action_list.items) |*item| {
+            item.deinit();
         }
         self.action_list.deinit();
         self.interacted_inventory.deinit();

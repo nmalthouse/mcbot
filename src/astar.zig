@@ -103,10 +103,11 @@ pub const AStarContext = struct {
             match: Match,
             count: u8 = 1,
         };
+        chat: struct { str: std.ArrayList(u8), is_command: bool },
 
         eat: void,
         movement: MoveItem,
-        block_break_pos: V3i,
+        block_break_pos: struct { pos: V3i, repeat_timeout: ?f64 = null },
         block_break: BreakBlock,
         wait_ms: u32,
         hold_item_name: Reg.ItemId,
@@ -132,6 +133,14 @@ pub const AStarContext = struct {
         //        id: Reg.ItemId,
         //    },
         //},
+        pub fn deinit(self: *@This()) void {
+            switch (self.*) {
+                .chat => |*ch| {
+                    ch.str.deinit();
+                },
+                else => {},
+            }
+        }
     };
 
     pub const BreakBlock = struct {

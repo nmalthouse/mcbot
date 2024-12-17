@@ -130,6 +130,17 @@ pub const PacketCtx = struct {
         });
     }
 
+    pub fn sendCommand(self: *@This(), command: []const u8) !void {
+        try self.sendAuto(Play, .chat_command, .{
+            .command = command,
+            .timestamp = 0,
+            .salt = 0,
+            .argumentSignatures = &.{},
+            .messageCount = 1,
+            .acknowledged = [_]Play.packets.Type_packet_chat_command.Array_acknowledged{.{ .i_acknowledged = 0 }} ** 3,
+        });
+    }
+
     pub fn sendChat(self: *@This(), msg: []const u8) !void {
         const len = if (msg.len > MAX_CHAT_LEN) MAX_CHAT_LEN else msg.len;
 

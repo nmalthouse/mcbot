@@ -679,6 +679,8 @@ pub const BuildLayer = struct {
     bitmap: [][]const u8,
     offset: V3f,
     direction: ?Reg.Direction,
+    w: u32 = 3,
+    h: u32 = 3,
 };
 
 threadlocal var lss: ?*LuaApi = null;
@@ -695,6 +697,8 @@ pub const LuaApi = struct {
     bo: *Bot,
     in_yield: bool = false,
     has_yield_fn: bool = false,
+
+    alloc: std.mem.Allocator,
 
     fn stripErrorUnion(comptime T: type) type {
         const info = @typeInfo(T);
@@ -715,6 +719,7 @@ pub const LuaApi = struct {
             .thread_data = thread_data,
             .vm = vm,
             .pathctx = astar.AStarContext.init(alloc, world),
+            .alloc = alloc,
             .bo = bo,
             .world = world,
         };
@@ -764,12 +769,12 @@ pub const LuaApi = struct {
         const pos = self.bo.pos.?;
         var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
         errc(actions.append(.{ .close_chest = {} })) orelse return 0;
-        errc(actions.append(.{ .wait_ms = 100 })) orelse return 0;
+        errc(actions.append(.{ .wait_ms = 10 })) orelse return 0;
         var m_i = to_move.len;
         while (m_i > 0) {
             m_i -= 1;
             const mv_str = to_move[m_i];
-            errc(actions.append(.{ .wait_ms = 200 })) orelse return 0;
+            errc(actions.append(.{ .wait_ms = 20 })) orelse return 0;
             var it = std.mem.tokenizeScalar(u8, mv_str, ' ');
             // "DIRECTION COUNT MATCH_TYPE MATCH_PARAMS
             const dir_str = it.next() orelse {
@@ -892,15 +897,29 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub export fn say(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const p = self.vm.getArg(L, []const u8, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+            var actions = ActionListT.init(self.world.alloc);
+            var ar = std.ArrayList(u8).init(self.world.alloc);
+            ar.appendSlice(p) catch unreachable;
+            errc(actions.append(.{ .chat = .{ .str = ar, .is_command = true } })) orelse return 0;
+            const pos = self.bo.pos.?;
+            self.thread_data.setActions(actions, pos);
+
+            return 0;
+        }
+
         pub export fn applySlice(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
             Lua.c.lua_settop(L, 1);
             const p = self.vm.getArg(L, BuildLayer, 1);
-            if (p.bitmap.len != 9) { //todo fix
-                std.debug.print("invalid bmp len\n", .{});
-                return 0;
-            }
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
@@ -917,12 +936,15 @@ pub const LuaApi = struct {
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             const bf = pos.toIFloor();
             const offset = p.offset.toIFloor();
-            const w = 3;
-            const h = 3;
-            for (p.bitmap, 0..) |bl, i| {
+            const w = p.w;
+            var ii = p.bitmap.len;
+            while (ii > 0) : (ii -= 1) {
+                const i = ii - 1;
+                const bl = p.bitmap[i];
+                //for (p.bitmap, 0..) |bl, i| {
                 //TODO if block already exists, skip it
                 const x: i32 = @intCast(i % w);
-                const y: i32 = @intCast(i / h);
+                const y: i32 = @intCast(i / w);
                 var loc = V3i.new(x, 0, y).add(offset);
                 if (p.direction) |dir| {
                     switch (dir) {
@@ -954,22 +976,46 @@ pub const LuaApi = struct {
                 }
                 const bpos = bf.add(loc);
                 if (self.world.chunk_data.getBlock(bpos)) |id| {
-                    const item = self.world.reg.getItemFromName(bl);
+                    if (std.mem.eql(u8, bl, "noop"))
+                        continue;
+                    const item = self.world.reg.getItemFromName(bl) orelse {
+                        std.debug.print("unkown item {s}\n", .{bl});
+                        continue;
+                    };
                     const block = self.world.reg.getBlockFromState(id);
+                    //first check if the block has sand or gravel above it, if yes, ?
 
-                    if (std.mem.eql(u8, item.?.name, block.name)) {
+                    if (std.mem.eql(u8, item.name, block.name)) {
                         continue;
                     }
 
                     if (!std.mem.eql(u8, "air", bl)) {
                         errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
-                        errc(actions.append(.{ .hold_item_name = item.?.id })) orelse return 0;
+                        errc(actions.append(.{ .hold_item_name = item.id })) orelse return 0;
                     }
                     if (id != 0) {
-                        errc(actions.append(.{ .block_break_pos = bpos })) orelse return 0;
+                        var timeout: ?f64 = null;
+                        if (self.world.chunk_data.getBlock(bpos.add(V3i.new(0, 1, 0)))) |above| {
+                            const b = self.world.reg.getBlockFromState(above);
+                            if (std.mem.eql(u8, b.name, "gravel") or std.mem.eql(u8, b.name, "sand")) {
+                                timeout = 10;
+                            }
+                        }
+                        const below = self.world.chunk_data.getBlock(bpos.add(V3i.new(0, -1, 0)));
+                        const place_below = (timeout != null and (below == null or below.? == 0));
+                        if (place_below) {
+                            errc(actions.append(.{ .block_break_pos = .{ .pos = bpos.add(V3i.new(0, -1, 0)) } })) orelse return 0;
+                        }
+                        //if(std.mem.eql(u8, self.world.reg.getBlockFromNameI("gravel")))
+                        errc(actions.append(.{ .block_break_pos = .{ .pos = bpos, .repeat_timeout = timeout } })) orelse return 0;
+                        if (place_below) {
+                            //place a block below and delete after
+                            errc(actions.append(.{ .place_block = .{ .pos = bpos.add(V3i.new(0, -1, 0)) } })) orelse return 0;
+                            errc(actions.append(.{ .hold_item_name = 1 })) orelse return 0;
+                        }
                     }
                     if (std.mem.eql(u8, block.name, "water")) {
-                        errc(actions.append(.{ .block_break_pos = bpos })) orelse return 0;
+                        errc(actions.append(.{ .block_break_pos = .{ .pos = bpos } })) orelse return 0;
                         errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
                         errc(actions.append(.{ .hold_item_name = self.world.reg.getItemFromName("stone").?.id })) orelse return 0;
                     }
@@ -1674,6 +1720,14 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                 } else {
                     if (th_d.action_index) |action| {
                         switch (th_d.actions.items[action]) {
+                            .chat => |ch| {
+                                if (ch.is_command) {
+                                    try bp.sendCommand(ch.str.items);
+                                } else {
+                                    try bp.sendChat(ch.str.items);
+                                }
+                                th_d.nextAction(0, bo.pos.?);
+                            },
                             .movement => |move_| {
                                 const move = move_;
                                 const adt = dt;
@@ -1827,9 +1881,9 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             .block_break_pos => |p| {
                                 //TODO catch error
                                 if (th_d.timer == null) {
-                                    const pw = mc.lookAtBlock(bo.pos.?, p.toF());
+                                    const pw = mc.lookAtBlock(bo.pos.?, p.pos.toF());
                                     th_d.timer = dt;
-                                    const sid = world.chunk_data.getBlock(p).?;
+                                    const sid = world.chunk_data.getBlock(p.pos).?;
                                     const block = world.reg.getBlockFromState(sid);
                                     if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
                                         const hardness = block.hardness.?;
@@ -1838,15 +1892,35 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
 
                                         try bp.setHeldItem(0);
                                         try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, null);
+                                    } else {
+                                        th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
+                                            .best_tool = false,
+                                            .adequate_tool_level = !std.mem.eql(u8, block.material, "mineable/pickaxe"),
+                                        }))) / 20.0;
                                     }
                                     try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                                    try bp.playerAction(.start_digging, p);
+                                    try bp.playerAction(.start_digging, p.pos);
                                 } else {
                                     th_d.timer.? += dt;
                                     if (th_d.timer.? >= th_d.break_timer_max) {
-                                        th_d.timer = null;
-                                        try bp.playerAction(.finish_digging, p);
-                                        th_d.nextAction(0, bo.pos.?);
+                                        try bp.playerAction(.finish_digging, p.pos);
+                                        var reset = true;
+                                        if (p.repeat_timeout) |t| {
+                                            reset = false;
+                                            const si = world.chunk_data.getBlock(p.pos).?;
+                                            if (si != 0) {
+                                                skip_ticks = @intFromFloat(t);
+                                                th_d.timer = null;
+                                            } else {
+                                                reset = true;
+                                            }
+                                            //is there a block? repeat else end
+
+                                        }
+                                        if (reset) {
+                                            th_d.timer = null;
+                                            th_d.nextAction(0, bo.pos.?);
+                                        }
                                     }
                                 }
                             },
@@ -2651,8 +2725,9 @@ pub fn main() !void {
                     .len => {
                         var buf: [1]u8 = .{0xff};
                         const n = try std.posix.read(eve.data.fd, &buf);
-                        if (n == 0)
+                        if (n == 0) {
                             unreachable;
+                        }
                         //break :local;
 
                         pbuf[ppos] = buf[0];
