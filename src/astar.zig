@@ -121,19 +121,8 @@ pub const AStarContext = struct {
         inventory: Inv,
         craft: struct {
             product_id: Reg.ItemId,
-            grid: [9]?Reg.ItemId,
             count: u8,
         },
-        //inventory: union(enum) {
-        //    deposit: struct {
-        //        kind: enum { all, one } = .one,
-        //        id: Reg.ItemId,
-        //        match_any: bool = false,
-        //    },
-        //    withdraw: struct {
-        //        id: Reg.ItemId,
-        //    },
-        //},
         pub fn deinit(self: *@This()) void {
             switch (self.*) {
                 .chat => |*ch| {
@@ -266,6 +255,9 @@ pub const AStarContext = struct {
         return null;
     }
 
+    //calling a lua predicate for every node is probably too slow
+    //IF combined with a early filtering system in zig then a nice lua predicate is possible.
+    //IF zig detects dirt with 2+wood on top call the predicate to determine if its a tree
     pub fn findTree(self: *Self, start: V3f, axe_index: u32, wood_break_time: f64) !?std.ArrayList(PlayerActionItem) {
         try self.reset();
         try self.addOpen(.{
@@ -335,7 +327,14 @@ pub const AStarContext = struct {
     //TODO Prevent attempting to path outside of currently loaded chunks
     //Starting with simplest, check if goal is outside of loaded chunks.
     //Full implementation will need to check range on each node xz
-    pub fn pathfind(self: *Self, start: V3f, goal: V3f) !?std.ArrayList(PlayerActionItem) {
+    pub fn pathfind(
+        self: *Self,
+        start: V3f,
+        goal: V3f,
+        params: struct {
+            min_distance: ?f32 = null, //if set, a node within this distance from goal is a match
+        },
+    ) !?std.ArrayList(PlayerActionItem) {
         if (self.world.chunk_data.isLoaded(goal.toI()) == false) {
             return null;
         }
@@ -355,8 +354,17 @@ pub const AStarContext = struct {
         while (i < ITERATION_LIMIT) : (i += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
+            const is_goal = current_n.x == gpx and current_n.z == gpz and current_n.y == gpy;
+            const is_near = blk: {
+                if (params.min_distance) |md| {
+                    const dist = V3f.newi(gpx - current_n.x, gpy - current_n.y, gpz - current_n.z).magnitude();
+                    break :blk dist <= md;
+                } else {
+                    break :blk false;
+                }
+            };
 
-            if (current_n.x == gpx and current_n.z == gpz and current_n.y == gpy) {
+            if (is_goal or is_near) {
                 var parent: ?*AStarContext.Node = current_n;
                 while (parent != null) : (parent = parent.?.parent) {
                     switch (parent.?.ntype) {
@@ -586,6 +594,29 @@ pub const AStarContext = struct {
         return false;
     }
 };
+
+pub fn isWalkable(world: *McWorld, x: i32, y: i32, z: i32) bool {
+    return @as(bool, @bitCast(world.chunk_data.getBlock(x, y, z) != 0));
+}
+
+pub fn hasWalkableAdj(world: *McWorld, x: i32, y: i32, z: i32) bool {
+    var l_adj: [4][3]bool = undefined;
+    const a_ind = [_]u32{ 1, 3, 5, 7 };
+    for (a_ind, 0..) |ind, i| {
+        const a_vec = ADJ[ind];
+        const bx = x + a_vec.x;
+        const bz = z + a_vec.y;
+        const by = y;
+        l_adj[i][0] = @as(bool, @bitCast((world.chunk_data.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
+        l_adj[i][1] = @as(bool, @bitCast((world.chunk_data.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
+        l_adj[i][2] = @as(bool, @bitCast((world.chunk_data.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
+
+        if (l_adj[i][0] and !l_adj[i][1] and !l_adj[i][2]) {
+            return true;
+        }
+    }
+    return false;
+}
 
 test "basic" {
     const Nt = AStarContext.Node.Ntype;

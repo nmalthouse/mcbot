@@ -449,6 +449,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     //other things to find
                     //Beds
                     //furnace
+                    //
+                    //Also check if they are accesable
                     const crafting_bench = world.reg.getBlockFromNameI("crafting_table").?;
                     var skip = false;
                     if (chunk_section.palatte_t == .map) {
@@ -462,20 +464,16 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                         if (none)
                             skip = true;
                     }
-                    var count: usize = 0;
                     if (!skip) {
                         var i: u32 = 0;
                         while (i < 16 * 16 * 16) : (i += 1) {
-                            count += 1;
                             const block = chunk_section.getBlockFromIndex(i);
                             const bid = world.reg.getBlockIdFromState(block.block);
                             if (bid == crafting_bench.id) {
-                                std.debug.print("FOUND BENCH\n", .{});
+                                const coord = V3i.new(cx * 16 + block.pos.x, @as(i32, @intCast(chunk_i)) * 16 + block.pos.y - 64, cy * 16 + block.pos.z);
+                                try world.poi.putNew(coord);
                             }
                         }
-                    }
-                    if (count > 0) {
-                        std.debug.print("COUNT {d}\n", .{count});
                     }
                 }
             }
@@ -940,6 +938,7 @@ pub const LuaApi = struct {
         }
 
         pub export fn applySlice(L: Lua.Ls) c_int {
+            //TODO handling blocks with orientation
             const self = lss orelse return 0;
             self.vm.clearAlloc();
             Lua.c.lua_settop(L, 1);
@@ -1187,27 +1186,13 @@ pub const LuaApi = struct {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
-            const found = self.pathctx.pathfind(pos, wp.pos.toF()) catch unreachable;
+            const found = self.pathctx.pathfind(pos, wp.pos.toF(), .{}) catch unreachable;
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
+            if (found == null)
+                return 0;
 
             Lua.pushV(L, wp);
-            return 1;
-        }
-
-        pub export fn assignMine(L: Lua.Ls) c_int {
-            const self = lss orelse return 0;
-            self.beginHalt();
-            defer self.endHalt();
-
-            self.world.mine_mutex.lock();
-            defer self.world.mine_mutex.unlock();
-
-            var buf: [20]u8 = undefined;
-            var fbs = std.io.FixedBufferStream([]u8){ .buffer = &buf, .pos = 0 };
-            fbs.writer().print("mine{d}", .{self.world.mine_index}) catch return 0;
-            self.world.mine_index += 1;
-            Lua.pushV(L, fbs.getWritten());
             return 1;
         }
 
@@ -1296,6 +1281,26 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub export fn gotoNearestCrafting(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+            const pos = self.bo.pos.?;
+
+            if (self.world.poi.findNearest(self.world, pos.toIFloor())) |nearest| {
+                const found = errc(self.pathctx.pathfind(pos, nearest.toF(), .{ .min_distance = 4 })) orelse return 0;
+                if (found) |*actions| {
+                    self.thread_data.setActions(actions.*, pos);
+                    Lua.pushV(L, nearest);
+                    return 1;
+                }
+            }
+            return 0;
+        }
+
         pub export fn breakBlock(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -1330,7 +1335,7 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
-            const found = errc(self.pathctx.pathfind(pos, p)) orelse return 0;
+            const found = errc(self.pathctx.pathfind(pos, p, .{})) orelse return 0;
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
 
@@ -1418,20 +1423,20 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        pub const DOC_craftDumb: []const u8 = "Arg: [item_name, count], searches recipes and will craft if it has all necessary ingredients in inventory ";
+        pub const DOC_craftDumb: []const u8 = "Arg: [table_coord, item_name, count], searches recipes and will craft if it has all necessary ingredients in inventory ";
         pub export fn craftDumb(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
-            Lua.c.lua_settop(L, 2);
-            const item_name = self.vm.getArg(L, []const u8, 1);
-            const item_count = self.vm.getArg(L, i32, 2);
+            Lua.c.lua_settop(L, 3);
+            const wp = self.vm.getArg(L, V3f, 1).toIFloor();
+            const item_name = self.vm.getArg(L, []const u8, 2);
+            const item_count = self.vm.getArg(L, i32, 3);
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
             //TODO store all crafting tables in world and find nearest one
-            const wp = self.world.getSignWaypoint("craft_craft") orelse return 0;
             if (self.world.reg.getItemFromName(item_name)) |item| {
                 if (self.world.reg.rec_map.get(item.id)) |recipe_list| {
                     for (recipe_list) |rec| {
@@ -1475,38 +1480,20 @@ pub const LuaApi = struct {
                         const mult: u32 = @intFromFloat(@ceil(@as(f32, @floatFromInt(item_count)) / @as(f32, @floatFromInt(rec.result.count))));
                         var missing = false;
                         for (needed_ingred[0..needed_i]) |n| {
-                            std.debug.print("needed {d} {d} {d}\n", .{ n.count, n.id, mult });
                             if (n.count * mult > self.bo.inventory.getCount(@intCast(n.id))) {
                                 missing = true;
                             } else {
                                 continue;
                             }
                             missing = true;
-                            //std.debug.print("needed {s} {d}\n", .{ self.world.reg.getItem(@intCast(n.id)).name, n.count });
                         }
                         if (!missing) {
-                            var grid = [_]?Reg.ItemId{null} ** 9;
-                            if (rec.ingredients) |ing| {
-                                for (ing, 0..) |in, ii|
-                                    grid[ii] = in;
-                            }
-                            if (rec.inShape) |shaped| {
-                                var i: usize = 0;
-                                for (shaped) |row| {
-                                    for (row) |col| {
-                                        grid[i] = col;
-                                        i += 1;
-                                    }
-                                    if (row.len < 3)
-                                        i += 3 - row.len;
-                                }
-                            }
                             var actions = ActionListT.init(self.world.alloc);
                             errc(actions.append(.{ .close_chest = {} })) orelse return 0;
                             errc(actions.append(.{ .wait_ms = 100 })) orelse return 0;
-                            errc(actions.append(.{ .craft = .{ .product_id = item.id, .grid = grid, .count = @intCast(mult) } })) orelse return 0;
+                            errc(actions.append(.{ .craft = .{ .product_id = item.id, .count = @intCast(mult) } })) orelse return 0;
                             errc(actions.append(.{ .wait_ms = 100 })) orelse return 0;
-                            errc(actions.append(.{ .open_chest = .{ .pos = wp.pos } })) orelse return 0;
+                            errc(actions.append(.{ .open_chest = .{ .pos = wp } })) orelse return 0;
                             self.thread_data.setActions(actions, pos);
                             return 0;
                         } else {}
@@ -2076,7 +2063,7 @@ pub fn basicPathfindThread(
     errdefer pathctx.deinit();
 
     //const found = try pathctx.findTree(start, 0, 0);
-    const found = try pathctx.pathfind(start, goal);
+    const found = try pathctx.pathfind(start, goal, .{});
     if (found) |*actions| {
         const player_actions = actions;
         for (player_actions.items) |pitem| {

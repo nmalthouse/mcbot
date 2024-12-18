@@ -38,34 +38,101 @@ pub const Entity = struct {
 
 const log = std.log.scoped(.world);
 
+pub const Poi = struct {
+    const Self = @This();
+
+    //If this is slow to search use an octree or something
+    crafting_tables: std.ArrayList(vector.V3i),
+    mutex: std.Thread.Mutex = .{},
+
+    pub fn init(alloc: std.mem.Allocator) @This() {
+        return .{
+            .crafting_tables = std.ArrayList(vector.V3i).init(alloc),
+        };
+    }
+
+    pub fn putNew(self: *Self, pos: vector.V3i) !void {
+        self.mutex.lock();
+        try self.crafting_tables.append(pos);
+        self.mutex.unlock();
+    }
+
+    pub fn findNearest(self: *Self, world: *McWorld, pos: vector.V3i) ?vector.V3i {
+        const cid = world.reg.getBlockFromNameI("crafting_table").?.id;
+        self.mutex.lock();
+        defer self.mutex.unlock();
+        while (true) {
+            var min_index: ?usize = null;
+            var min: f64 = std.math.floatMax(f64);
+            const a = pos.toF();
+            for (self.crafting_tables.items, 0..) |table, i| {
+                const l = table.toF().subtract(a).magnitude();
+                if (l < min) {
+                    min_index = i;
+                    min = l;
+                }
+            }
+
+            if (min_index) |mi| {
+                var is_craft = false;
+                if (world.chunk_data.getBlock(self.crafting_tables.items[mi])) |bl| {
+                    //check it is still a crafting bench
+
+                    const bll = world.reg.getBlockFromState(bl);
+                    if (bll.id == cid)
+                        is_craft = true;
+                }
+
+                if (is_craft)
+                    return self.crafting_tables.items[mi];
+
+                //Delete this one and search again
+                _ = self.crafting_tables.swapRemove(mi);
+            } else {
+                return null;
+            }
+        }
+        return null;
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.mutex.lock();
+        self.crafting_tables.deinit();
+    }
+};
+
 pub const McWorld = struct {
     const Self = @This();
     pub const Waypoint = struct {
         pos: vector.V3i,
         facing: Reg.Direction,
     };
+    //Only used for time, organize the mutex please
     modify_mutex: std.Thread.Mutex = .{},
 
+    ///All api calls to chunk_data are locked internally
     chunk_data: mc.ChunkMap,
 
-    sign_waypoints_mutex: std.Thread.Mutex = .{},
     sign_waypoints: std.StringHashMap(Waypoint),
+    sign_waypoints_mutex: std.Thread.Mutex = .{},
+
+    /// Poi has its own mutex
+    poi: Poi,
+
     alloc: std.mem.Allocator,
 
     entities: std.AutoHashMap(i32, Entity),
     entities_mutex: std.Thread.Mutex = .{},
 
-    //Todo remove this
-    mine_index: u8 = 1,
-    mine_mutex: std.Thread.Mutex = .{},
-
+    ///Minecraft day time
     time: i64 = 0,
 
+    /// Used to notify a bot should reload its script
     bot_reload_mutex: std.Thread.Mutex = .{},
     reload_bot_id: ?i32 = null,
 
+    /// Bot's have their own mutex, modifying the bots hash_map after init may cause issues
     bots: std.AutoHashMap(i32, Bot),
-    tag_table: mc.TagRegistry,
     reg: *const Reg.DataReg,
 
     //TODO what does this do again?
@@ -74,12 +141,14 @@ pub const McWorld = struct {
     },
 
     has_tag_table: bool = false,
+    tag_table: mc.TagRegistry,
 
     pub fn init(alloc: std.mem.Allocator, reg: *const Reg.DataReg) Self {
         return Self{
             .alloc = alloc,
             .sign_waypoints = std.StringHashMap(Waypoint).init(alloc),
             .reg = reg,
+            .poi = Poi.init(alloc),
             .packet_cache = .{},
             .chunk_data = mc.ChunkMap.init(alloc),
             .entities = std.AutoHashMap(i32, Entity).init(alloc),
@@ -172,6 +241,7 @@ pub const McWorld = struct {
             self.alloc.free(key.*);
         }
         self.sign_waypoints.deinit();
+        self.poi.deinit();
         self.chunk_data.deinit();
         self.entities.deinit();
         var b_it = self.bots.valueIterator();
