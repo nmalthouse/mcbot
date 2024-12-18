@@ -369,6 +369,8 @@ pub const BotScriptThreadData = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        for (self.actions.items) |*acc|
+            acc.deinit();
         self.actions.deinit();
     }
 
