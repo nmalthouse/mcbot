@@ -25,6 +25,10 @@ function loop()
         end
     end
 
+    --[[
+    --if a chest has less than 3 free slots, move items to bulk storage
+    --]]
+
 
     sleepms(1000)
 

@@ -884,6 +884,7 @@ pub const LuaApi = struct {
             \\COUNT can be a number or "all"
             \\MATCH_TYPE can be:                            "item", "any", "category", "tag"
             \\MATCH_PARAM is an argument to MATCH_TYPE :     NAME           CAT_NAME   TAG_NAME
+            \\Tag name is a tag within the minecraft:item tag list, example: minecraft:axes
             \\
             \\CAT_NAME comes from item_sort.json
             \\Example actions:
@@ -1182,7 +1183,7 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
-            const wp = self.world.getSignWaypoint(str) orelse {
+            const wp = self.world.getNearestSignWaypoint(str, pos.toI()) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
@@ -1236,8 +1237,11 @@ pub const LuaApi = struct {
             const str = self.vm.getArg(L, []const u8, 1);
             self.beginHalt();
             defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
 
-            const wp = self.world.getSignWaypoint(str) orelse {
+            const wp = self.world.getNearestSignWaypoint(str, pos.toI()) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
@@ -1287,8 +1291,8 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
 
             if (self.world.poi.findNearest(self.world, pos.toIFloor())) |nearest| {
                 const found = errc(self.pathctx.pathfind(pos, nearest.toF(), .{ .min_distance = 4 })) orelse return 0;
@@ -1351,28 +1355,20 @@ pub const LuaApi = struct {
             errc(self.pathctx.reset()) orelse return 0;
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
-            if (self.bo.inventory.findToolForMaterial(self.world.reg, "mineable/axe")) |match| {
-                const wood_hardness = 2;
-                const btime = Reg.calculateBreakTime(match.mul, wood_hardness, .{});
-                //block hardness
-                //tool_multiplier
-                self.bo.modify_mutex.unlock();
-                const tree_o = errc(self.pathctx.findTree(pos, match.slot_index, @as(f64, (@floatFromInt(btime))) / 20)) orelse return 0;
-                if (tree_o) |*tree| {
-                    self.thread_data.setActions(tree.*, pos);
-                    for (tree.items) |item| {
-                        _ = item;
-                        //std.debug.print("{any}\n", .{item});
-                    }
-                } else {
-                    Lua.pushV(L, false);
-                    return 1;
-                }
+            //block hardness
+            //tool_multiplier
+            self.bo.modify_mutex.unlock();
+            const tree_o = errc(self.pathctx.findTree(pos)) orelse return 0;
+            if (tree_o) |*tree| {
+                self.thread_data.setActions(tree.list, pos);
+                Lua.pushV(L, tree.tree_name);
+                return 1;
             } else {
-                self.bo.modify_mutex.unlock();
+                Lua.pushV(L, false);
+                return 1;
             }
 
-            Lua.pushV(L, true);
+            Lua.pushV(L, false);
             return 1;
         }
 
@@ -1409,7 +1405,10 @@ pub const LuaApi = struct {
             const landmark = self.vm.getArg(L, []const u8, 1);
             const block_name = self.vm.getArg(L, []const u8, 2);
             const id = self.world.reg.getBlockFromName(block_name) orelse return 0;
-            const wp = self.world.getSignWaypoint(landmark) orelse {
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
+            const wp = self.world.getNearestSignWaypoint(landmark, pos.toI()) orelse {
                 std.debug.print("cant find waypoint: {s}\n", .{landmark});
                 return 0;
             };
@@ -1436,7 +1435,6 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
-            //TODO store all crafting tables in world and find nearest one
             if (self.world.reg.getItemFromName(item_name)) |item| {
                 if (self.world.reg.rec_map.get(item.id)) |recipe_list| {
                     for (recipe_list) |rec| {
@@ -1515,7 +1513,10 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 2);
             const name = self.vm.getArg(L, []const u8, 1);
             const to_move = self.vm.getArg(L, [][]const u8, 2);
-            const wp = self.world.getSignWaypoint(name) orelse {
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            self.bo.modify_mutex.unlock();
+            const wp = self.world.getNearestSignWaypoint(name, pos.toI()) orelse {
                 std.debug.print("interactChest can't find waypoint {s}\n", .{name});
                 return 0;
             };
@@ -1579,17 +1580,29 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             var it = std.mem.tokenizeScalar(u8, query, ' ');
+            //MATCH_TYPE MATCH_PARAM
             const match_str = it.next() orelse {
                 self.vm.putErrorFmt("expected string", .{});
                 return 0;
             };
-            const match = sToE(enum { item, any, category }, match_str) orelse {
+            const match = sToE(enum { item, any, category, tag }, match_str) orelse {
                 self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
                 return 0;
             };
             var item_id: Reg.Item = undefined;
+            var tag_list: ?[]const u32 = null;
             var cat: PlayerActionItem.Inv.ItemCategory = undefined;
             switch (match) {
+                .tag => {
+                    const tag_name = it.next() orelse {
+                        self.vm.putError("expected tag name");
+                        return 0;
+                    };
+                    tag_list = self.world.tag_table.getIdList("minecraft:item", tag_name) orelse {
+                        self.vm.putErrorFmt("invalid tag {s} for minecraft:item", .{tag_name});
+                        return 0;
+                    };
+                },
                 .item => {
                     const item_name = it.next() orelse {
                         self.vm.putError("expected item name");
@@ -1617,6 +1630,14 @@ pub const LuaApi = struct {
                 const slot = sl orelse continue;
 
                 switch (match) {
+                    .tag => {
+                        if (tag_list) |tl| {
+                            for (tl) |t| {
+                                if (t == slot.item_id)
+                                    item_count += slot.count;
+                            }
+                        }
+                    },
                     .item => {
                         if (slot.item_id == item_id.id)
                             item_count += slot.count;
@@ -1956,6 +1977,17 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             },
                             .place_block => |pb| {
                                 const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
+                                if (pb.select_item_tag) |tag| {
+                                    if (world.tag_table.getIdList("minecraft:item", tag)) |taglist| {
+                                        for (taglist) |t| {
+                                            if (bo.inventory.findItemFromId(@intCast(t))) |found| {
+                                                try bp.setHeldItem(0);
+                                                try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, null);
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
                                 try bp.setPlayerRot(pw.yaw, pw.pitch, true);
                                 try bp.useItemOn(.main, pb.pos, .north, 0, 0, 0, false, 0);
                                 th_d.nextAction(0, bo.pos.?);
@@ -2249,14 +2281,14 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                 try drawTextCube(&win, &gctx, cmatrix, &cubes, e.pos, mc_atlas.getTextureRec(88), @tagName(e.kind), &font);
             }
         }
-        {
-            world.sign_waypoints_mutex.lock();
-            defer world.sign_waypoints_mutex.unlock();
-            var w_it = world.sign_waypoints.iterator();
-            while (w_it.next()) |w| {
-                try drawTextCube(&win, &gctx, cmatrix, &cubes, w.value_ptr.pos.toF(), mc_atlas.getTextureRec(88), w.key_ptr.*, &font);
-            }
-        }
+        //{
+        //    world.sign_waypoints_mutex.lock();
+        //    defer world.sign_waypoints_mutex.unlock();
+        //    var w_it = world.sign_waypoints.iterator();
+        //    while (w_it.next()) |w| {
+        //        try drawTextCube(&win, &gctx, cmatrix, &cubes, w.value_ptr.pos.toF(), mc_atlas.getTextureRec(88), w.key_ptr.*, &font);
+        //    }
+        //}
 
         if (draw_nodes and astar_ctx_mutex.tryLock()) {
             var it = astar_ctx.openq.iterator();
@@ -2380,20 +2412,6 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                             break;
                         }
                     }
-                }
-            }
-
-            if (win.keyRising(.G)) {
-                bot1.modify_mutex.lock();
-                defer bot1.modify_mutex.unlock();
-                try astar_ctx.reset();
-                if (try astar_ctx.findTree(
-                    bot1.pos.?,
-                    0,
-                    0,
-                )) |*acc| {
-                    bot1.action_list.deinit();
-                    bot1.action_list = acc.*;
                 }
             }
 
@@ -2747,6 +2765,12 @@ pub fn main() !void {
             if (eve.data.fd == std.io.getStdIn().handle) {
                 var msg: [256]u8 = undefined;
                 const n = try std.posix.read(eve.data.fd, &msg);
+                if (n == 0) { //Prevent integer overflow if user sends eof
+                    run = false;
+                    update_bots_exit_mutex.unlock();
+                    continue;
+                }
+
                 var itt = std.mem.tokenize(u8, msg[0 .. n - 1], " ");
                 const key = itt.next() orelse continue;
                 if (std.meta.stringToEnum(ConsoleCommands, key)) |k| {
@@ -2774,20 +2798,21 @@ pub fn main() !void {
                         },
                         .query => { //query the tag table, "query ?namespace ?tag"
                             if (itt.next()) |tag_type| {
-                                const tags = world.tag_table.tags.getPtr(tag_type) orelse unreachable;
-                                if (itt.next()) |wanted_tag| {
-                                    if (tags.get(wanted_tag)) |t| {
-                                        std.debug.print("Ids for: {s} {s}\n", .{ tag_type, wanted_tag });
-                                        for (t.items) |item| {
-                                            std.debug.print("\t{d}\n", .{item});
+                                if (world.tag_table.tags.getPtr(tag_type)) |tags| {
+                                    if (itt.next()) |wanted_tag| {
+                                        if (tags.get(wanted_tag)) |t| {
+                                            std.debug.print("Ids for: {s} {s}\n", .{ tag_type, wanted_tag });
+                                            for (t.items) |item| {
+                                                std.debug.print("\t{d}\n", .{item});
+                                            }
                                         }
-                                    }
-                                } else {
-                                    var kit = tags.keyIterator();
-                                    var ke = kit.next();
-                                    std.debug.print("Possible sub tag: \n", .{});
-                                    while (ke != null) : (ke = kit.next()) {
-                                        std.debug.print("\t{s}\n", .{ke.?.*});
+                                    } else {
+                                        var kit = tags.keyIterator();
+                                        var ke = kit.next();
+                                        std.debug.print("Possible sub tag: \n", .{});
+                                        while (ke != null) : (ke = kit.next()) {
+                                            std.debug.print("\t{s}\n", .{ke.?.*});
+                                        }
                                     }
                                 }
                             } else {

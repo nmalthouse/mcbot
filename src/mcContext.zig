@@ -113,7 +113,7 @@ pub const McWorld = struct {
     ///All api calls to chunk_data are locked internally
     chunk_data: mc.ChunkMap,
 
-    sign_waypoints: std.StringHashMap(Waypoint),
+    sign_waypoints: std.StringHashMap(std.ArrayList(Waypoint)),
     sign_waypoints_mutex: std.Thread.Mutex = .{},
 
     /// Poi has its own mutex
@@ -146,7 +146,7 @@ pub const McWorld = struct {
     pub fn init(alloc: std.mem.Allocator, reg: *const Reg.DataReg) Self {
         return Self{
             .alloc = alloc,
-            .sign_waypoints = std.StringHashMap(Waypoint).init(alloc),
+            .sign_waypoints = std.StringHashMap(std.ArrayList(Waypoint)).init(alloc),
             .reg = reg,
             .poi = Poi.init(alloc),
             .packet_cache = .{},
@@ -173,15 +173,34 @@ pub const McWorld = struct {
         if (gpr.found_existing) {
             self.alloc.free(gpr.key_ptr.*);
             gpr.key_ptr.* = name;
-            log.warn("Clobbering waypoint: {s}", .{name});
+            try gpr.value_ptr.append(waypoint);
+            log.warn("Adding second waypoint: {s}", .{name});
+        } else {
+            var new_list = std.ArrayList(Waypoint).init(self.alloc);
+            try new_list.append(waypoint);
+            gpr.value_ptr.* = new_list;
         }
-        gpr.value_ptr.* = waypoint;
     }
 
-    pub fn getSignWaypoint(self: *Self, sign_name: []const u8) ?Waypoint {
+    pub fn getNearestSignWaypoint(self: *Self, sign_name: []const u8, pos: vector.V3i) ?Waypoint {
         self.sign_waypoints_mutex.lock();
         defer self.sign_waypoints_mutex.unlock();
-        return self.sign_waypoints.get(sign_name);
+        var min_index: ?usize = null;
+        var min_dist = std.math.floatMax(f64);
+        const p = pos.toF();
+        if (self.sign_waypoints.get(sign_name)) |wps| {
+            for (wps.items, 0..) |wp, i| {
+                const dist = wp.pos.toF().subtract(p).magnitude();
+                if (dist < min_dist) {
+                    min_index = i;
+                    min_dist = dist;
+                }
+            }
+            if (min_index) |mi| {
+                return wps.items[mi];
+            }
+        }
+        return null;
     }
 
     pub fn putEntity(self: *Self, bot: *Bot, data: anytype, uuid: u128, etype: Proto.EntityEnum) !void {
@@ -236,9 +255,10 @@ pub const McWorld = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        var kit = self.sign_waypoints.keyIterator();
+        var kit = self.sign_waypoints.iterator();
         while (kit.next()) |key| {
-            self.alloc.free(key.*);
+            self.alloc.free(key.key_ptr.*);
+            key.value_ptr.deinit();
         }
         self.sign_waypoints.deinit();
         self.poi.deinit();
