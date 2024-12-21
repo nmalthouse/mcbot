@@ -414,6 +414,9 @@ pub const BotScriptThreadData = struct {
 //Not a client as chunk data etc can be shaerd between Bots
 pub const Bot = struct {
     const Self = @This();
+    init_status: struct { //Used to determine when updateBots can begin processing
+        has_inv: bool = false,
+    } = .{},
 
     move_state: MovementState = undefined,
     view_dist: u8 = 2,

@@ -15,6 +15,15 @@ pub const V2i = struct {
     y: i32,
 };
 
+const FACE_ADJ = [6]V3i{ //six faces of a cube
+    .{ .x = -1, .y = 0, .z = 0 },
+    .{ .x = 1, .y = 0, .z = 0 },
+    .{ .x = 0, .y = -1, .z = 0 },
+    .{ .x = 0, .y = 1, .z = 0 },
+    .{ .x = 0, .y = 0, .z = -1 },
+    .{ .x = 0, .y = 0, .z = 1 },
+};
+
 // Even indicies are diagonal
 const ADJ = [8]V2i{
     .{ .x = -1, .y = 1 },
@@ -166,11 +175,15 @@ pub const AStarContext = struct {
 
         pub fn canEnter(s: *const S, y: i32) bool {
             const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
-            return !s.ctx.world.reg.isBlockCollidable(id) or s.ctx.world.tag_table.hasTag(
-                id,
-                "minecraft:block",
+            const tags_to_check = [_][]const u8{
                 "minecraft:climbable",
-            );
+                "minecraft:signs",
+            };
+            var can = false;
+            for (tags_to_check) |t| {
+                can = can or s.ctx.world.tag_table.hasTag(id, "minecraft:block", t);
+            }
+            return !s.ctx.world.reg.isBlockCollidable(id) or can;
         }
     };
 
@@ -224,20 +237,19 @@ pub const AStarContext = struct {
     //A want to do a walkable flood fill for any1`
 
     pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId, max_dist: f32) !?std.ArrayList(V3i) {
-        var last_matching_pos: ?V3i = null;
+        var last_matching_pos = start;
         try self.reset();
         try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
         var iterations: usize = 0;
         while (true) : (iterations += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             const pv = V3i.new(current_n.x, current_n.y, current_n.z);
-            const direct_adj = [_]u32{ 1, 3, 5, 7 };
-            for (direct_adj) |di| {
-                const avec = ADJ[di];
-                const coord = V3i.new(pv.x + avec.x, pv.y, pv.z + avec.y);
+            //const direct_adj = [_]u32{ 1, 3, 5, 7 };
+            for (FACE_ADJ) |avec| {
+                const coord = V3i.new(pv.x + avec.x, pv.y + avec.y, pv.z + avec.z);
                 if (self.world.chunk_data.getBlock(coord)) |id| {
                     if (self.world.reg.getBlockIdFromState(id) == blockid) {
-                        last_matching_pos = coord;
+                        last_matching_pos = coord.toF();
                         try self.addNode(.{
                             .ntype = .walk,
                             .x = coord.x,
@@ -246,8 +258,8 @@ pub const AStarContext = struct {
                             .G = 0,
                             .H = 0,
                         }, current_n);
-                    } else if (last_matching_pos) |po| {
-                        if (po.toF().subtract(coord.toF()).magnitude() < max_dist) {
+                    } else {
+                        if (last_matching_pos.subtract(coord.toF()).magnitude() < max_dist) {
                             try self.addNode(.{
                                 .ntype = .walk,
                                 .x = coord.x,

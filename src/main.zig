@@ -40,6 +40,7 @@ pub const std_options = .{
     .log_level = .debug,
     .logFn = myLogFn,
 };
+const LOG_ALL = true;
 
 pub fn myLogFn(
     comptime level: std.log.Level,
@@ -47,7 +48,7 @@ pub fn myLogFn(
     comptime format: []const u8,
     args: anytype,
 ) void {
-    if (level == .info) {
+    if (level == .info and !LOG_ALL) {
         switch (scope) {
             .inventory,
             .world,
@@ -259,7 +260,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .spawn_entity => {
             const data = try CB.Type_packet_spawn_entity.parse(&parse);
-            try world.putEntity(bot1, data, data.objectUUID, @enumFromInt(data.type));
+            const t: Proto.EntityEnum = @enumFromInt(data.type);
+            log.info("Spawn entity {x} {s} at {d:.2}, {d:.2}, {d:.2}", .{ data.objectUUID, @tagName(t), data.x, data.y, data.z });
+            try world.putEntity(bot1, data, data.objectUUID, t);
         },
         .entity_destroy => {
             const d = try CB.Type_packet_entity_destroy.parse(&parse);
@@ -285,6 +288,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .entity_effect => {
+            //TODO set bot status effects so haste effect applies
             const d = try Ap(Penum, .entity_effect, &parse);
             std.debug.print("{d}\n", .{d.effectId});
         },
@@ -294,7 +298,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             defer world.modify_mutex.unlock();
             world.time = d.time;
         },
-        //TODO until we have some kind of ownership, entities will have invalid positions when multiple bots exists
         .rel_entity_move => {
             const d = try Ap(Penum, .rel_entity_move, &parse);
             if (world.modifyEntityLocal(bot1.index_id, d.entityId)) |e| {
@@ -303,6 +306,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .tile_entity_data => {
+            //TODO add waypoints from here
             const pos = parse.position();
             const btype = parse.varInt();
             const tr = nbt_zig.TrackingReader(@TypeOf(parse.reader));
@@ -488,9 +492,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 const id = world.chunk_data.getBlock(coord) orelse 0;
                 const b = world.reg.getBlockFromState(id);
                 if (world.tag_table.hasTag(b.id, "minecraft:block", "minecraft:signs")) {
+                    var has_text = false;
                     if (be.nbt == .compound) {
                         if (be.nbt.compound.get("Text1")) |e| {
                             if (e == .string) {
+                                has_text = true;
                                 const j = try std.json.parseFromSlice(struct { text: []const u8 }, arena_alloc, e.string, .{});
                                 if (j.value.text.len == 0) continue;
                                 if (b.getState(id, .facing)) |facing| {
@@ -511,9 +517,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                         }
                                     }
                                     try world.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = fac });
+                                } else {
+                                    try world.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = .north });
                                 }
                             }
                         }
+                        if (!has_text)
+                            std.debug.print("SIGN WITHOUT TEXT!! {any}\n", .{coord});
                     }
                 } else {
                     if (std.mem.eql(u8, "chest", b.name)) {
@@ -574,6 +584,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .window_items => {
             inv_log.info("set content packet", .{});
+            bot1.init_status.has_inv = true;
             const d = try Ap(Penum, .window_items, &parse);
             if (d.windowId == 0) {
                 for (d.items, 0..) |it, i| {
@@ -784,6 +795,7 @@ pub const LuaApi = struct {
     }
 
     pub fn interactChest(self: *Self, coord: V3i, to_move: [][]const u8) c_int {
+        //TODO we don't know if requested actions are possible until much later. How do we notify user if the chest is full or has none of the requested items?
         self.beginHalt();
         defer self.endHalt();
         self.bo.modify_mutex.lock();
@@ -1312,39 +1324,34 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
 
-            const sid = self.world.chunk_data.getBlock(bpos) orelse return 0;
-            const block = self.world.reg.getBlockFromState(sid);
-
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.pos.?;
-            if (self.bo.inventory.findToolForMaterial(self.world.reg, block.material)) |match| {
-                const hardness = block.hardness orelse return 0;
-                const btime = Reg.calculateBreakTime(match.mul, hardness, .{});
-                var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
-                errc(actions.append(.{ .block_break = .{ .pos = bpos, .break_time = @as(f64, @floatFromInt(btime)) / 20 } })) orelse return 0;
-                errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(match.slot_index)) } })) orelse return 0;
-                self.thread_data.setActions(actions, pos);
-            }
+            var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
+            errc(actions.append(.{ .block_break_pos = .{ .pos = bpos } })) orelse return 0;
+            self.thread_data.setActions(actions, pos);
             return 0;
         }
 
         pub export fn gotoCoord(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 1);
+            Lua.c.lua_settop(L, 2);
             const p = self.vm.getArg(L, V3f, 1);
+            const opt_dist = self.vm.getArg(L, ?f32, 2);
             self.beginHalt();
             defer self.endHalt();
             errc(self.pathctx.reset()) orelse return 0;
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
-            const found = errc(self.pathctx.pathfind(pos, p, .{})) orelse return 0;
-            if (found) |*actions|
+            const found = errc(self.pathctx.pathfind(pos, p, .{ .min_distance = opt_dist })) orelse return 0;
+            if (found) |*actions| {
                 self.thread_data.setActions(actions.*, pos);
+                Lua.pushV(L, true);
+                return 1;
+            }
 
-            Lua.pushV(L, true);
-            return 1;
+            return 0;
         }
 
         pub export fn chopNearestTree(L: Lua.Ls) c_int {
@@ -1399,11 +1406,12 @@ pub const LuaApi = struct {
         ///Returns, array of v3i
         pub export fn getFieldFlood(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 2);
+            Lua.c.lua_settop(L, 3);
             self.beginHalt();
             defer self.endHalt();
             const landmark = self.vm.getArg(L, []const u8, 1);
             const block_name = self.vm.getArg(L, []const u8, 2);
+            const max_dist = self.vm.getArg(L, f32, 3);
             const id = self.world.reg.getBlockFromName(block_name) orelse return 0;
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
@@ -1413,7 +1421,7 @@ pub const LuaApi = struct {
                 return 0;
             };
             //errc(self.pathctx.reset()) orelse return 0;
-            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id, 3)) orelse return 0;
+            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id, max_dist)) orelse return 0;
             if (flood_pos) |fp| {
                 Lua.pushV(L, fp.items);
                 fp.deinit();
@@ -1569,6 +1577,7 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        //TODO itemCount function that works with nonplayer inventories.
         pub const DOC_itemCount: []const u8 = "Args: item_predicate, returns (int),\n\titem_predicate is a string [[item, any, category] argument] where argument depends on the predicate. Examples: \"category food\" or \"item stone_bricks\"";
         pub export fn itemCount(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
@@ -1739,7 +1748,22 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
     const arena_alloc = arena_allocs.allocator();
 
     //BAD, give the bot time to load in chunks and inventory before we start the script
-    std.time.sleep(std.time.ns_per_s * 2);
+    //This depends heavily on render distance,server load, network speed etc.
+    std.time.sleep(std.time.ns_per_s * 1);
+    { //Wait for all bots to be ready, may need more params to check
+        var ready = false;
+        while (!ready) {
+            std.time.sleep(std.time.ns_per_s / 10);
+            var bots_it = world.bots.iterator();
+            ready = true;
+            while (bots_it.next()) |b| {
+                b.value_ptr.modify_mutex.lock();
+                defer b.value_ptr.modify_mutex.unlock();
+                ready = ready and b.value_ptr.init_status.has_inv;
+            }
+        }
+    }
+    std.debug.print("All bots ready\n", .{});
 
     var bot_threads = std.ArrayList(std.Thread).init(alloc);
     var bot_threads_data = std.ArrayList(*bot.BotScriptThreadData).init(alloc);

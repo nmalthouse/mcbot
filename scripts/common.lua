@@ -78,8 +78,12 @@ function handleHunger(chest_name)
     local ch = chest_name or "food"
     local food_amount = itemCount("category food")
     if food_amount < 10 then
+        say("getting food only have ".. food_amount)
         local pos = getPosition()
-        gotoLandmark(ch)
+        if not gotoLandmark(ch) then
+            say("can't find food")
+            return
+        end
         while food_amount < 10 do
             interactChest(ch .. "_chest", {"withdraw 1 category food"})
             food_amount = itemCount("category food")
@@ -89,5 +93,46 @@ function handleHunger(chest_name)
 
     while getHunger() < 20 do
         if not eatFood() then break end
+    end
+end
+
+function inventoryEnsureAtLeast(chest, item, count) 
+    if itemCount("item " .. item) > count then
+        interactChest(chest .. "_chest", {"deposit all item " .. item})
+        --Put everything in the chest
+
+    end
+    local it_count = 0
+    while itemCount("item " .. item) < count do
+        interactChest(chest .."_chest", {"withdraw 1 item " .. item})
+        it_count = it_count + 1
+        if it_count > 30 then--quick and dirty way until interactChest can notify failure
+            break
+        end
+
+        --Take out enough
+    end
+
+end
+
+function handleSleep()
+    local sleep_time = 12542
+    local time = getMcTime() % 24000
+
+    if time > sleep_time then
+        local old_pos = getPosition()
+        local bl = gotoLandmark("bed")
+        if bl then
+    
+            local bed_block = bl.pos:sub(directionToVec(bl.facing))
+            placeBlock(bed_block, "use")
+    
+            while getMcTime() % 24000  > sleep_time do
+                sleepms(1000)
+            end
+            gotoCoord(old_pos)
+        else
+            say("can't find a bed")
+        end
     end
 end
