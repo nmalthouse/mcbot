@@ -68,7 +68,7 @@ function chop_loop()
 end
 
 function onYield()
-    --handleSleep()
+    handleSleep()
     handleHunger("$food")
 end
 
@@ -79,13 +79,18 @@ function handleSleep()
     if time > sleep_time then
         local old_pos = getPosition()
         local bl = gotoLandmark("bed")
-        local bed_block = bl.pos:sub(directionToVec(bl.facing))
-        placeBlock(bed_block, "use")
-
-        while getMcTime() % 24000  > sleep_time do
-            sleepms(1000)
+        if bl then
+    
+            local bed_block = bl.pos:sub(directionToVec(bl.facing))
+            placeBlock(bed_block, "use")
+    
+            while getMcTime() % 24000  > sleep_time do
+                sleepms(1000)
+            end
+            gotoCoord(old_pos)
+        else
+            say("can't find a bed")
         end
-        gotoCoord(old_pos)
     end
 end
 

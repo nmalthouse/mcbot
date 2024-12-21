@@ -432,6 +432,7 @@ pub const Bot = struct {
 
     modify_mutex: std.Thread.Mutex = .{},
     fd_mutex: std.Thread.Mutex = .{},
+    //This is only used for draw thread
     action_list: std.ArrayList(astar.AStarContext.PlayerActionItem),
     action_index: ?usize = null,
 

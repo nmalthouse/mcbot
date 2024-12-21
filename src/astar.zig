@@ -7,7 +7,7 @@ const McWorld = mcTypes.McWorld;
 const Vector = @import("vector.zig");
 const V3f = Vector.V3f;
 const V3i = Vector.V3i;
-const ITERATION_LIMIT = 10000;
+const ITERATION_LIMIT = 100000;
 
 //TODO move to vector class
 pub const V2i = struct {
@@ -219,6 +219,9 @@ pub const AStarContext = struct {
         self.closed.deinit();
         self.openq.deinit();
     }
+
+    //Write a new flood fill with better predicat system
+    //A want to do a walkable flood fill for any1`
 
     pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId) !?std.ArrayList(V3i) {
         try self.reset();

@@ -2108,7 +2108,7 @@ pub fn basicPathfindThread(
         botp.action_list.deinit();
         botp.action_list = player_actions.*;
         botp.action_index = player_actions.items.len;
-        botp.nextAction(0);
+        //botp.nextAction(0);
         botp.modify_mutex.unlock();
     }
     std.debug.print("FINISHED DUMPING\n", .{});
