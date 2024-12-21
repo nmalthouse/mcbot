@@ -1,16 +1,23 @@
 # Global TODO
-* verbose logging of the different systems to a file
+* verbose logging of the different systems to a file.
 * wrapper around epoll() to allow for a other platforms or a single tcpConnectToHost
-* Cleanup the vector classes, move to using zalgebra? 
-* Tune the pathfinder for large vertical movements
-* Store a per-bot entity list rather than a single global list.
 * Notify Lua scripts when errors occur
-
 
 ## Other
 * Fix the size of font rendering in debug render.
 * Fix the cube rendering code
+* Make it look pretty
+* Store entities in a spatial lookup structure. Simulate collisions using ratgraphs 3d AABB collisions. 
 
+## Pathfinder/positioning
+* Breaking or placing blocks to complete a path, low hanging leaves prevent trees from being felled.
+* Being left floating by changing world, bot should fall or jump to safety. Currently a floating bot can't pathfind anywhere
+
+## Resource assignment
+* How to coordinate access to a shared resource?
+* Beds, tasks (mining, lumber, crafting, sorting)
+* McWorld stores a list of bed positions similar to the crafting table lookup table. Bot is given the resource with local myBed = getBed(). Bot can call freeBed(myBed)?
+* Bot always looks for nearest bed so the bed resource is only owned for one sleep cycle.
 
 ### Mining bot plan
 Mining is hard because a number of factors. Caves, lava, water, monsters.
@@ -25,7 +32,6 @@ Other things that must be taken into account
 * travel time to mining face.
 * y level of mineshaft
 * retaining state of mineshaft between reloads
-* specifying shape of mineshaft using manual vector math and check/breakBlock calls is tedious and error prone
 
 Design Idea
 A mine is specified using a sign landmark, "mine:1"
@@ -37,9 +43,18 @@ branch completion
 trunk completion
 mine completion - shaft sealed
 
-A special marker block can be used to store memory in the mc world.
+Easiest solution to leaf problem:
+Pass a list of blocks to pathfinder,  these blocks are considerd enterable and will be broken.
+Should the pathfinder check for nonEnterable blocks before moving and break?
 
 
-# crafting
-Api looks like this: craft(oak_fence, 1)
-Wow do we do it?
+### Farming bot plan
+#### Overview
+Bot watches a plot of farmland and harvests and replants crops.
+
+#### Problems
+How to determine which blocks to watch?
+Farm is specified using a landmark, any adjacent blocks of farmland are added and a floodfill for farmland is performed.
+The flood fill should have a parameter that controls how many non farmland blocks can be traversed before abandoning a node
+The list of farmland is returned.
+Bot scans through checking the block above for a crop, empty farmland is left empty

@@ -223,7 +223,8 @@ pub const AStarContext = struct {
     //Write a new flood fill with better predicat system
     //A want to do a walkable flood fill for any1`
 
-    pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId) !?std.ArrayList(V3i) {
+    pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId, max_dist: f32) !?std.ArrayList(V3i) {
+        var last_matching_pos: ?V3i = null;
         try self.reset();
         try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
         var iterations: usize = 0;
@@ -236,6 +237,7 @@ pub const AStarContext = struct {
                 const coord = V3i.new(pv.x + avec.x, pv.y, pv.z + avec.y);
                 if (self.world.chunk_data.getBlock(coord)) |id| {
                     if (self.world.reg.getBlockIdFromState(id) == blockid) {
+                        last_matching_pos = coord;
                         try self.addNode(.{
                             .ntype = .walk,
                             .x = coord.x,
@@ -244,6 +246,17 @@ pub const AStarContext = struct {
                             .G = 0,
                             .H = 0,
                         }, current_n);
+                    } else if (last_matching_pos) |po| {
+                        if (po.toF().subtract(coord.toF()).magnitude() < max_dist) {
+                            try self.addNode(.{
+                                .ntype = .walk,
+                                .x = coord.x,
+                                .y = coord.y,
+                                .z = coord.z,
+                                .G = 0,
+                                .H = 0,
+                            }, current_n);
+                        }
                     }
                 }
             }
@@ -583,7 +596,11 @@ pub const AStarContext = struct {
         }
     }
 
-    //z is the coordinate beneath players feet
+    // If we allow player to break certain blocks then the result of this function is ill defined.
+    // For example, if the player can break stone and the player is in a cave every node is any category
+    // If we can allow multiple nodes to be added this problem goes away. In the stone example this adds three nodes, dig straight, dig up one, dig down one
+    // Or, to keep it simple breakable blocks cannot be considered walkable blocks, this makes the result of this function well defined
+    ///z is the coordinate beneath players feet
     pub fn catagorizeAdjColumn(self: *Self, x: i32, y: i32, z: i32, head_blocked: bool, max_fall_dist: u32, adj_i: u32) ColumnHelper.Category {
         const col = ColumnHelper{ .x = x, .z = z, .y = y, .ctx = self };
         if (col.walkable(0) and col.canEnter(1) and col.canEnter(2)) {

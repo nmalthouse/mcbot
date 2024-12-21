@@ -1413,7 +1413,7 @@ pub const LuaApi = struct {
                 return 0;
             };
             //errc(self.pathctx.reset()) orelse return 0;
-            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id)) orelse return 0;
+            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id, 3)) orelse return 0;
             if (flood_pos) |fp| {
                 Lua.pushV(L, fp.items);
                 fp.deinit();
@@ -1783,6 +1783,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
     var skip_ticks: i32 = 0;
     const dt: f64 = 1.0 / 20.0;
     while (true) {
+        var tick_timer = try std.time.Timer.start();
         if (exit_mutex.tryLock()) {
             std.debug.print("Stopping updateBots thread\n", .{});
             for (bot_threads_data.items) |th_d| {
@@ -1976,6 +1977,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .place_block => |pb| {
+                                //TODO support placing block with orientation, slabs, stairs etc.
                                 const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
                                 if (pb.select_item_tag) |tag| {
                                     if (world.tag_table.getIdList("minecraft:item", tag)) |taglist| {
@@ -2071,13 +2073,41 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             },
                         }
                     } else {
+                        //Quick and dirty floati protection
+                        {
+                            var dist_to_fall: f64 = -1;
+                            //Check the bot is standing on something
+                            if (world.chunk_data.getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
+                                var under: ?Reg.BlockId = under_o;
+
+                                if (under_o == 0 or @trunc(bo.pos.?.y) != 0) { //Bot is standing on air, make it fall
+                                    while (under != null and under.? == 0) {
+                                        dist_to_fall -= 1;
+                                        under = world.chunk_data.getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
+                                    }
+                                    var actions = LuaApi.ActionListT.init(world.alloc);
+                                    var pos = bo.pos.?;
+                                    pos.y = @trunc(pos.y) + dist_to_fall + 1;
+                                    try actions.append(.{ .movement = .{ .kind = .freemove, .pos = pos } });
+                                    th_d.setActions(actions, bo.pos.?);
+                                }
+                            }
+                        }
                         th_d.unlock(.bot_thread);
                     }
                 }
             }
         }
 
-        std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * dt)));
+        const tick_took = tick_timer.read();
+        //Support carpetmod variable ticktime?
+        const dtns: u64 = @intFromFloat(dt * std.time.ns_per_s);
+        if (tick_took > dtns) {
+            log.warn("tick took {d:.2} ms", .{tick_took * std.time.ms_per_s / std.time.ns_per_s});
+        } else {
+            std.time.sleep(dtns - tick_took);
+        }
+        //std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * dt)));
     }
 }
 
@@ -2406,7 +2436,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 if (wheat_pos) |wh| {
                                     wh.deinit();
                                 }
-                                wheat_pos = try astar_ctx.floodfillCommonBlock(pi.toF(), wheat_id);
+                                wheat_pos = try astar_ctx.floodfillCommonBlock(pi.toF(), wheat_id, 0);
                             }
 
                             break;
@@ -2667,6 +2697,10 @@ pub const ConsoleCommands = enum {
     reload,
     draw,
 };
+
+//TODO epoll layer. So bot can run on Windows
+//Maybe just use libevent?
+//Or multibot is only supported on linux and windows defalts to a single tcpconnect
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 16 }){};

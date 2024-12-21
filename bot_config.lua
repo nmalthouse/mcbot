@@ -1,8 +1,9 @@
 bots = {}
-ip = "192.168.1.120"
+ip = "localhost"
 port = 25565
 
 local bots_list = {
+        { name = "Robert",      script_name = "scripts/flood.lua" },
         { name = "James",       script_name = "scripts/lumber.lua" },
         { name = "Charles",     script_name = "scripts/path.lua" },
         { name = "John1",        script_name = "scripts/slicer.lua" },
@@ -10,7 +11,6 @@ local bots_list = {
         { name = "Mary",        script_name = "scripts/testwalk.lua" },
         { name = "Henry",       script_name = "scripts/craft.lua" },
         { name = "George",      script_name = "scripts/do_nothing.lua" },
-        { name = "Robert",      script_name = "scripts/do_nothing.lua" },
         { name = "Harry",       script_name = "scripts/ethel.lua" },
         { name = "Fred",        script_name = "scripts/ethel.lua" },
         { name = "Albert",      script_name = "scripts/ethel.lua" },

@@ -323,6 +323,7 @@ pub const BotScriptThreadData = struct {
     mutex: std.Thread.Mutex,
     owner: Owner,
 
+    ///These actions are evaluated in reverse
     actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
     bot: *Bot,
     action_index: ?usize = null,
@@ -383,6 +384,9 @@ pub const BotScriptThreadData = struct {
         if (self.action_index) |act| {
             switch (self.actions.items[act]) {
                 .movement => |mov| {
+                    // Should we check if the move is possible?
+                    // We need a world ptr
+                    // Should we append actions to remedy the blockage?
                     self.move_state = MovementState.init(pos, mov.pos, init_dt, mov.kind);
                 },
                 else => {},
