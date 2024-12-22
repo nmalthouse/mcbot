@@ -287,10 +287,19 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 world.entities_mutex.unlock();
             }
         },
+        .remove_entity_effect => {
+            const d = try Ap(Penum, .remove_entity_effect, &parse);
+            const eff: Proto.EffectEnum = @enumFromInt(d.effectId);
+            if (d.entityId == bot1.e_id) {
+                bot1.removeEffect(eff);
+            }
+        },
         .entity_effect => {
-            //TODO set bot status effects so haste effect applies
             const d = try Ap(Penum, .entity_effect, &parse);
-            std.debug.print("{d}\n", .{d.effectId});
+            const eff: Proto.EffectEnum = @enumFromInt(d.effectId);
+            if (d.entityId == bot1.e_id) {
+                try bot1.addEffect(eff, d.duration, d.amplifier);
+            }
         },
         .update_time => {
             const d = try Ap(Penum, .update_time, &parse);
@@ -777,8 +786,14 @@ pub const LuaApi = struct {
         }
     }
     pub fn endHalt(self: *Self) void {
+        const has_actions = self.thread_data.action_index != null;
         self.thread_data.unlock(.script_thread);
-        std.time.sleep(std.time.ns_per_s / 10);
+        if (has_actions)
+            std.time.sleep(std.time.ns_per_s / 10); //Wait 2 ticks, ugly
+        return;
+        //
+        //std.time.sleep(std.time.ns_per_s / 100);
+        //The update thread runs at 20 tps so we sleep to allow it to run
     }
 
     //Assumes appropriate mutexs are owned by calling thread
@@ -788,7 +803,9 @@ pub const LuaApi = struct {
         const block = self.world.reg.getBlockFromState(sid);
         if (self.bo.inventory.findToolForMaterial(self.world.reg, block.material)) |match| {
             const hardness = block.hardness orelse return;
-            const btime = Reg.calculateBreakTime(match.mul, hardness, .{});
+            const btime = Reg.calculateBreakTime(match.mul, hardness, .{
+                .haste_level = self.bo.getEffect(.Haste),
+            });
             errc(actions.append(.{ .block_break = .{ .pos = coord, .break_time = @as(f64, @floatFromInt(btime)) / 20 } })) orelse return;
             errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(match.slot_index)) } })) orelse return;
         }
@@ -1577,6 +1594,11 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub export fn timestamp_ms(L: Lua.Ls) c_int {
+            Lua.pushV(L, std.time.milliTimestamp());
+            return 1;
+        }
+
         //TODO itemCount function that works with nonplayer inventories.
         pub const DOC_itemCount: []const u8 = "Args: item_predicate, returns (int),\n\titem_predicate is a string [[item, any, category] argument] where argument depends on the predicate. Examples: \"category food\" or \"item stone_bricks\"";
         pub export fn itemCount(L: Lua.Ls) c_int {
@@ -1845,6 +1867,9 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
         }
 
         for (bot_threads_data.items) |th_d| {
+            th_d.bot.modify_mutex.lock();
+            th_d.bot.update(dt, 1);
+            th_d.bot.modify_mutex.unlock();
             if (th_d.trylock(.bot_thread)) {
                 const bo = th_d.bot;
                 var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bo.compression_threshold), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
@@ -2042,7 +2067,9 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     const block = world.reg.getBlockFromState(sid);
                                     if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
                                         const hardness = block.hardness.?;
-                                        const btime = Reg.calculateBreakTime(match.mul, hardness, .{});
+                                        const btime = Reg.calculateBreakTime(match.mul, hardness, .{
+                                            .haste_level = bo.getEffect(.Haste),
+                                        });
                                         th_d.break_timer_max = @as(f64, @floatFromInt(btime)) / 20.0;
 
                                         try bp.setHeldItem(0);
@@ -2050,6 +2077,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     } else {
                                         th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
                                             .best_tool = false,
+                                            .haste_level = bo.getEffect(.Haste),
                                             .adequate_tool_level = !std.mem.eql(u8, block.material, "mineable/pickaxe"),
                                         }))) / 20.0;
                                     }
@@ -2117,7 +2145,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 }
                             }
                         }
-                        th_d.unlock(.bot_thread);
+                        th_d.unlock(.bot_thread); //No more actions, unlock
                     }
                 }
             }

@@ -4,6 +4,7 @@ const V3f = vector.V3f;
 const mc = @import("listener.zig");
 const astar = @import("astar.zig");
 const RegD = @import("data_reg.zig");
+const Proto = @import("protocol.zig");
 const Reg = RegD.DataReg;
 
 pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
@@ -414,6 +415,10 @@ pub const BotScriptThreadData = struct {
 //Not a client as chunk data etc can be shaerd between Bots
 pub const Bot = struct {
     const Self = @This();
+    const Effect = struct {
+        ticks: i64,
+        amplifier: i64,
+    };
     init_status: struct { //Used to determine when updateBots can begin processing
         has_inv: bool = false,
     } = .{},
@@ -450,6 +455,8 @@ pub const Bot = struct {
     interacted_inventory: Inventory,
     container_state: i32 = 0,
 
+    effects: std.AutoHashMap(Proto.EffectEnum, Effect),
+
     alloc: std.mem.Allocator,
 
     pub fn init(alloc: std.mem.Allocator, name_: []const u8, script_name: ?[]const u8) !Bot {
@@ -458,6 +465,7 @@ pub const Bot = struct {
         return Bot{
             .alloc = alloc,
             .inventory = inv,
+            .effects = std.AutoHashMap(Proto.EffectEnum, Effect).init(alloc),
             .script_filename = if (script_name) |sn| try alloc.dupe(u8, sn) else null,
             .name = name_,
             .e_id = 0,
@@ -481,6 +489,32 @@ pub const Bot = struct {
         }
     }
 
+    pub fn getEffect(self: *Self, id: Proto.EffectEnum) i64 {
+        if (self.effects.get(id)) |ef| {
+            if (ef.ticks > 0)
+                return ef.amplifier + 1;
+        }
+        return 0;
+    }
+
+    pub fn removeEffect(self: *Self, id: Proto.EffectEnum) void {
+        if (self.effects.getPtr(id)) |ef| {
+            ef.ticks = 0;
+        }
+    }
+
+    pub fn addEffect(self: *Self, id: Proto.EffectEnum, time: i64, amplifier: i64) !void {
+        try self.effects.put(id, .{ .ticks = time, .amplifier = amplifier });
+    }
+
+    pub fn update(self: *Self, dt: f64, tick_count: i64) void {
+        _ = dt;
+        var e_it = self.effects.iterator();
+        while (e_it.next()) |e| {
+            e.value_ptr.ticks = @min(0, e.value_ptr.ticks - tick_count);
+        }
+    }
+
     pub fn deinit(self: *Self) void {
         if (self.script_filename) |sn| {
             self.alloc.free(sn);
@@ -489,6 +523,7 @@ pub const Bot = struct {
             item.deinit();
         }
         self.action_list.deinit();
+        self.effects.deinit();
         self.interacted_inventory.deinit();
         self.inventory.deinit();
     }

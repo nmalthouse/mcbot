@@ -611,12 +611,13 @@ pub fn calculateBreakTime(tool_multiplier: f32, block_hardness: f32, params: str
     best_tool: bool = true,
     adequate_tool_level: bool = true,
     efficiency_level: f32 = 0,
-    haste_level: f32 = 0,
+    haste_level: i64 = 0,
     mining_fatigue: f32 = 0,
     in_water: bool = false,
     has_aqua_affinity: bool = false,
     on_ground: bool = true,
 }) u32 {
+    const haste: f32 = @floatFromInt(params.haste_level);
     var s: f32 = 1;
     if (params.best_tool) {
         s = tool_multiplier;
@@ -628,7 +629,7 @@ pub fn calculateBreakTime(tool_multiplier: f32, block_hardness: f32, params: str
     }
 
     if (params.haste_level > 0)
-        s *= 0.2 * params.haste_level + 1;
+        s *= 0.2 * haste + 1;
 
     if (params.mining_fatigue > 0)
         s *= std.math.pow(f32, 0.3, @min(params.mining_fatigue, 4));

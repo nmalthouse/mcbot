@@ -35,33 +35,52 @@ function loop()
     --end
     if gotoLandmark("floodtest") then
         local t = getFieldFlood("floodtest", "farmland",3 )
-        local nearest_index = nil
-        local nearest_dist = 100000000
-        for i,f in ipairs(t) do
+        local crop_list = {}
+        for _,f in ipairs(t) do
             local b = blockInfo(f)
+            local keep = false
+            local above_pos = f:add(Vec3:New(0,1,0))
+            local above = blockInfo(above_pos)
             if b.name == "farmland" then
-                local above_pos = f:add(Vec3:New(0,1,0))
-                local above = blockInfo(above_pos)
-                if crops[above.name] ~= nil and crops[above.name].age == above.state.age then
-                    print("found fully grown")
-                if gotoCoord(above_pos, 1) ~= nil then
-                    print("breaking")
-    
-                    breakBlock(above_pos)
-                    sleepms(300);
-                    placeBlock(above_pos, crops[above.name].item)
-                    sleepms(300);
-                    local nearby_items = findNearbyItems(4)
-                    for _, near in ipairs(nearby_items) do 
-                        gotoCoord(near,2) 
-                        sleepms(500)
-                    end
+                if crops[above.name] ~= nil and crops[above.name].age == above.state.age then keep = true end
+            end
+            if keep then
+                table.insert(crop_list, above_pos)
+            end
+        end
 
-                end
+        print("left to check: " .. #crop_list)
+        while #crop_list > 0 do
+            local tstart = timestamp_ms()
+            local nearest_index = 1
+            local nearest_dist  = 1000000
+            local bpos = getPosition()
+            for i,v in ipairs(crop_list) do
+                local mag = bpos:sub(v):magnitude()
+                if mag < nearest_dist then 
+                    nearest_dist = mag
+                    nearest_index = i
                 end
             end
+            local tend = timestamp_ms()
+            print("took " .. tend - tstart)
 
+            local n = crop_list[nearest_index]
+                local above = blockInfo(n)
+            if gotoCoord(n, 1) ~= nil then
+                breakBlock(n)
+                placeBlock(n, crops[above.name].item)
+                sleepms(100);
+                local nearby_items = findNearbyItems(5)
+                for _, near in ipairs(nearby_items) do 
+                    gotoCoord(near,1) 
+                    sleepms(1000)
+                end
+
+            end
+            table.remove(crop_list, nearest_index)
         end
+
     else
         say("cant find floodtest")
     end

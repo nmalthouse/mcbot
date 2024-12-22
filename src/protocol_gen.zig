@@ -93,12 +93,21 @@ pub fn main() !void {
     try emitPacketEnum(arena_alloc, &root, w, "configuration", "toClient", "Config_Clientbound");
     try emitPacketEnum(arena_alloc, &root, w, "configuration", "toServer", "Config_Serverbound");
 
-    { //Entity enums
+    { //Various enums
         var ents = try com.readJson(mc_data_dir, "entities.json", alloc, []struct { id: u32, name: []const u8 });
         defer ents.deinit();
 
         try w.print("pub const EntityEnum = enum(i32){{\n", .{});
         for (ents.value) |v| {
+            try w.print("{s} = {d},\n", .{ v.name, v.id });
+        }
+        try w.print("}};\n", .{});
+
+        var effects = try com.readJson(mc_data_dir, "effects.json", alloc, []struct { id: u32, name: []const u8 });
+        defer effects.deinit();
+
+        try w.print("pub const EffectEnum = enum(i32){{\n", .{});
+        for (effects.value) |v| {
             try w.print("{s} = {d},\n", .{ v.name, v.id });
         }
         try w.print("}};\n", .{});
