@@ -44,10 +44,12 @@ pub const Poi = struct {
 
     //If this is slow to search use an octree or something
     crafting_tables: std.ArrayList(vector.V3i),
+    dim: i32,
     mutex: std.Thread.Mutex = .{},
 
-    pub fn init(alloc: std.mem.Allocator) @This() {
+    pub fn init(alloc: std.mem.Allocator, dim: i32) @This() {
         return .{
+            .dim = dim,
             .crafting_tables = std.ArrayList(vector.V3i).init(alloc),
         };
     }
@@ -76,7 +78,7 @@ pub const Poi = struct {
 
             if (min_index) |mi| {
                 var is_craft = false;
-                if (world.chunk_data.getBlock(self.crafting_tables.items[mi])) |bl| {
+                if (world.chunkdata(self.dim).getBlock(self.crafting_tables.items[mi])) |bl| {
                     //check it is still a crafting bench
 
                     const bll = world.reg.getBlockFromState(bl);
@@ -102,14 +104,6 @@ pub const Poi = struct {
     }
 };
 
-pub const Dimension = struct {
-    const Self = @This();
-    chunk_data: mc.ChunkMap,
-    //pub fn init( dim_info:McWorld.DimInfo)Self{
-    //    _ = dim_it
-    //}
-};
-
 pub const McWorld = struct {
     const Self = @This();
     pub const Waypoint = struct {
@@ -117,25 +111,47 @@ pub const McWorld = struct {
         facing: Reg.Direction,
     };
     pub const DimInfo = struct {
-        height: i32,
+        section_count: u32,
         min_y: i32,
         id: i32,
         bed_works: bool,
+    };
+    pub const Dimension = struct {
+        chunk_data: mc.ChunkMap,
+        info: McWorld.DimInfo,
+        sign_waypoints: std.StringHashMap(std.ArrayList(Waypoint)),
+        sign_waypoints_mutex: std.Thread.Mutex = .{},
+        /// Poi has its own mutex
+        poi: Poi,
+
+        pub fn init(dim_info: DimInfo, alloc: std.mem.Allocator) Dimension {
+            return .{
+                .chunk_data = mc.ChunkMap.init(alloc, dim_info.section_count, dim_info.min_y),
+                .sign_waypoints = std.StringHashMap(std.ArrayList(Waypoint)).init(alloc),
+                .poi = Poi.init(alloc, dim_info.id),
+                .info = dim_info,
+            };
+        }
+
+        pub fn deinit(self: *Dimension, alloc: std.mem.Allocator) void {
+            self.poi.deinit();
+            self.chunk_data.deinit();
+            var kit = self.sign_waypoints.iterator();
+            while (kit.next()) |key| {
+                alloc.free(key.key_ptr.*);
+                key.value_ptr.deinit();
+            }
+            self.sign_waypoints.deinit();
+        }
     };
     //Only used for time, organize the mutex please
     modify_mutex: std.Thread.Mutex = .{},
 
     ///All api calls to chunk_data are locked internally
-    chunk_data: mc.ChunkMap, //TODO support dimensions
-
-    sign_waypoints: std.StringHashMap(std.ArrayList(Waypoint)),
-    sign_waypoints_mutex: std.Thread.Mutex = .{},
+    //chunk_data: mc.ChunkMap, //TODO support dimensions
 
     dimension_map: std.StringHashMap(DimInfo),
-    //dimensions: std.AutoHashMap(i32, Dimension),
-
-    /// Poi has its own mutex
-    poi: Poi,
+    dimensions: std.AutoHashMap(i32, Dimension),
 
     alloc: std.mem.Allocator,
 
@@ -164,12 +180,11 @@ pub const McWorld = struct {
     pub fn init(alloc: std.mem.Allocator, reg: *const Reg.DataReg) Self {
         return Self{
             .alloc = alloc,
-            .sign_waypoints = std.StringHashMap(std.ArrayList(Waypoint)).init(alloc),
             .dimension_map = std.StringHashMap(DimInfo).init(alloc),
+            .dimensions = std.AutoHashMap(i32, Dimension).init(alloc),
             .reg = reg,
-            .poi = Poi.init(alloc),
             .packet_cache = .{},
-            .chunk_data = mc.ChunkMap.init(alloc),
+            //.chunk_data = mc.ChunkMap.init(alloc),
             .entities = std.AutoHashMap(i32, Entity).init(alloc),
             .bots = std.AutoHashMap(i32, Bot).init(alloc),
             .tag_table = mc.TagRegistry.init(alloc),
@@ -177,19 +192,17 @@ pub const McWorld = struct {
     }
 
     pub fn deinit(self: *Self) void {
-        var kit = self.sign_waypoints.iterator();
-        while (kit.next()) |key| {
-            self.alloc.free(key.key_ptr.*);
-            key.value_ptr.deinit();
-        }
         var dim_it = self.dimension_map.iterator();
         while (dim_it.next()) |d| {
             self.alloc.free(d.key_ptr.*);
         }
+        var d_it = self.dimensions.iterator();
+        while (d_it.next()) |dd| {
+            dd.value_ptr.deinit(self.alloc);
+        }
+        self.dimensions.deinit();
         self.dimension_map.deinit();
-        self.sign_waypoints.deinit();
-        self.poi.deinit();
-        self.chunk_data.deinit();
+        //self.chunk_data.deinit();
         self.entities.deinit();
         var b_it = self.bots.valueIterator();
         while (b_it.next()) |bot| {
@@ -205,13 +218,14 @@ pub const McWorld = struct {
         try self.bots.put(bb.fd, bb);
     }
 
-    pub fn putSignWaypoint(self: *Self, sign_name: []const u8, waypoint: Waypoint) !void {
-        self.sign_waypoints_mutex.lock();
-        defer self.sign_waypoints_mutex.unlock();
+    pub fn putSignWaypoint(self: *Self, dim: i32, sign_name: []const u8, waypoint: Waypoint) !void {
+        const d = self.dimensions.getPtr(dim).?;
+        d.sign_waypoints_mutex.lock();
+        defer d.sign_waypoints_mutex.unlock();
         const name = try self.alloc.dupe(u8, sign_name);
         log.info("Putting waypoint \"{s}\"", .{name});
         errdefer self.alloc.free(name);
-        const gpr = try self.sign_waypoints.getOrPut(name);
+        const gpr = try d.sign_waypoints.getOrPut(name);
         if (gpr.found_existing) {
             self.alloc.free(gpr.key_ptr.*);
             gpr.key_ptr.* = name;
@@ -224,13 +238,14 @@ pub const McWorld = struct {
         }
     }
 
-    pub fn getNearestSignWaypoint(self: *Self, sign_name: []const u8, pos: vector.V3i) ?Waypoint {
-        self.sign_waypoints_mutex.lock();
-        defer self.sign_waypoints_mutex.unlock();
+    pub fn getNearestSignWaypoint(self: *Self, dim: i32, sign_name: []const u8, pos: vector.V3i) ?Waypoint {
+        const d = self.dimensions.getPtr(dim).?;
+        d.sign_waypoints_mutex.lock();
+        defer d.sign_waypoints_mutex.unlock();
         var min_index: ?usize = null;
         var min_dist = std.math.floatMax(f64);
         const p = pos.toF();
-        if (self.sign_waypoints.get(sign_name)) |wps| {
+        if (d.sign_waypoints.get(sign_name)) |wps| {
             for (wps.items, 0..) |wp, i| {
                 const dist = wp.pos.toF().subtract(p).magnitude();
                 if (dist < min_dist) {
@@ -243,6 +258,14 @@ pub const McWorld = struct {
             }
         }
         return null;
+    }
+
+    pub fn chunkdata(self: *Self, dim_id: i32) *mc.ChunkMap {
+        return &(self.dimensions.getPtr(dim_id) orelse unreachable).chunk_data;
+    }
+
+    pub fn dimPtr(self: *Self, dim_id: i32) *Dimension {
+        return (self.dimensions.getPtr(dim_id) orelse unreachable);
     }
 
     pub fn putEntity(self: *Self, bot: *Bot, data: anytype, uuid: u128, etype: Proto.EntityEnum) !void {
@@ -296,8 +319,9 @@ pub const McWorld = struct {
         }
     }
 
-    pub fn putBlockEntity(self: *Self, coord: vector.V3i, nbt: nbt_zig.Entry, aa: std.mem.Allocator) !void {
-        const id = self.chunk_data.getBlock(coord) orelse return;
+    pub fn putBlockEntity(self: *Self, dim_id: i32, coord: vector.V3i, nbt: nbt_zig.Entry, aa: std.mem.Allocator) !void {
+        const dim = self.dimensions.getPtr(dim_id) orelse return;
+        const id = dim.chunk_data.getBlock(coord) orelse return;
         const b = self.reg.getBlockFromState(id);
         if (self.tag_table.hasTag(b.id, "minecraft:block", "minecraft:signs")) {
             var has_text = false;
@@ -311,22 +335,22 @@ pub const McWorld = struct {
                             const fac = facing.sub.facing;
                             const dvec = facing.sub.facing.reverse().toVec();
                             const behind = coord.add(dvec);
-                            if (self.chunk_data.getBlock(behind)) |bid| {
+                            if (dim.chunk_data.getBlock(behind)) |bid| {
                                 const bi = self.reg.getBlockFromState(bid);
                                 if (std.mem.eql(u8, "chest", bi.name)) {
                                     const name = try std.mem.concat(aa, u8, &.{ j.value.text, "_chest" });
-                                    try self.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
+                                    try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
                                 } else if (std.mem.eql(u8, "dropper", bi.name)) {
                                     const name = try std.mem.concat(aa, u8, &.{ j.value.text, "_dropper" });
-                                    try self.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
+                                    try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
                                 } else if (std.mem.eql(u8, "crafting_table", bi.name)) {
                                     const name = try std.mem.concat(aa, u8, &.{ j.value.text, "_craft" });
-                                    try self.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
+                                    try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
                                 }
                             }
-                            try self.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = fac });
+                            try self.putSignWaypoint(dim_id, j.value.text, .{ .pos = coord, .facing = fac });
                         } else {
-                            try self.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = .north });
+                            try self.putSignWaypoint(dim_id, j.value.text, .{ .pos = coord, .facing = .north });
                         }
                     }
                 }

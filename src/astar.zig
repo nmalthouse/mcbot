@@ -169,12 +169,12 @@ pub const AStarContext = struct {
         y: i32,
 
         pub fn walkable(s: *const S, y: i32) bool {
-            const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false);
+            const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunkdata(s.ctx.dim_id).getBlock(V3i.new(s.x, y + s.y, s.z)) orelse return false);
             return s.ctx.world.reg.isBlockCollidable(id.id);
         }
 
         pub fn canEnter(s: *const S, y: i32) bool {
-            const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunk_data.getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
+            const id = s.ctx.world.reg.getBlockFromState(s.ctx.world.chunkdata(s.ctx.dim_id).getBlock(V3i.new(s.x, s.y + y, s.z)) orelse return false).id;
             const tags_to_check = [_][]const u8{
                 "minecraft:climbable",
                 "minecraft:signs",
@@ -201,10 +201,12 @@ pub const AStarContext = struct {
     //open: std.ArrayList(*Node),
     //closed: std.ArrayList(*Node),
     closed: ClosedType,
+    dim_id: i32,
 
-    pub fn init(alloc: std.mem.Allocator, world: *McWorld) Self {
+    pub fn init(alloc: std.mem.Allocator, world: *McWorld, dim_id: i32) Self {
         return Self{
             .openq = QType.init(alloc, {}),
+            .dim_id = dim_id,
             .closed = ClosedType.init(alloc),
             //.open = std.ArrayList(*Node).init(alloc),
             //.closed = std.ArrayList(*Node).init(alloc),
@@ -213,7 +215,7 @@ pub const AStarContext = struct {
         };
     }
 
-    pub fn reset(self: *Self) !void {
+    pub fn reset(self: *Self, dim_id: i32) !void {
         var cit = self.closed.valueIterator();
         while (cit.next()) |cl|
             self.closed.allocator.destroy(cl.*);
@@ -223,11 +225,12 @@ pub const AStarContext = struct {
         //try self.open.resize(0);
         self.closed.clearRetainingCapacity();
         self.openq.deinit();
+        self.dim_id = dim_id;
         self.openq = QType.init(self.closed.allocator, {});
     }
 
     pub fn deinit(self: *Self) void {
-        self.reset() catch unreachable;
+        self.reset(0) catch unreachable;
         //self.open.deinit();
         self.closed.deinit();
         self.openq.deinit();
@@ -236,9 +239,9 @@ pub const AStarContext = struct {
     //Write a new flood fill with better predicat system
     //A want to do a walkable flood fill for any1`
 
-    pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId, max_dist: f32) !?std.ArrayList(V3i) {
+    pub fn floodfillCommonBlock(self: *Self, start: V3f, blockid: Reg.BlockId, max_dist: f32, dim_id: i32) !?std.ArrayList(V3i) {
         var last_matching_pos = start;
-        try self.reset();
+        try self.reset(dim_id);
         try self.addOpen(.{ .x = @as(i32, @intFromFloat(start.x)), .y = @as(i32, @intFromFloat(start.y)), .z = @as(i32, @intFromFloat(start.z)) });
         var iterations: usize = 0;
         while (true) : (iterations += 1) {
@@ -247,7 +250,7 @@ pub const AStarContext = struct {
             //const direct_adj = [_]u32{ 1, 3, 5, 7 };
             for (FACE_ADJ) |avec| {
                 const coord = V3i.new(pv.x + avec.x, pv.y + avec.y, pv.z + avec.z);
-                if (self.world.chunk_data.getBlock(coord)) |id| {
+                if (self.world.chunkdata(self.dim_id).getBlock(coord)) |id| {
                     if (self.world.reg.getBlockIdFromState(id) == blockid) {
                         last_matching_pos = coord.toF();
                         try self.addNode(.{
@@ -287,12 +290,12 @@ pub const AStarContext = struct {
     //calling a lua predicate for every node is probably too slow
     //IF combined with a early filtering system in zig then a nice lua predicate is possible.
     //IF zig detects dirt with 2+wood on top call the predicate to determine if its a tree
-    pub fn findTree(self: *Self, start: V3f) !?struct {
+    pub fn findTree(self: *Self, start: V3f, dim_id: i32) !?struct {
         list: std.ArrayList(PlayerActionItem),
         // String does not need to be freed
         tree_name: []const u8,
     } {
-        try self.reset();
+        try self.reset(dim_id);
         try self.addOpen(.{
             .x = @as(i32, @intFromFloat(@floor(start.x))),
             .y = @as(i32, @intFromFloat(@floor(start.y))),
@@ -331,7 +334,7 @@ pub const AStarContext = struct {
                 if (is_tree) {
                     //Get the name of the log
                     const tree_name = blk: {
-                        const log_block = self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse return null);
+                        const log_block = self.world.reg.getBlockFromState(self.world.chunkdata(self.dim_id).getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse return null);
                         if (std.mem.lastIndexOfScalar(u8, log_block.name, '_')) |ind| {
                             if (std.mem.startsWith(u8, log_block.name, "stripped")) {
                                 break :blk log_block.name["stripped_".len..ind];
@@ -415,17 +418,18 @@ pub const AStarContext = struct {
     //Full implementation will need to check range on each node xz
     pub fn pathfind(
         self: *Self,
+        dimension_id: i32,
         start: V3f,
         goal: V3f,
         params: struct {
             min_distance: ?f32 = null, //if set, a node within this distance from goal is a match
         },
     ) !?std.ArrayList(PlayerActionItem) {
-        if (self.world.chunk_data.isLoaded(goal.toI()) == false) {
+        if (self.world.chunkdata(self.dim_id).isLoaded(goal.toI()) == false) {
             return null;
         }
 
-        try self.reset();
+        try self.reset(dimension_id);
         try self.addOpen(.{
             .x = @as(i32, @intFromFloat(@floor(start.x))),
             .y = @as(i32, @intFromFloat(@floor(start.y))),
@@ -546,7 +550,7 @@ pub const AStarContext = struct {
     }
 
     pub fn addAdjNodes(self: *Self, node: *Node, goal: V3f, override_h: ?u32) !void {
-        const block_above = self.world.chunk_data.getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse 0;
+        const block_above = self.world.chunkdata(self.dim_id).getBlock(V3i.new(node.x, node.y + 2, node.z)) orelse 0;
         const direct_adj = [_]u32{ 1, 3, 5, 7 };
         const diag_adj = [_]u32{ 0, 2, 4, 6 };
         var acat: [8]ColumnHelper.Category = .{.{ .cat = .blocked }} ** 8;
@@ -649,7 +653,7 @@ pub const AStarContext = struct {
     }
 
     pub fn hasAnyTagFrom(self: *const Self, namespace: []const u8, tags: []const []const u8, pos: V3i) bool {
-        const block = self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false);
+        const block = self.world.reg.getBlockFromState(self.world.chunkdata(self.dim_id).getBlock(pos) orelse return false);
         for (tags) |tag| {
             if (self.world.tag_table.hasTag(block.id, namespace, tag))
                 return true;
@@ -658,12 +662,12 @@ pub const AStarContext = struct {
     }
 
     pub fn hasBlockTag(self: *const Self, tag: []const u8, pos: V3i) bool {
-        return (self.world.tag_table.hasTag(self.world.reg.getBlockFromState(self.world.chunk_data.getBlock(pos) orelse return false).id, "minecraft:block", tag));
+        return (self.world.tag_table.hasTag(self.world.reg.getBlockFromState(self.world.chunkdata(self.dim_id).getBlock(pos) orelse return false).id, "minecraft:block", tag));
     }
 
     //TODO check if it is transparent block
     pub fn isWalkable(self: *Self, x: i32, y: i32, z: i32) bool {
-        return @as(bool, @bitCast(self.world.chunk_data.getBlock(x, y, z) != 0));
+        return @as(bool, @bitCast(self.world.chunkdata(self.dim_id).getBlock(x, y, z) != 0));
     }
 
     pub fn hasWalkableAdj(self: *Self, x: i32, y: i32, z: i32) bool {
@@ -674,9 +678,9 @@ pub const AStarContext = struct {
             const bx = x + a_vec.x;
             const bz = z + a_vec.y;
             const by = y;
-            l_adj[i][0] = @as(bool, @bitCast((self.world.chunk_data.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
-            l_adj[i][1] = @as(bool, @bitCast((self.world.chunk_data.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
-            l_adj[i][2] = @as(bool, @bitCast((self.world.chunk_data.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
+            l_adj[i][0] = @as(bool, @bitCast((self.world.chunkdata(self.dim_id).getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
+            l_adj[i][1] = @as(bool, @bitCast((self.world.chunkdata(self.dim_id).getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
+            l_adj[i][2] = @as(bool, @bitCast((self.world.chunkdata(self.dim_id).getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
 
             if (l_adj[i][0] and !l_adj[i][1] and !l_adj[i][2]) {
                 return true;
@@ -686,11 +690,11 @@ pub const AStarContext = struct {
     }
 };
 
-pub fn isWalkable(world: *McWorld, x: i32, y: i32, z: i32) bool {
-    return @as(bool, @bitCast(world.chunk_data.getBlock(x, y, z) != 0));
+pub fn isWalkable(dim_id: i32, world: *McWorld, x: i32, y: i32, z: i32) bool {
+    return @as(bool, @bitCast(world.chunkdata(dim_id).getBlock(x, y, z) != 0));
 }
 
-pub fn hasWalkableAdj(world: *McWorld, x: i32, y: i32, z: i32) bool {
+pub fn hasWalkableAdj(dim_id: i32, world: *McWorld, x: i32, y: i32, z: i32) bool {
     var l_adj: [4][3]bool = undefined;
     const a_ind = [_]u32{ 1, 3, 5, 7 };
     for (a_ind, 0..) |ind, i| {
@@ -698,9 +702,9 @@ pub fn hasWalkableAdj(world: *McWorld, x: i32, y: i32, z: i32) bool {
         const bx = x + a_vec.x;
         const bz = z + a_vec.y;
         const by = y;
-        l_adj[i][0] = @as(bool, @bitCast((world.chunk_data.getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
-        l_adj[i][1] = @as(bool, @bitCast((world.chunk_data.getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
-        l_adj[i][2] = @as(bool, @bitCast((world.chunk_data.getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
+        l_adj[i][0] = @as(bool, @bitCast((world.chunkdata(dim_id).getBlock(V3i.new(bx, by, bz)) orelse return false) != 0));
+        l_adj[i][1] = @as(bool, @bitCast((world.chunkdata(dim_id).getBlock(V3i.new(bx, by + 1, bz)) orelse return false) != 0));
+        l_adj[i][2] = @as(bool, @bitCast((world.chunkdata(dim_id).getBlock(V3i.new(bx, by + 2, bz)) orelse return false) != 0));
 
         if (l_adj[i][0] and !l_adj[i][1] and !l_adj[i][2]) {
             return true;

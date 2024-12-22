@@ -1012,16 +1012,16 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     return buf;
 }
 
-//TODO Support variable chunk_sections
-pub const NUM_CHUNK_SECTION = 24;
 pub const Chunk = struct {
-    sections: [NUM_CHUNK_SECTION]ChunkSection,
+    //sections: [NUM_CHUNK_SECTION]ChunkSection,
+    sections: std.ArrayList(ChunkSection),
     owners: std.AutoHashMap(u128, void),
 
-    pub fn init(alloc: std.mem.Allocator) @This() {
-        var sec: [NUM_CHUNK_SECTION]ChunkSection = undefined;
-        for (&sec) |*s|
-            s.* = ChunkSection.init(alloc);
+    pub fn init(alloc: std.mem.Allocator, section_count: u32) !@This() {
+        var sec = std.ArrayList(ChunkSection).init(alloc);
+        for (0..section_count) |_| {
+            try sec.append(ChunkSection.init(alloc));
+        }
         return .{
             .sections = sec,
             .owners = std.AutoHashMap(u128, void).init(alloc),
@@ -1029,9 +1029,10 @@ pub const Chunk = struct {
     }
 
     pub fn deinit(self: *Chunk) void {
-        for (&self.sections) |*sec| {
+        for (self.sections.items) |*sec| {
             sec.deinit();
         }
+        self.sections.deinit();
         self.owners.deinit();
     }
 };
@@ -1044,6 +1045,8 @@ pub const ChunkMap = struct {
 
     x: XTYPE,
     alloc: std.mem.Allocator,
+    num_sections: u32,
+    y_offset: i32,
 
     //These are used for DrawThread
     rw_lock: std.Thread.RwLock = .{},
@@ -1061,8 +1064,10 @@ pub const ChunkMap = struct {
             try self.rebuild_notify.append(.{ .x = cx, .y = cz });
     }
 
-    pub fn init(alloc: std.mem.Allocator) Self {
+    pub fn init(alloc: std.mem.Allocator, num_sections: u32, y_offset: i32) Self {
         return .{
+            .num_sections = num_sections,
+            .y_offset = y_offset,
             .x = XTYPE.init(alloc),
             .alloc = alloc,
             .rebuild_notify = std.ArrayList(vector.V2i).init(alloc),
@@ -1116,14 +1121,14 @@ pub const ChunkMap = struct {
     pub fn isLoaded(self: *Self, pos: V3i) bool {
         self.rw_lock.lockShared();
         defer self.rw_lock.unlockShared();
-        const ch = ChunkMap.getChunkCoord(pos);
+        const ch = self.getChunkCoord(pos);
         return self.getChunkColumnPtr(ch.x, ch.z) != null;
     }
 
-    pub fn getChunkCoord(pos: V3i) V3i {
+    pub fn getChunkCoord(self: *const Self, pos: V3i) V3i {
         const cx = @as(i32, @intCast(@divFloor(pos.x, 16)));
         const cz = @as(i32, @intCast(@divFloor(pos.z, 16)));
-        const cy = @as(i32, @intCast(@divFloor(pos.y + 64, 16)));
+        const cy = @as(i32, @intCast(@divFloor(pos.y - self.y_offset, 16))); //UPDATE HEIGHT
         return .{ .x = cx, .y = cy, .z = cz };
     }
 
@@ -1133,11 +1138,11 @@ pub const ChunkMap = struct {
     }
 
     fn getChunkSectionPtr(self: *Self, pos: V3i) ?*ChunkSection {
-        const ch = ChunkMap.getChunkCoord(pos);
+        const ch = self.getChunkCoord(pos);
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
         const column = world_z.getPtr(ch.z) orelse return null;
-        return &column.sections[@as(u32, @intCast(ch.y))];
+        return &column.sections.items[@as(u32, @intCast(ch.y))];
     }
 
     pub fn isOccluded(self: *Self, pos: V3i) bool {
@@ -1159,16 +1164,16 @@ pub const ChunkMap = struct {
     pub fn getBlock(self: *Self, pos: V3i) ?BLOCK_ID_INT {
         self.rw_lock.lockShared();
         defer self.rw_lock.unlockShared();
-        const ch = ChunkMap.getChunkCoord(pos);
-        if (pos.y < -64) return null;
+        const ch = self.getChunkCoord(pos);
+        if (pos.y < self.y_offset) return null;
 
         const rx = @mod(pos.x, 16);
         const rz = @mod(pos.z, 16);
-        const ry = @mod(pos.y + 64, 16);
+        const ry = @mod(pos.y - self.y_offset, 16);
 
         const world_z = self.x.getPtr(ch.x) orelse return null;
         const column = world_z.getPtr(ch.z) orelse return null;
-        const section = column.sections[@as(u32, @intCast(if (ch.y >= NUM_CHUNK_SECTION) return null else ch.y))];
+        const section = column.sections.items[@as(u32, @intCast(if (ch.y >= self.num_sections) return null else ch.y))];
         switch (section.bits_per_entry) {
             0 => {
                 return section.mapping.items[0];
@@ -1202,7 +1207,7 @@ pub const ChunkMap = struct {
         try self.addNotify(chunk_pos.x, chunk_pos.z);
         const world_z = self.x.getPtr(chunk_pos.x) orelse return;
         const column = world_z.getPtr(chunk_pos.z) orelse return;
-        const section = &column.sections[@as(u32, @intCast(chunk_pos.y + 4))];
+        const section = &column.sections.items[@as(u32, @intCast(chunk_pos.y + @divExact(-self.y_offset, 16)))];
 
         try section.setBlock(
             @as(u32, @intCast(rel_pos.x)),
@@ -1216,7 +1221,7 @@ pub const ChunkMap = struct {
         self.rw_lock.lock();
         defer self.rw_lock.unlock();
         {
-            const co = ChunkMap.getChunkCoord(pos);
+            const co = self.getChunkCoord(pos);
             try self.addNotify(co.x, co.z);
         }
         const section = self.getChunkSectionPtr(pos) orelse {
@@ -1226,7 +1231,7 @@ pub const ChunkMap = struct {
 
         const rx = @as(u32, @intCast(@mod(pos.x, 16)));
         const rz = @as(u32, @intCast(@mod(pos.z, 16)));
-        const ry = @as(u32, @intCast(@mod(pos.y + 64, 16)));
+        const ry = @as(u32, @intCast(@mod(pos.y - self.y_offset, 16)));
 
         try section.setBlock(rx, ry, rz, id);
     }

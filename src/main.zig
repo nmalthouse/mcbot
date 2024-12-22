@@ -315,7 +315,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .tile_entity_data => {
-            //TODO add waypoints from here
             const pos = parse.position();
             const btype = parse.varInt();
             _ = btype;
@@ -323,13 +322,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var tracker = tr.init(arena_alloc, parse.reader);
             defer tracker.deinit();
 
-            const nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch null;
+            const nbt_data = nbt_zig.parse(arena_alloc, tracker.reader()) catch null;
             if (nbt_data) |nbt| {
-                std.debug.print("UPDATING A BLOKC ENT\n", .{});
-                try world.putBlockEntity(pos, nbt, arena_alloc);
+                try world.putBlockEntity(bot1.dimension_id, pos, nbt.entry, arena_alloc);
             }
-
-            //_ = nbt_data;
         },
         .entity_teleport => {
             const data = try CB.Type_packet_entity_teleport.parse(&parse);
@@ -356,37 +352,38 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 const lx = @as(i32, @intCast((bd >> 8) & 15));
                 const lz = @as(i32, @intCast((bd >> 4) & 15));
                 const ly = @as(i32, @intCast(bd & 15));
-                try world.chunk_data.setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
+                try world.chunkdata(bot1.dimension_id).setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
             }
         },
         .block_change => {
             const d = try Ap(Penum, .block_change, &parse);
-            try world.chunk_data.setBlock(d.location, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
+            try world.chunkdata(bot1.dimension_id).setBlock(d.location, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
         },
         .map_chunk => {
             const cx = parse.int(i32);
             const cy = parse.int(i32);
-            if (!try world.chunk_data.tryOwn(cx, cy, bot1.uuid)) {
+            if (!try world.chunkdata(bot1.dimension_id).tryOwn(cx, cy, bot1.uuid)) {
                 //TODO keep track of owners better
                 return;
             }
+            const dim = world.dimensions.getPtr(bot1.dimension_id).?; //CHECK ERR
 
             const nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
             _ = nbt_data;
             const data_size = parse.varInt();
-            var chunk_data = std.ArrayList(u8).init(alloc);
-            defer chunk_data.deinit();
-            try chunk_data.resize(@as(usize, @intCast(data_size)));
-            try parse.reader.readNoEof(chunk_data.items);
+            var raw_chunk = std.ArrayList(u8).init(alloc);
+            defer raw_chunk.deinit();
+            try raw_chunk.resize(@as(usize, @intCast(data_size)));
+            try parse.reader.readNoEof(raw_chunk.items);
 
-            var chunk = mc.Chunk.init(alloc);
+            var chunk = try mc.Chunk.init(alloc, dim.info.section_count);
             try chunk.owners.put(bot1.uuid, {});
             var chunk_i: u32 = 0;
-            var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = chunk_data.items, .pos = 0 };
+            var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = raw_chunk.items, .pos = 0 };
             const cr = chunk_fbs.reader();
-            while (chunk_i < mc.NUM_CHUNK_SECTION) : (chunk_i += 1) {
+            while (chunk_i < dim.info.section_count) : (chunk_i += 1) {
                 const block_count = try cr.readInt(i16, .big);
-                const chunk_section = &chunk.sections[chunk_i];
+                const chunk_section = &chunk.sections.items[chunk_i];
 
                 { //BLOCK STATES palated container
                     const bp_entry = try cr.readInt(u8, .big);
@@ -479,28 +476,28 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                             const block = chunk_section.getBlockFromIndex(i);
                             const bid = world.reg.getBlockIdFromState(block.block);
                             if (bid == crafting_bench.id) {
-                                const coord = V3i.new(cx * 16 + block.pos.x, @as(i32, @intCast(chunk_i)) * 16 + block.pos.y - 64, cy * 16 + block.pos.z);
-                                try world.poi.putNew(coord);
+                                const coord = V3i.new(cx * 16 + block.pos.x, @as(i32, @intCast(chunk_i)) * 16 + block.pos.y + dim.info.min_y, cy * 16 + block.pos.z);
+                                try world.dimPtr(dim.info.id).poi.putNew(coord);
                             }
                         }
                     }
                 }
             }
 
-            try world.chunk_data.insertChunkColumn(cx, cy, chunk);
+            try world.chunkdata(bot1.dimension_id).insertChunkColumn(cx, cy, chunk);
 
             const num_block_ent = parse.varInt();
             var ent_i: u32 = 0;
             while (ent_i < num_block_ent) : (ent_i += 1) {
                 const be = parse.blockEntity();
                 const coord = V3i.new(cx * 16 + be.rel_x, be.abs_y, cy * 16 + be.rel_z);
-                try world.putBlockEntity(coord, be.nbt, arena_alloc);
+                try world.putBlockEntity(bot1.dimension_id, coord, be.nbt, arena_alloc);
             }
         },
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
         .unload_chunk => {
             const d = try Ap(Penum, .unload_chunk, &parse);
-            try world.chunk_data.removeChunkColumn(d.chunkX, d.chunkZ, bot1.uuid);
+            try world.chunkdata(bot1.dimension_id).removeChunkColumn(d.chunkX, d.chunkZ, bot1.uuid);
         },
         //BOT specific packets
         .keep_alive => {
@@ -508,33 +505,40 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //try pctx.keepAlive(data.keepAliveId);
             try pctx.sendAuto(Proto.Play_Serverbound, .keep_alive, .{ .keepAliveId = data.keepAliveId });
         },
+        .respawn => {
+            //TODO how to notify bot thread we have changed dimension?
+            const d = try Ap(Penum, .respawn, &parse);
+            log.warn("Respawn sent, changing dimension: {s}, {s}", .{ d.dimension, d.worldName });
+            if (world.dimension_map.get(d.dimension)) |dim| {
+                bot1.dimension_id = dim.id;
+            }
+        },
         .login => {
             const d = try CB.Type_packet_login.parse(&parse);
             bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
+            bot1.init_status.has_login = true;
             std.debug.print("{s} {s}\n", .{ d.worldType, d.worldName });
             world.modify_mutex.lock();
             defer world.modify_mutex.unlock();
             for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
                 const name = dims.compound.get("name").?;
                 const elem = dims.compound.get("element").?.compound;
-                try world.dimension_map.put(try world.alloc.dupe(u8, name.string), .{
-                    .height = elem.get("height").?.int,
+                const new_dim = McWorld.DimInfo{
+                    .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
+                    //.height = elem.get("height").?.int,
                     .min_y = elem.get("min_y").?.int,
                     .bed_works = elem.get("bed_works").?.byte > 0,
                     .id = dims.compound.get("id").?.int,
-                });
+                };
+                try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
+                try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
             }
             const player_dim = world.dimension_map.get(d.worldName).?;
             bot1.dimension_id = player_dim.id;
+
             //const j = try d.dimensionCodec.entry.toJsonValue(arena_alloc);
             //const wr = std.io.getStdOut().writer();
             //try std.json.stringify(j, .{ .whitespace = .indent_4 }, wr);
-
-            //const dim = d.dimensionCodec.entry.compound.get("minecraft:dimension_type") orelse unreachable;
-            //var kit = dim.compound.iterator();
-            //while (kit.next()) |item| {
-            //    std.debug.print("{s}\n", .{item.key_ptr.*});
-            //}
         },
         .death_combat_event => {
             const d = try CB.Type_packet_death_combat_event.parse(&parse);
@@ -740,7 +744,7 @@ pub const LuaApi = struct {
         return .{
             .thread_data = thread_data,
             .vm = vm,
-            .pathctx = astar.AStarContext.init(alloc, world),
+            .pathctx = astar.AStarContext.init(alloc, world, 0),
             .alloc = alloc,
             .bo = bo,
             .world = world,
@@ -779,7 +783,7 @@ pub const LuaApi = struct {
     //Assumes appropriate mutexs are owned by calling thread
     //todo make self have a method lock unlock for all owned mutex
     pub fn addBreakBlockAction(self: *Self, actions: *ActionListT, coord: V3i) void {
-        const sid = self.world.chunk_data.getBlock(coord) orelse return;
+        const sid = self.world.chunkdata(self.bo.dimension_id).getBlock(coord) orelse return;
         const block = self.world.reg.getBlockFromState(sid);
         if (self.bo.inventory.findToolForMaterial(self.world.reg, block.material)) |match| {
             const hardness = block.hardness orelse return;
@@ -1008,7 +1012,7 @@ pub const LuaApi = struct {
                     }
                 }
                 const bpos = bf.add(loc);
-                if (self.world.chunk_data.getBlock(bpos)) |id| {
+                if (self.world.chunkdata(self.bo.dimension_id).getBlock(bpos)) |id| {
                     if (std.mem.eql(u8, bl, "noop"))
                         continue;
                     const item = self.world.reg.getItemFromName(bl) orelse {
@@ -1028,13 +1032,13 @@ pub const LuaApi = struct {
                     }
                     if (id != 0) {
                         var timeout: ?f64 = null;
-                        if (self.world.chunk_data.getBlock(bpos.add(V3i.new(0, 1, 0)))) |above| {
+                        if (self.world.chunkdata(self.bo.dimension_id).getBlock(bpos.add(V3i.new(0, 1, 0)))) |above| {
                             const b = self.world.reg.getBlockFromState(above);
                             if (std.mem.eql(u8, b.name, "gravel") or std.mem.eql(u8, b.name, "sand")) {
                                 timeout = 10;
                             }
                         }
-                        const below = self.world.chunk_data.getBlock(bpos.add(V3i.new(0, -1, 0)));
+                        const below = self.world.chunkdata(self.bo.dimension_id).getBlock(bpos.add(V3i.new(0, -1, 0)));
                         const place_below = (timeout != null and (below == null or below.? == 0));
                         if (place_below) {
                             errc(actions.append(.{ .block_break_pos = .{ .pos = bpos.add(V3i.new(0, -1, 0)) } })) orelse return 0;
@@ -1129,7 +1133,9 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const p = vm.getArg(L, V3f, 1).toIFloor();
 
-            if (self.world.chunk_data.getBlock(p)) |id| {
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+            if (self.world.chunkdata(self.bo.dimension_id).getBlock(p)) |id| {
                 const block = self.world.reg.getBlockFromState(id);
                 var buf: [6]Reg.Block.State = undefined;
                 if (block.getAllStates(id, &buf)) |states| {
@@ -1188,15 +1194,16 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
 
-            self.pathctx.reset() catch unreachable;
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
+            self.pathctx.reset(self.bo.dimension_id) catch unreachable;
+            const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
-            const wp = self.world.getNearestSignWaypoint(str, pos.toI()) orelse {
+            const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
-            const found = self.pathctx.pathfind(pos, wp.pos.toF(), .{}) catch unreachable;
+            const found = self.pathctx.pathfind(did, pos, wp.pos.toF(), .{}) catch unreachable;
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
             if (found == null)
@@ -1248,9 +1255,10 @@ pub const LuaApi = struct {
             defer self.endHalt();
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
+            const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
 
-            const wp = self.world.getNearestSignWaypoint(str, pos.toI()) orelse {
+            const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
                 return 0;
             };
@@ -1301,10 +1309,10 @@ pub const LuaApi = struct {
 
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
-            self.bo.modify_mutex.unlock();
+            defer self.bo.modify_mutex.unlock();
 
-            if (self.world.poi.findNearest(self.world, pos.toIFloor())) |nearest| {
-                const found = errc(self.pathctx.pathfind(pos, nearest.toF(), .{ .min_distance = 4 })) orelse return 0;
+            if (self.world.dimPtr(self.bo.dimension_id).poi.findNearest(self.world, pos.toIFloor())) |nearest| {
+                const found = errc(self.pathctx.pathfind(self.bo.dimension_id, pos, nearest.toF(), .{ .min_distance = 4 })) orelse return 0;
                 if (found) |*actions| {
                     self.thread_data.setActions(actions.*, pos);
                     Lua.pushV(L, nearest);
@@ -1337,11 +1345,12 @@ pub const LuaApi = struct {
             const opt_dist = self.vm.getArg(L, ?f32, 2);
             self.beginHalt();
             defer self.endHalt();
-            errc(self.pathctx.reset()) orelse return 0;
             self.bo.modify_mutex.lock();
+            const did = self.bo.dimension_id;
+            errc(self.pathctx.reset(did)) orelse return 0;
             const pos = self.bo.pos.?;
             self.bo.modify_mutex.unlock();
-            const found = errc(self.pathctx.pathfind(pos, p, .{ .min_distance = opt_dist })) orelse return 0;
+            const found = errc(self.pathctx.pathfind(did, pos, p, .{ .min_distance = opt_dist })) orelse return 0;
             if (found) |*actions| {
                 self.thread_data.setActions(actions.*, pos);
                 Lua.pushV(L, true);
@@ -1356,13 +1365,14 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             self.beginHalt();
             defer self.endHalt();
-            errc(self.pathctx.reset()) orelse return 0;
             self.bo.modify_mutex.lock();
+            const did = self.bo.dimension_id;
+            errc(self.pathctx.reset(did)) orelse return 0;
             const pos = self.bo.pos.?;
             //block hardness
             //tool_multiplier
             self.bo.modify_mutex.unlock();
-            const tree_o = errc(self.pathctx.findTree(pos)) orelse return 0;
+            const tree_o = errc(self.pathctx.findTree(pos, did)) orelse return 0;
             if (tree_o) |*tree| {
                 self.thread_data.setActions(tree.list, pos);
                 Lua.pushV(L, tree.tree_name);
@@ -1412,13 +1422,14 @@ pub const LuaApi = struct {
             const id = self.world.reg.getBlockFromName(block_name) orelse return 0;
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
+            const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
-            const wp = self.world.getNearestSignWaypoint(landmark, pos.toI()) orelse {
+            const wp = self.world.getNearestSignWaypoint(did, landmark, pos.toI()) orelse {
                 std.debug.print("cant find waypoint: {s}\n", .{landmark});
                 return 0;
             };
             //errc(self.pathctx.reset()) orelse return 0;
-            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id, max_dist)) orelse return 0;
+            const flood_pos = errc(self.pathctx.floodfillCommonBlock(wp.pos.toF(), id, max_dist, did)) orelse return 0;
             if (flood_pos) |fp| {
                 Lua.pushV(L, fp.items);
                 fp.deinit();
@@ -1520,8 +1531,9 @@ pub const LuaApi = struct {
             const to_move = self.vm.getArg(L, [][]const u8, 2);
             self.bo.modify_mutex.lock();
             const pos = self.bo.pos.?;
+            const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
-            const wp = self.world.getNearestSignWaypoint(name, pos.toI()) orelse {
+            const wp = self.world.getNearestSignWaypoint(did, name, pos.toI()) orelse {
                 std.debug.print("interactChest can't find waypoint {s}\n", .{name});
                 return 0;
             };
@@ -1761,7 +1773,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
             while (bots_it.next()) |b| {
                 b.value_ptr.modify_mutex.lock();
                 defer b.value_ptr.modify_mutex.unlock();
-                ready = ready and b.value_ptr.init_status.has_inv;
+                ready = ready and b.value_ptr.isReady();
             }
         }
     }
@@ -2043,7 +2055,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 if (th_d.timer == null) {
                                     const pw = mc.lookAtBlock(bo.pos.?, p.pos.toF());
                                     th_d.timer = dt;
-                                    const sid = world.chunk_data.getBlock(p.pos).?;
+                                    const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
                                     const block = world.reg.getBlockFromState(sid);
                                     if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
                                         const hardness = block.hardness.?;
@@ -2070,7 +2082,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         var reset = true;
                                         if (p.repeat_timeout) |t| {
                                             reset = false;
-                                            const si = world.chunk_data.getBlock(p.pos).?;
+                                            const si = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
                                             if (si != 0) {
                                                 skip_ticks = @intFromFloat(t);
                                                 th_d.timer = null;
@@ -2109,13 +2121,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                         {
                             var dist_to_fall: f64 = -1;
                             //Check the bot is standing on something
-                            if (world.chunk_data.getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
+                            if (world.chunkdata(bo.dimension_id).getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
                                 var under: ?Reg.BlockId = under_o;
 
                                 if (under_o == 0 or @trunc(bo.pos.?.y) != 0) { //Bot is standing on air, make it fall
                                     while (under != null and under.? == 0) {
                                         dist_to_fall -= 1;
-                                        under = world.chunk_data.getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
+                                        under = world.chunkdata(bo.dimension_id).getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
                                     }
                                     var actions = LuaApi.ActionListT.init(world.alloc);
                                     var pos = bo.pos.?;
@@ -2247,6 +2259,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     camera.pos.data = [_]f32{ -2.20040695e+02, 6.80385284e+01, 1.00785331e+02 };
     win.grabMouse(true);
 
+    //TODO this does not support changing dimensions
     //A chunk is just a vertex array
     const ChunkVerts = struct {
         cubes: graph.Cubes,
@@ -2290,7 +2303,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     defer cubes.deinit();
 
     var astar_ctx_mutex: std.Thread.Mutex = .{};
-    var astar_ctx = astar.AStarContext.init(alloc, world);
+    var astar_ctx = astar.AStarContext.init(alloc, world, bot1.dimension_id);
     defer astar_ctx.deinit();
     {
         try gctx.begin(0x263556ff, win.screen_dimensions.toF());
@@ -2299,12 +2312,6 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         gctx.text(.{ .x = 40, .y = 30 }, "LOADING CHUNKS", &font, 72, 0xffffffff);
         try gctx.end(null);
         win.swap();
-    }
-    const wheat_id = world.reg.getBlockFromName("wheat") orelse 0;
-    var wheat_pos: ?std.ArrayList(V3i) = null;
-    defer {
-        if (wheat_pos) |wh|
-            wh.deinit();
     }
     var draw_inventory = true;
     var display_caves = false;
@@ -2390,24 +2397,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             astar_ctx_mutex.unlock();
         }
 
-        if (wheat_pos) |wh| {
-            for (wh.items) |pos| {
-                try cubes.cubeExtra(
-                    @as(f32, @floatFromInt(pos.x)),
-                    @as(f32, @floatFromInt(pos.y)) + 2,
-                    @as(f32, @floatFromInt(pos.z)),
-                    0.7,
-                    0.2,
-                    0.6,
-                    mc_atlas.getTextureRec(1),
-                    0,
-                    [_]u32{0xfffff0ff} ** 6,
-                );
-            }
-        }
-
-        if (world.chunk_data.rw_lock.tryLockShared()) {
-            defer world.chunk_data.rw_lock.unlockShared();
+        if (world.chunkdata(bot1.dimension_id).rw_lock.tryLockShared()) {
+            defer world.chunkdata(bot1.dimension_id).rw_lock.unlockShared();
             {
                 //Camera raycast to block
                 const point_start = camera.pos;
@@ -2437,8 +2428,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                         .y = @as(i32, @intFromFloat(@floor(point[1]))),
                         .z = @as(i32, @intFromFloat(@floor(point[2]))),
                     };
-                    if (world.chunk_data.getBlock(pi)) |block| {
-                        const cam_pos = world.chunk_data.getBlock(V3f.fromZa(camera.pos).toIFloor()) orelse 0;
+                    if (world.chunkdata(bot1.dimension_id).getBlock(pi)) |block| {
+                        const cam_pos = world.chunkdata(bot1.dimension_id).getBlock(V3f.fromZa(camera.pos).toIFloor()) orelse 0;
                         if (block != 0 and cam_pos == 0) {
                             try cubes.cubeExtra(
                                 @as(f32, @floatFromInt(pi.x)),
@@ -2460,15 +2451,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                 bot1.modify_mutex.lock();
                                 bot1.action_index = null;
 
-                                _ = try std.Thread.spawn(.{}, basicPathfindThread, .{ alloc, world, bot1.pos.?, pi.toF().add(V3f.new(0, 1, 0)), bot1.fd, &astar_ctx_mutex, &astar_ctx });
                                 bot1.modify_mutex.unlock();
                             }
                             if (win.mouse.right == .rising) {
                                 std.debug.print("DOING THE FLOOD\n", .{});
-                                if (wheat_pos) |wh| {
-                                    wh.deinit();
-                                }
-                                wheat_pos = try astar_ctx.floodfillCommonBlock(pi.toF(), wheat_id, 0);
                             }
 
                             break;
@@ -2481,7 +2467,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             var chunk_build_timer = try std.time.Timer.start();
             var num_removed: usize = 0;
 
-            for (world.chunk_data.rebuild_notify.items, 0..) |item, rebuild_i| {
+            for (world.chunkdata(bot1.dimension_id).rebuild_notify.items, 0..) |item, rebuild_i| {
                 if (chunk_build_timer.read() > max_chunk_build_time) {
                     num_removed = rebuild_i;
                     break;
@@ -2500,9 +2486,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     try vz.value_ptr.cubes.vertices.resize(0);
                 }
 
-                if (world.chunk_data.x.get(item.x)) |xx| {
+                const cdata = world.chunkdata(bot1.dimension_id);
+                if (world.chunkdata(bot1.dimension_id).x.get(item.x)) |xx| {
                     if (xx.get(item.y)) |chunk| {
-                        for (chunk.sections, 0..) |sec, sec_i| {
+                        for (chunk.sections.items, 0..) |sec, sec_i| {
                             if (!display_caves and sec_i < 7) continue;
                             if (sec.bits_per_entry == 0) continue;
                             //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
@@ -2518,9 +2505,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                                     const colors = if (bid == grass_block_id) [_]u32{0x77c05aff} ** 6 else null;
                                     const co = block.pos;
                                     const x = co.x + item.x * 16;
-                                    const y = (co.y + @as(i32, @intCast(sec_i)) * 16) - 64;
+                                    const y = (co.y + @as(i32, @intCast(sec_i)) * 16) + cdata.y_offset;
                                     const z = co.z + item.y * 16;
-                                    if (world.chunk_data.isOccluded(V3i.new(x, y, z)))
+                                    if (world.chunkdata(bot1.dimension_id).isOccluded(V3i.new(x, y, z)))
                                         continue;
                                     try vz.value_ptr.cubes.cubeExtra(
                                         @as(f32, @floatFromInt(x)),
@@ -2545,7 +2532,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             }
             for (0..num_removed) |i| {
                 _ = i;
-                _ = world.chunk_data.rebuild_notify.orderedRemove(0);
+                _ = world.chunkdata(bot1.dimension_id).rebuild_notify.orderedRemove(0);
             }
         }
 

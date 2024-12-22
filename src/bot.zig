@@ -421,6 +421,7 @@ pub const Bot = struct {
     };
     init_status: struct { //Used to determine when updateBots can begin processing
         has_inv: bool = false,
+        has_login: bool = false,
     } = .{},
 
     move_state: MovementState = undefined,
@@ -488,6 +489,11 @@ pub const Bot = struct {
                 else => {},
             }
         }
+    }
+
+    pub fn isReady(self: *Self) bool {
+        const i = self.init_status;
+        return i.has_inv and i.has_login;
     }
 
     pub fn getEffect(self: *Self, id: Proto.EffectEnum) i64 {
