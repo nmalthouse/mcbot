@@ -436,6 +436,7 @@ pub const Bot = struct {
     food_saturation: f32 = 5,
     pos: ?V3f = null,
     e_id: u32,
+    dimension_id: i32 = 0,
 
     /// This field is used as an index into bot bitsets. See Entity.owners
     index_id: u32 = 0,

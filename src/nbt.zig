@@ -136,7 +136,8 @@ pub const Entry = union(Tag) {
         _ = options;
 
         // @compileLog(@hasField(@TypeOf(basic_writer), "n"));
-        var writer = if (@hasField(@TypeOf(basic_writer.context), "n")) basic_writer else (IndentingStream(@TypeOf(basic_writer)){ .underlying_writer = basic_writer }).writer();
+        const writer = basic_writer;
+        //var writer = if (@hasField(@TypeOf(basic_writer.context), "n")) basic_writer else (IndentingStream(@TypeOf(basic_writer)){ .underlying_writer = basic_writer }).writer();
 
         switch (value) {
             .end => try writer.writeAll("Tag_END"),
@@ -158,19 +159,15 @@ pub const Entry = union(Tag) {
             },
             .list => |list| {
                 try writer.print("{s}, {d} entries {{", .{ @tagName(list.type), list.entries.items.len });
-                writer.context.n += 1;
                 for (list.entries.items) |ent|
                     try writer.print("\ntag_{s}(None): {}", .{ @tagName(ent), ent });
-                writer.context.n -= 1;
                 try writer.writeAll("\n}");
             },
             .compound => |com| {
                 try writer.print("{d} entries {{", .{com.size});
-                writer.context.n += 1;
                 var it = com.iterator();
                 while (it.next()) |ent|
                     try writer.print("\ntag_{s}('{s}'): {}", .{ @tagName(ent.value_ptr.*), ent.key_ptr.*, ent.value_ptr });
-                writer.context.n -= 1;
                 try writer.writeAll("\n}");
             },
             .int_array => |ba| {
@@ -184,6 +181,52 @@ pub const Entry = union(Tag) {
                 try writer.writeAll("]");
             },
         }
+    }
+
+    //Does not track allocations, use an arena
+    pub fn toJsonValue(self: Entry, alloc: std.mem.Allocator) !std.json.Value {
+        return switch (self) {
+            .end => .{ .null = {} },
+            .byte => |b| .{ .integer = b },
+            .short => |b| .{ .integer = b },
+            .int => |b| .{ .integer = b },
+            .long => |b| .{ .integer = b },
+            .float => |b| .{ .float = b },
+            .double => |b| .{ .float = b },
+            .byte_array => |b| blk: {
+                var list = std.ArrayList(std.json.Value).init(alloc);
+                for (b) |it|
+                    try list.append(.{ .integer = it });
+                break :blk .{ .array = list };
+            },
+            .int_array => |b| blk: {
+                var list = std.ArrayList(std.json.Value).init(alloc);
+                for (b) |it|
+                    try list.append(.{ .integer = it });
+                break :blk .{ .array = list };
+            },
+            .long_array => |b| blk: {
+                var list = std.ArrayList(std.json.Value).init(alloc);
+                for (b) |it|
+                    try list.append(.{ .integer = it });
+                break :blk .{ .array = list };
+            },
+            .list => |b| blk: {
+                var list = std.ArrayList(std.json.Value).init(alloc);
+                for (b.entries.items) |it|
+                    try list.append(try it.toJsonValue(alloc));
+                break :blk .{ .array = list };
+            },
+            .compound => |cc| blk: {
+                var it = cc.iterator();
+                var map = std.json.ObjectMap.init(alloc);
+                while (it.next()) |item| {
+                    try map.put(item.key_ptr.*, try item.value_ptr.toJsonValue(alloc));
+                }
+                break :blk .{ .object = map };
+            },
+            .string => |b| .{ .string = b },
+        };
     }
 };
 

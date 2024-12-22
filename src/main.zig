@@ -40,7 +40,7 @@ pub const std_options = .{
     .log_level = .debug,
     .logFn = myLogFn,
 };
-const LOG_ALL = true;
+const LOG_ALL = false;
 
 pub fn myLogFn(
     comptime level: std.log.Level,
@@ -51,6 +51,7 @@ pub fn myLogFn(
     if (level == .info and !LOG_ALL) {
         switch (scope) {
             .inventory,
+            .parsing,
             .world,
             .lua,
             .SDL,
@@ -183,7 +184,6 @@ pub const PacketParse = struct {
         self.num_read = 0;
     }
 };
-
 pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
     const CB = Proto.Play_Clientbound.packets;
     const log = std.log.scoped(.parsing);
@@ -318,21 +318,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //TODO add waypoints from here
             const pos = parse.position();
             const btype = parse.varInt();
+            _ = btype;
             const tr = nbt_zig.TrackingReader(@TypeOf(parse.reader));
             var tracker = tr.init(arena_alloc, parse.reader);
             defer tracker.deinit();
 
-            std.debug.print("TILE ENT DATA {d} {any}\n", .{ btype, pos });
-            if (world.chunk_data.getBlock(pos)) |bl| {
-                const block = world.reg.getBlockFromState(bl);
-                std.debug.print("BBL {s}\n", .{block.name});
+            const nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch null;
+            if (nbt_data) |nbt| {
+                std.debug.print("UPDATING A BLOKC ENT\n", .{});
+                try world.putBlockEntity(pos, nbt, arena_alloc);
             }
 
-            const nbt_data = nbt_zig.parseAsCompoundEntry(arena_alloc, tracker.reader()) catch {
-                log.warn("Nbt crashed", .{});
-                return;
-            };
-            _ = nbt_data;
             //_ = nbt_data;
         },
         .entity_teleport => {
@@ -498,47 +494,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             while (ent_i < num_block_ent) : (ent_i += 1) {
                 const be = parse.blockEntity();
                 const coord = V3i.new(cx * 16 + be.rel_x, be.abs_y, cy * 16 + be.rel_z);
-                const id = world.chunk_data.getBlock(coord) orelse 0;
-                const b = world.reg.getBlockFromState(id);
-                if (world.tag_table.hasTag(b.id, "minecraft:block", "minecraft:signs")) {
-                    var has_text = false;
-                    if (be.nbt == .compound) {
-                        if (be.nbt.compound.get("Text1")) |e| {
-                            if (e == .string) {
-                                has_text = true;
-                                const j = try std.json.parseFromSlice(struct { text: []const u8 }, arena_alloc, e.string, .{});
-                                if (j.value.text.len == 0) continue;
-                                if (b.getState(id, .facing)) |facing| {
-                                    const fac = facing.sub.facing;
-                                    const dvec = facing.sub.facing.reverse().toVec();
-                                    const behind = coord.add(dvec);
-                                    if (world.chunk_data.getBlock(behind)) |bid| {
-                                        const bi = world.reg.getBlockFromState(bid);
-                                        if (eql(u8, "chest", bi.name)) {
-                                            const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_chest" });
-                                            try world.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
-                                        } else if (eql(u8, "dropper", bi.name)) {
-                                            const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_dropper" });
-                                            try world.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
-                                        } else if (eql(u8, "crafting_table", bi.name)) {
-                                            const name = try std.mem.concat(arena_alloc, u8, &.{ j.value.text, "_craft" });
-                                            try world.putSignWaypoint(name, .{ .pos = behind, .facing = fac });
-                                        }
-                                    }
-                                    try world.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = fac });
-                                } else {
-                                    try world.putSignWaypoint(j.value.text, .{ .pos = coord, .facing = .north });
-                                }
-                            }
-                        }
-                        if (!has_text)
-                            std.debug.print("SIGN WITHOUT TEXT!! {any}\n", .{coord});
-                    }
-                } else {
-                    if (std.mem.eql(u8, "chest", b.name)) {
-                        //be.nbt.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
-                    }
-                }
+                try world.putBlockEntity(coord, be.nbt, arena_alloc);
             }
         },
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
@@ -555,6 +511,30 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .login => {
             const d = try CB.Type_packet_login.parse(&parse);
             bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
+            std.debug.print("{s} {s}\n", .{ d.worldType, d.worldName });
+            world.modify_mutex.lock();
+            defer world.modify_mutex.unlock();
+            for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
+                const name = dims.compound.get("name").?;
+                const elem = dims.compound.get("element").?.compound;
+                try world.dimension_map.put(try world.alloc.dupe(u8, name.string), .{
+                    .height = elem.get("height").?.int,
+                    .min_y = elem.get("min_y").?.int,
+                    .bed_works = elem.get("bed_works").?.byte > 0,
+                    .id = dims.compound.get("id").?.int,
+                });
+            }
+            const player_dim = world.dimension_map.get(d.worldName).?;
+            bot1.dimension_id = player_dim.id;
+            //const j = try d.dimensionCodec.entry.toJsonValue(arena_alloc);
+            //const wr = std.io.getStdOut().writer();
+            //try std.json.stringify(j, .{ .whitespace = .indent_4 }, wr);
+
+            //const dim = d.dimensionCodec.entry.compound.get("minecraft:dimension_type") orelse unreachable;
+            //var kit = dim.compound.iterator();
+            //while (kit.next()) |item| {
+            //    std.debug.print("{s}\n", .{item.key_ptr.*});
+            //}
         },
         .death_combat_event => {
             const d = try CB.Type_packet_death_combat_event.parse(&parse);

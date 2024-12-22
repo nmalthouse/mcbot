@@ -1012,6 +1012,7 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     return buf;
 }
 
+//TODO Support variable chunk_sections
 pub const NUM_CHUNK_SECTION = 24;
 pub const Chunk = struct {
     sections: [NUM_CHUNK_SECTION]ChunkSection,
