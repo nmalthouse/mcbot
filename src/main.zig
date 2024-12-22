@@ -502,7 +502,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //BOT specific packets
         .keep_alive => {
             const data = try Proto.Play_Clientbound.packets.Type_packet_keep_alive.parse(&parse);
-            //try pctx.keepAlive(data.keepAliveId);
             try pctx.sendAuto(Proto.Play_Serverbound, .keep_alive, .{ .keepAliveId = data.keepAliveId });
         },
         .respawn => {
@@ -530,8 +529,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     .bed_works = elem.get("bed_works").?.byte > 0,
                     .id = dims.compound.get("id").?.int,
                 };
-                try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
-                try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
+                if (world.dimension_map.get(name.string) == null)
+                    try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
+                if (world.dimensions.get(new_dim.id) == null)
+                    try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
             }
             const player_dim = world.dimension_map.get(d.worldName).?;
             bot1.dimension_id = player_dim.id;
@@ -694,9 +695,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 }
             }
         },
-        else => {
-            //std.debug.print("Packet {s}\n", .{@tagName(penum)});
-        },
+        else => {},
+        //else => {
+        //    //std.debug.print("Packet {s}\n", .{@tagName(penum)});
+        //},
     }
 }
 
@@ -917,7 +919,6 @@ pub const LuaApi = struct {
         //TODO every exported lua function should be wrapped in a BEGIN_LUA, END_LUA function pair.
         //all stack operations are tracked
         //at compile time we can detect when an error has been made regarding stack discipline
-        //TODO fn for bot to chat or run commands
 
         pub export fn makeSlice(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
@@ -1520,8 +1521,6 @@ pub const LuaApi = struct {
             return 1;
         }
 
-        //Arg chest_waypoint_name
-        //TODO support globbing *_axe matches diamond_axe, stone_axe
         pub const DOC_interactChest: []const u8 = "Arg:[landmark_name, []inv_interact_action]";
         pub export fn interactChest(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
@@ -2057,6 +2056,10 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     th_d.timer = dt;
                                     const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
                                     const block = world.reg.getBlockFromState(sid);
+                                    if (std.mem.eql(u8, "lava", block.name)) {
+                                        th_d.timer = null;
+                                        th_d.nextAction(0, bo.pos.?);
+                                    }
                                     if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
                                         const hardness = block.hardness.?;
                                         const btime = Reg.calculateBreakTime(match.mul, hardness, .{

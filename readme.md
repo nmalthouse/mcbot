@@ -22,10 +22,12 @@ The file bot_config.lua sets port, ip, and bots that will be added.
 
 ## Current features:
 - Code generation for the Minecraft protocol.
+- Dimensions
 - Pathfinding, (includes: ladders, gaps)
 - Debug rendering
 - Block breaking
 - Basic inventory interaction
+- Crafting
 - Multiple bots
 - Lua scripting
 
