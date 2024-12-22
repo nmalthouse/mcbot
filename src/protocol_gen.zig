@@ -77,7 +77,7 @@ pub fn main() !void {
     try w.print("const mc = @import(\"listener.zig\");\n", .{});
     try w.print("const ParseItem = mc.AutoParse.ParseItem;\n", .{});
     try w.print("const Pt = mc.AutoParse.parseType;\n", .{});
-    try w.print("pub const minecraftVersion = \"{s}\";\n", .{mc_version_string});
+    try w.print("pub const minecraftVersion: []const u8 = \"{s}\";\n", .{mc_version_string});
     for (types_map) |t| {
         try w.print("const {s} = {s};\n", .{ t[0], t[1] });
     }

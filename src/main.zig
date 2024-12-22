@@ -42,6 +42,15 @@ pub const std_options = .{
 };
 const LOG_ALL = false;
 
+///When manually parsing a packet rather than using generated, annotate with this.
+pub fn annotateManualParse(comptime mc_version_str: []const u8) void {
+    comptime {
+        if (!std.mem.eql(u8, mc_version_str, Proto.minecraftVersion)) {
+            @compileError("Manually parsed function for different minecraft version: " ++ mc_version_str ++ ", expected: " ++ Proto.minecraftVersion);
+        }
+    }
+}
+
 pub fn myLogFn(
     comptime level: std.log.Level,
     comptime scope: @TypeOf(.EnumLiteral),
@@ -95,6 +104,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
         const pid = parse.varInt();
         switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
             .disconnect => {
+                annotateManualParse("1.19.4");
                 const reason = try parse.string(null);
                 log.warn("Disconnected: {s}\n", .{reason});
                 return error.disconnectedDuringLogin;
@@ -117,6 +127,7 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 std.process.exit(1);
             },
             .success => {
+                annotateManualParse("1.19.4");
                 const uuid = parse.int(u128);
                 const username = try parse.string(16);
                 const n_props = @as(u32, @intCast(parse.varInt()));
@@ -315,6 +326,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .tile_entity_data => {
+            annotateManualParse("1.19.4");
             const pos = parse.position();
             const btype = parse.varInt();
             _ = btype;
@@ -341,6 +353,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             _ = e_id;
         },
         .multi_block_change => {
+            annotateManualParse("1.19.4");
             const chunk_pos = parse.chunk_position();
             const sup_light = parse.boolean();
             _ = sup_light;
@@ -360,6 +373,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             try world.chunkdata(bot1.dimension_id).setBlock(d.location, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
         },
         .map_chunk => {
+            annotateManualParse("1.19.4");
             const cx = parse.int(i32);
             const cy = parse.int(i32);
             if (!try world.chunkdata(bot1.dimension_id).tryOwn(cx, cy, bot1.uuid)) {
@@ -551,6 +565,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             log.warn("Disconnected. Reason:  {s}", .{d.reason});
         },
         .held_item_slot => {
+            annotateManualParse("1.19.4");
             bot1.selected_slot = parse.int(u8);
             try pctx.setHeldItem(bot1.selected_slot);
         },
@@ -636,6 +651,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             bot1.food_saturation = d.foodSaturation;
         },
         .tags => {
+            annotateManualParse("1.19.4");
             if (!world.has_tag_table) {
                 world.has_tag_table = true;
 
@@ -668,6 +684,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .player_chat => {
+            annotateManualParse("1.19.4");
             const header = parse.auto(PT(&.{
                 P(.uuid, "sender_uuid"),
                 P(.varInt, "index"),
