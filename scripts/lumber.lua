@@ -4,6 +4,10 @@ local tree_types = {
     "spruce",
     "oak",
 }
+
+function leaf_quell()
+end
+
 function chop_loop()
     if itemCount("tag minecraft:axes") < 2 then
         if gotoLandmark("tools") then
@@ -35,6 +39,7 @@ function chop_loop()
     else 
         sleepms(2000)
     end
+    leaf_quell()
 
     if itemCount("tag minecraft:logs") > 64  then
         gotoLandmark("wood_drop")

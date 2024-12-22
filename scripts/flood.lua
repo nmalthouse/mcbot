@@ -95,9 +95,13 @@ function depositHarvest()
             if itemCount("item ".. v.crop ) > 64 then
                 interactChest(chests.yield .. "_chest", {"deposit all item " .. v.crop})
             end
+            if itemCount("item " .. v.item) > 64 then
+                interactChest(chests.yield .. "_chest", {"deposit all item " .. v.item})
+            end
             if itemCount("item ".. v.item) < 10 then
                 interactChest(chests.yield .. "_chest", {"withdraw 1 item " .. v.item})
             end
+
             --inventoryEnsureAtLeast(chests.yield, v.item, 10)
         end
 
@@ -109,7 +113,7 @@ end
 function onYield()
     handleSleep()
     handleHunger(chests.food)
-    if countFreeSlots() < 3 then
+    if countFreeSlots() < 10 then
         local pos = getPosition()
         depositHarvest()
         gotoCoord(pos, 0)

@@ -2235,6 +2235,228 @@ fn drawTextCube(win: *graph.SDL.Window, gctx: *graph.ImmediateDrawingContext, cm
     }
 }
 
+pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot, ctx: *DrawStuff.RebuildContext, mc_atlas: anytype) !void {
+    while (true) {
+        //TODO render chunk sections instead of chunk columns,
+        //test for visibility
+        //TODO for now this just spins
+        if (ctx.should_exit_mutex.tryLock()) {
+            return;
+        }
+        //const max_chunk_build_time = std.time.ns_per_s / 8;
+        const max_chunk_build_time = std.time.ns_per_s / 20 * 5;
+        std.time.sleep(std.time.ns_per_s / 100);
+        var chunk_build_timer = try std.time.Timer.start();
+        var num_removed: usize = 0;
+        bot1.modify_mutex.lock();
+        const dim = bot1.dimension_id;
+        bot1.modify_mutex.unlock();
+        const cdata = world.chunkdata(dim);
+        {
+            cdata.rw_lock.lockShared();
+            const num_items = cdata.rebuild_notify.items.len;
+            for (cdata.rebuild_notify.items, 0..) |item, rebuild_i| {
+                if (chunk_build_timer.read() > max_chunk_build_time) {
+                    num_removed = rebuild_i;
+                    break;
+                }
+                defer num_removed += 1;
+
+                var new_verts = std.ArrayList(graph.CubeVert).init(alloc);
+                var new_index = std.ArrayList(u32).init(alloc);
+                var should_delete: bool = false;
+
+                if (cdata.x.get(item.x)) |xx| {
+                    if (xx.get(item.y)) |chunk| {
+                        for (chunk.sections.items, 0..) |sec, sec_i| {
+                            //if (!display_caves and sec_i < 7) continue;
+                            if (sec.bits_per_entry == 0) continue;
+                            //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
+                            //var block = s_it.next();
+
+                            {
+                                var i: u32 = 0;
+                                while (i < 16 * 16 * 16) : (i += 1) {
+                                    const block = sec.getBlockFromIndex(i);
+                                    const binfo = world.reg.getBlockFromState(block.block);
+                                    const bid = binfo.id;
+                                    if (bid == 0)
+                                        continue;
+                                    //const colors = if (bid == grass_block_id) [_]u32{0x77c05aff} ** 6 else null;
+                                    //const cc = [_]u32{0xffffffff} ** 6;
+                                    const cc = [6]u32{
+                                        0xffffffff,
+                                        0x222222ff,
+                                        0x888888ff,
+                                        0x777777ff,
+                                        0x999999ff,
+                                        0x888888ff,
+                                    };
+                                    const co = block.pos;
+                                    const x = co.x + item.x * 16;
+                                    const y = (co.y + @as(i32, @intCast(sec_i)) * 16) + cdata.y_offset;
+                                    const z = co.z + item.y * 16;
+                                    const fx: f32 = @floatFromInt(x);
+                                    const fy: f32 = @floatFromInt(y);
+                                    const fz: f32 = @floatFromInt(z);
+                                    const cb = graph.cubeVert;
+                                    const sx = 1;
+                                    const sy = 1;
+                                    const sz = 1;
+                                    const ti = 0;
+
+                                    const un = graph.GL.normalizeTexRect(mc_atlas.getTextureRec(bid), @as(i32, @intCast(mc_atlas.texture.w)), @as(i32, @intCast(mc_atlas.texture.h)));
+                                    const uxx = un.x + un.w;
+                                    const uyy = un.y + un.h;
+                                    if (cdata.getBlock(V3i.new(x, y + 1, z)) orelse 0 == 0) {
+                                        const ind: u32 = @intCast(new_verts.items.len);
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_verts.appendSlice(&.{
+                                            cb(fx, fy + sy, fz, un.x, uyy, 0, 1, 0, cc[3], 1, 0, 0, ti),
+                                            cb(fx, fy + sy, fz + sz, un.x, un.y, 0, 1, 0, cc[3], 1, 0, 0, ti),
+                                            cb(fx + sx, fy + sy, fz + sz, uxx, un.y, 0, 1, 0, cc[3], 1, 0, 0, ti),
+                                            cb(fx + sx, fy + sy, fz, uxx, uyy, 0, 1, 0, cc[3], 1, 0, 0, ti),
+                                        });
+                                    }
+
+                                    if (cdata.getBlock(V3i.new(x, y - 1, z)) orelse 0 == 0) {
+                                        const ind: u32 = @intCast(new_verts.items.len);
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_verts.appendSlice(&.{
+                                            cb(fx + sx, fy, fz, uxx, uyy, 0, -1, 0, cc[2], 1, 0, 0, ti),
+                                            cb(fx + sx, fy, fz + sz, uxx, un.y, 0, -1, 0, cc[2], 1, 0, 0, ti),
+                                            cb(fx, fy, fz + sz, un.x, un.y, 0, -1, 0, cc[2], 1, 0, 0, ti),
+                                            cb(fx, fy, fz, un.x, uyy, 0, -1, 0, cc[2], 1, 0, 0, ti),
+                                        });
+                                    }
+
+                                    if (cdata.getBlock(V3i.new(x + 1, y, z)) orelse 0 == 0) {
+                                        const ind: u32 = @intCast(new_verts.items.len);
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_verts.appendSlice(&.{
+                                            cb(fx + sx, fy + sy, fz + sz, un.x, uyy, 1, 0, 0, cc[5], 0, -1, 0, ti),
+                                            cb(fx + sx, fy, fz + sz, un.x, un.y, 1, 0, 0, cc[5], 0, -1, 0, ti),
+                                            cb(fx + sx, fy, fz, uxx, un.y, 1, 0, 0, cc[5], 0, -1, 0, ti),
+                                            cb(fx + sx, fy + sy, fz, uxx, uyy, 1, 0, 0, cc[5], 0, -1, 0, ti),
+                                        });
+                                    }
+                                    if (cdata.getBlock(V3i.new(x - 1, y, z)) orelse 0 == 0) {
+                                        const ind: u32 = @intCast(new_verts.items.len);
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_verts.appendSlice(&.{
+                                            cb(fx, fy + sy, fz, uxx, uyy, -1, 0, 0, cc[4], 0, 1, 0, ti),
+                                            cb(fx, fy, fz, uxx, un.y, -1, 0, 0, cc[4], 0, 1, 0, ti),
+                                            cb(fx, fy, fz + sz, un.x, un.y, -1, 0, 0, cc[4], 0, 1, 0, ti),
+                                            cb(fx, fy + sy, fz + sz, un.x, uyy, -1, 0, 0, cc[4], 0, 1, 0, ti),
+                                        });
+                                    }
+                                    if (cdata.getBlock(V3i.new(x, y, z + 1)) orelse 0 == 0) {
+                                        const ind: u32 = @intCast(new_verts.items.len);
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_verts.appendSlice(&.{
+                                            cb(fx, fy + sy, fz + sz, un.x, uyy, 0, 0, 1, cc[1], 1, 0, 0, ti), //3
+                                            cb(fx, fy, fz + sz, un.x, un.y, 0, 0, 1, cc[1], 1, 0, 0, ti), //2
+                                            cb(fx + sx, fy, fz + sz, uxx, un.y, 0, 0, 1, cc[1], 1, 0, 0, ti), //1
+                                            cb(fx + sx, fy + sy, fz + sz, uxx, uyy, 0, 0, 1, cc[1], 1, 0, 0, ti), //0
+                                        });
+                                    }
+                                    if (cdata.getBlock(V3i.new(x, y, z - 1)) orelse 0 == 0) {
+                                        const ind: u32 = @intCast(new_verts.items.len);
+                                        try new_index.appendSlice(&[6]u32{ ind + 0, ind + 1, ind + 3, ind + 1, ind + 2, ind + 3 });
+                                        try new_verts.appendSlice(&.{
+                                            cb(fx + sx, fy + sy, fz, uxx, uyy, 0, 0, -1, cc[0], 1, 0, 0, ti), //0
+                                            cb(fx + sx, fy, fz, uxx, un.y, 0, 0, -1, cc[0], 1, 0, 0, ti), //1
+                                            cb(fx, fy, fz, un.x, un.y, 0, 0, -1, cc[0], 1, 0, 0, ti), //2
+                                            cb(fx, fy + sy, fz, un.x, uyy, 0, 0, -1, cc[0], 1, 0, 0, ti), //3
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        //vz.value_ptr.cubes.setData();
+                    } else {
+                        should_delete = true;
+                        //TODO NOTIFY REMOVE UNLOADED CHUNK
+
+                        //vert_map.main_mutex.lock(); //Modifying main map
+                        //_ = vx.value_ptr.remove(item.y);
+                        //vert_map.main_mutex.unlock();
+                    }
+                }
+                ctx.ready_mutex.lock();
+                if (should_delete) {
+                    try ctx.ready.append(.{ .delete = true, .cx = item.x, .cy = item.y });
+                } else {
+                    try ctx.ready.append(.{
+                        .delete = false,
+                        .vertex_array = new_verts,
+                        .index_array = new_index,
+                        .cx = item.x,
+                        .cy = item.y,
+                    });
+                }
+                ctx.ready_mutex.unlock();
+            }
+            cdata.rw_lock.unlockShared();
+            if (num_items > 0) {
+                cdata.rw_lock.lock();
+                defer cdata.rw_lock.unlock();
+                for (0..num_removed) |_| {
+                    _ = cdata.rebuild_notify.orderedRemove(0);
+                }
+            }
+        }
+    }
+}
+
+const DrawStuff = struct {
+    const VertMapxT = std.AutoHashMap(i32, ChunkVerts);
+    const VertMapT = std.AutoHashMap(i32, VertMapxT);
+
+    const RebuildItem = struct {
+        vertex_array: ?std.ArrayList(graph.CubeVert) = null,
+        index_array: ?std.ArrayList(u32) = null,
+
+        cx: i32,
+        cy: i32,
+        delete: bool,
+    };
+
+    const RebuildContext = struct {
+        ready: std.ArrayList(RebuildItem),
+        ready_mutex: std.Thread.Mutex = .{},
+
+        should_exit_mutex: std.Thread.Mutex = .{}, //once the rebuild thread can lock this it will return
+    };
+
+    const Verts = struct {
+        map: VertMapT,
+
+        pub fn init(alloc: std.mem.Allocator) @This() {
+            return .{
+                .map = VertMapT.init(alloc),
+            };
+        }
+
+        pub fn deinit(self: *@This()) void {
+            var it = self.map.iterator();
+            while (it.next()) |kv| {
+                var zit = kv.value_ptr.iterator();
+                while (zit.next()) |zkv| { //Cubes
+                    zkv.value_ptr.cubes.deinit();
+                }
+                kv.value_ptr.deinit();
+            }
+            self.map.deinit();
+        }
+    };
+
+    const ChunkVerts = struct {
+        cubes: graph.Cubes,
+    };
+};
+
 pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void {
     const InvMap = struct {
         default: []const [2]f32,
@@ -2279,23 +2501,9 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     camera.pos.data = [_]f32{ -2.20040695e+02, 6.80385284e+01, 1.00785331e+02 };
     win.grabMouse(true);
 
-    //TODO this does not support changing dimensions
     //A chunk is just a vertex array
-    const ChunkVerts = struct {
-        cubes: graph.Cubes,
-    };
-    var vert_map = std.AutoHashMap(i32, std.AutoHashMap(i32, ChunkVerts)).init(alloc);
-    defer {
-        var it = vert_map.iterator();
-        while (it.next()) |kv| {
-            var zit = kv.value_ptr.iterator();
-            while (zit.next()) |zkv| { //Cubes
-                zkv.value_ptr.cubes.deinit();
-            }
-            kv.value_ptr.deinit();
-        }
-        vert_map.deinit();
-    }
+    var vert_map = DrawStuff.Verts.init(alloc);
+    defer vert_map.deinit();
 
     var position_synced = false;
 
@@ -2315,7 +2523,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var draw_nodes: bool = false;
 
     const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
-    const grass_block_id = world.reg.getBlockFromName("grass_block");
+    //const grass_block_id = world.reg.getBlockFromName("grass_block");
 
     var gctx = graph.ImmediateDrawingContext.init(alloc, 123);
     defer gctx.deinit();
@@ -2336,8 +2544,30 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
     var draw_inventory = true;
     var display_caves = false;
 
+    var rebuild_ctx = DrawStuff.RebuildContext{
+        .ready = std.ArrayList(DrawStuff.RebuildItem).init(alloc),
+    };
+    rebuild_ctx.should_exit_mutex.lock();
+
+    const rebuild_thread = try std.Thread.spawn(.{}, chunkRebuildThread, .{
+        alloc,
+        world,
+        bot1,
+        &rebuild_ctx,
+        &mc_atlas,
+    });
+    defer rebuild_thread.join();
+    defer { //This must happend before rebuild_thread tries to join
+        rebuild_ctx.should_exit_mutex.unlock();
+        rebuild_ctx.ready_mutex.lock();
+        rebuild_ctx.ready.deinit();
+    }
+
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
+        bot1.modify_mutex.lock();
+        const dim_id = bot1.dimension_id;
+        bot1.modify_mutex.unlock();
         try gctx.begin(0x467b8cff, win.screen_dimensions.toF());
         try cubes.indicies.resize(0);
         try cubes.vertices.resize(0);
@@ -2417,8 +2647,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             astar_ctx_mutex.unlock();
         }
 
-        if (world.chunkdata(bot1.dimension_id).rw_lock.tryLockShared()) {
-            defer world.chunkdata(bot1.dimension_id).rw_lock.unlockShared();
+        if (world.chunkdata(dim_id).rw_lock.tryLockShared()) {
+            defer world.chunkdata(dim_id).rw_lock.unlockShared();
             {
                 //Camera raycast to block
                 const point_start = camera.pos;
@@ -2448,8 +2678,8 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                         .y = @as(i32, @intFromFloat(@floor(point[1]))),
                         .z = @as(i32, @intFromFloat(@floor(point[2]))),
                     };
-                    if (world.chunkdata(bot1.dimension_id).getBlock(pi)) |block| {
-                        const cam_pos = world.chunkdata(bot1.dimension_id).getBlock(V3f.fromZa(camera.pos).toIFloor()) orelse 0;
+                    if (world.chunkdata(dim_id).getBlock(pi)) |block| {
+                        const cam_pos = world.chunkdata(dim_id).getBlock(V3f.fromZa(camera.pos).toIFloor()) orelse 0;
                         if (block != 0 and cam_pos == 0) {
                             try cubes.cubeExtra(
                                 @as(f32, @floatFromInt(pi.x)),
@@ -2482,82 +2712,35 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     }
                 }
             }
+        }
 
-            const max_chunk_build_time = std.time.ns_per_s / 8;
-            var chunk_build_timer = try std.time.Timer.start();
-            var num_removed: usize = 0;
-
-            for (world.chunkdata(bot1.dimension_id).rebuild_notify.items, 0..) |item, rebuild_i| {
-                if (chunk_build_timer.read() > max_chunk_build_time) {
-                    num_removed = rebuild_i;
-                    break;
-                }
-                defer num_removed += 1;
-
-                const vx = try vert_map.getOrPut(item.x);
+        if (rebuild_ctx.ready_mutex.tryLock()) {
+            defer rebuild_ctx.ready_mutex.unlock();
+            for (rebuild_ctx.ready.items) |rd| {
+                const vx = try vert_map.map.getOrPut(rd.cx);
                 if (!vx.found_existing) {
-                    vx.value_ptr.* = std.AutoHashMap(i32, ChunkVerts).init(alloc);
+                    vx.value_ptr.* = DrawStuff.VertMapxT.init(alloc);
                 }
-                const vz = try vx.value_ptr.getOrPut(item.y);
+                const vz = try vx.value_ptr.getOrPut(rd.cy);
                 if (!vz.found_existing) {
                     vz.value_ptr.cubes = graph.Cubes.init(alloc, mc_atlas.texture, gctx.textured_tri_3d_shader);
+                }
+                if (rd.delete) {
+                    vz.value_ptr.cubes.deinit();
+                    _ = vx.value_ptr.remove(rd.cy);
                 } else {
-                    try vz.value_ptr.cubes.indicies.resize(0);
-                    try vz.value_ptr.cubes.vertices.resize(0);
-                }
-
-                const cdata = world.chunkdata(bot1.dimension_id);
-                if (world.chunkdata(bot1.dimension_id).x.get(item.x)) |xx| {
-                    if (xx.get(item.y)) |chunk| {
-                        for (chunk.sections.items, 0..) |sec, sec_i| {
-                            if (!display_caves and sec_i < 7) continue;
-                            if (sec.bits_per_entry == 0) continue;
-                            //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
-                            //var block = s_it.next();
-
-                            {
-                                var i: u32 = 0;
-                                while (i < 16 * 16 * 16) : (i += 1) {
-                                    const block = sec.getBlockFromIndex(i);
-                                    const bid = world.reg.getBlockIdFromState(block.block);
-                                    if (bid == 0)
-                                        continue;
-                                    const colors = if (bid == grass_block_id) [_]u32{0x77c05aff} ** 6 else null;
-                                    const co = block.pos;
-                                    const x = co.x + item.x * 16;
-                                    const y = (co.y + @as(i32, @intCast(sec_i)) * 16) + cdata.y_offset;
-                                    const z = co.z + item.y * 16;
-                                    if (world.chunkdata(bot1.dimension_id).isOccluded(V3i.new(x, y, z)))
-                                        continue;
-                                    try vz.value_ptr.cubes.cubeExtra(
-                                        @as(f32, @floatFromInt(x)),
-                                        @as(f32, @floatFromInt(y)),
-                                        @as(f32, @floatFromInt(z)),
-                                        1,
-                                        1,
-                                        1,
-                                        mc_atlas.getTextureRec(bid),
-                                        0,
-                                        if (colors) |col| col else null,
-                                    );
-                                }
-                            }
-                        }
-                        vz.value_ptr.cubes.setData();
-                    } else {
-                        vz.value_ptr.cubes.deinit();
-                        _ = vx.value_ptr.remove(item.y);
-                    }
+                    vz.value_ptr.cubes.vertices.deinit();
+                    vz.value_ptr.cubes.indicies.deinit();
+                    vz.value_ptr.cubes.vertices = rd.vertex_array.?;
+                    vz.value_ptr.cubes.indicies = rd.index_array.?;
+                    vz.value_ptr.cubes.setData();
                 }
             }
-            for (0..num_removed) |i| {
-                _ = i;
-                _ = world.chunkdata(bot1.dimension_id).rebuild_notify.orderedRemove(0);
-            }
+            try rebuild_ctx.ready.resize(0);
         }
 
         { //Draw the chunks
-            var it = vert_map.iterator();
+            var it = vert_map.map.iterator();
             while (it.next()) |kv| {
                 var zit = kv.value_ptr.iterator();
                 while (zit.next()) |kv2| {
