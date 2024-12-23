@@ -58,6 +58,10 @@ function Vec3:unit()
     return Vec3:new({x = self.x / mag, y = self.y / mag, z = self.z / mag})
 end
 
+function Vec3:eql(b)
+    return self.x == b.x and self.y == b.y and self.z == b.z
+end
+
 function Vec3:dot(b)
     return self.x * b.x + self.y * b.y + self.z * b.z
 end

@@ -4,7 +4,7 @@ local final_z = 7412 / 8
 
 local supplies = {
     "diamond_pickaxe",
-    --"netherrack",
+    "netherrack",
 }
 local n = "netherrack"
 local o = "air"
@@ -20,7 +20,7 @@ function loop()
     local i = 0
     local lm = gotoLandmark(start)
     if lm then
-        while i < 225 do
+        while i < 600 do
         
             --if countFreeSlots() < 4 then
             --    local pos = getPosition()
@@ -31,7 +31,7 @@ function loop()
 
             --end
                 for _,v in ipairs(supplies) do
-                    while itemCount("item " .. v) < 1 do
+                    while itemCount("item " .. v) < 2 do
                         say("I am low on " .. v)
                         print("LOW ON")
                         sleepms(3000)
@@ -39,16 +39,23 @@ function loop()
                 end
                 applySlice({bitmap = {
                     n,n,n,
-                }, offset = Vec3:New(-1,1,0), w = 3, direction = first_dir})
+                    n,n,n,
+                    n,n,n,
+                }, offset = Vec3:New(-1,2,-2), w = 3, direction = first_dir})
                 n = "netherrack"
-                local c = n
+                local n_count = itemCount("item netherrack")
+                local b_count = itemCount("item basalt")
+                local s_count = itemCount("item stone_bricks")
+                local b = n
+                if b_count > 12 then b = "basalt" end
+                if s_count > 12 then b = "stone_bricks" end
 
                 applySlice({bitmap = {
-                    o,n,n,n,o,
-                    c,o,o,o,c,
-                    c,o,o,o,c,
-                    c,j,j,j,c,
-                    o,n,n,n,o,
+                    j,b,b,b,j,
+                    b,o,o,o,b,
+                    b,o,o,o,b,
+                    b,j,j,j,b,
+                    j,b,b,b,j,
                 }, offset = Vec3:New(-2,1,-3), w = 5, direction = first_dir})
                 applySlice({bitmap = {
                     o,o,o,
