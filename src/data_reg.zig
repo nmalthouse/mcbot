@@ -1,4 +1,5 @@
 const std = @import("std");
+const ProtoGen = @import("protocol_gen.zig");
 const vector = @import("vector.zig");
 const com = @import("common.zig");
 const J = std.json;
@@ -372,14 +373,16 @@ pub const DataReg = struct {
     rec_j: std.json.Parsed(RecipeJson),
 
     pub fn init(alloc: std.mem.Allocator, comptime version: []const u8) !Self {
-        var cwd = std.fs.cwd();
-        var data_dir = try cwd.openDir("minecraft-data/data/pc/" ++ version, .{});
-        defer data_dir.close();
+        const data_paths = try com.readJson(std.fs.cwd(), "minecraft-data/data/dataPaths.json", alloc, struct {
+            pc: std.json.ArrayHashMap(std.json.ArrayHashMap([]const u8)),
+        });
+        defer data_paths.deinit();
+        const version_map = data_paths.value.pc.map.get(version) orelse return error.invalidVersion;
 
-        var version_info = try com.readJson(data_dir, "version.json", alloc, VersionJson);
+        var version_info = try com.readJson(try ProtoGen.getDir(&version_map, "version"), "version.json", alloc, VersionJson);
         defer version_info.deinit();
 
-        const jitems = try com.readJson(data_dir, "items.json", alloc, ItemsJson);
+        const jitems = try com.readJson(try ProtoGen.getDir(&version_map, "items"), "items.json", alloc, ItemsJson);
         defer jitems.deinit();
         var item_map = std.StringHashMap(u16).init(alloc);
         var items = try alloc.alloc(Item, jitems.value.len);
@@ -392,12 +395,12 @@ pub const DataReg = struct {
             try item_map.put(item.name, @intCast(i));
         }
 
-        const ent = try com.readJson(data_dir, "entities.json", alloc, EntitiesJson);
-        const block = try com.readJson(data_dir, "blocks.json", alloc, BlocksJson);
-        const mat = try com.readJson(data_dir, "materials.json", alloc, MaterialsJson);
+        const ent = try com.readJson(try ProtoGen.getDir(&version_map, "entities"), "entities.json", alloc, EntitiesJson);
+        const block = try com.readJson(try ProtoGen.getDir(&version_map, "blocks"), "blocks.json", alloc, BlocksJson);
+        const mat = try com.readJson(try ProtoGen.getDir(&version_map, "materials"), "materials.json", alloc, MaterialsJson);
         defer mat.deinit();
 
-        const rec = try com.readJson(data_dir, "recipes.json", alloc, RecipeJson);
+        const rec = try com.readJson(try ProtoGen.getDir(&version_map, "recipes"), "recipes.json", alloc, RecipeJson);
         var rec_map = RecipeMap.init(alloc);
         {
             var it = rec.value.map.iterator();
@@ -427,7 +430,7 @@ pub const DataReg = struct {
             try block_map.put(bl.name, @intCast(i));
         }
 
-        const foodj = try com.readJson(data_dir, "foods.json", alloc, FoodJson);
+        const foodj = try com.readJson(try ProtoGen.getDir(&version_map, "foods"), "foods.json", alloc, FoodJson);
         defer foodj.deinit();
         const foods = try alloc.alloc(Food, foodj.value.len);
         for (foodj.value, 0..) |f, i| {

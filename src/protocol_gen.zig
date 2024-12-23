@@ -17,6 +17,14 @@ fn getVal(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) ?@TypeO
     return null;
 }
 
+pub fn getDir(version_map: *const std.json.ArrayHashMap([]const u8), wanted_file: []const u8) !std.fs.Dir {
+    const path = version_map.map.get(wanted_file) orelse {
+        return error.cantFindDataMapping;
+    };
+    const mcdir = try std.fs.cwd().openDir("minecraft-data/data", .{});
+    return try mcdir.openDir(path, .{});
+}
+
 //var primitive_types =
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -57,12 +65,13 @@ pub fn main() !void {
     const output_file_path = args.next() orelse fatal("Needs output file argument", .{});
 
     const mc_version_string = args.next() orelse fatal("Needs mc version string", .{});
-    var data_dir_name = std.ArrayList(u8).init(arena_alloc);
-    try data_dir_name.appendSlice("minecraft-data/data/pc/");
-    try data_dir_name.appendSlice(mc_version_string);
 
-    const mc_data_dir = try std.fs.cwd().openDir(data_dir_name.items, .{});
-    const file = try mc_data_dir.openFile("protocol.json", .{});
+    const data_paths = try com.readJson(std.fs.cwd(), "minecraft-data/data/dataPaths.json", arena_alloc, struct {
+        pc: std.json.ArrayHashMap(std.json.ArrayHashMap([]const u8)),
+    });
+    const version_map = data_paths.value.pc.map.get(mc_version_string) orelse fatal("can't find version in dataPaths.json, {s}", .{mc_version_string});
+
+    const file = try (try getDir(&version_map, "protocol")).openFile("protocol.json", .{});
     defer file.close();
     const json_str = try file.readToEndAlloc(alloc, std.math.maxInt(usize));
     defer alloc.free(json_str);
@@ -94,7 +103,7 @@ pub fn main() !void {
     try emitPacketEnum(arena_alloc, &root, w, "configuration", "toServer", "Config_Serverbound");
 
     { //Various enums
-        var ents = try com.readJson(mc_data_dir, "entities.json", alloc, []struct { id: u32, name: []const u8 });
+        var ents = try com.readJson(try getDir(&version_map, "entities"), "entities.json", alloc, []struct { id: u32, name: []const u8 });
         defer ents.deinit();
 
         try w.print("pub const EntityEnum = enum(i32){{\n", .{});
@@ -103,7 +112,7 @@ pub fn main() !void {
         }
         try w.print("}};\n", .{});
 
-        var effects = try com.readJson(mc_data_dir, "effects.json", alloc, []struct { id: u32, name: []const u8 });
+        var effects = try com.readJson(try getDir(&version_map, "effects"), "effects.json", alloc, []struct { id: u32, name: []const u8 });
         defer effects.deinit();
 
         try w.print("pub const EffectEnum = enum(i32){{\n", .{});
