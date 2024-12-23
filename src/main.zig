@@ -41,15 +41,7 @@ pub const std_options = .{
     .logFn = myLogFn,
 };
 const LOG_ALL = false;
-
-///When manually parsing a packet rather than using generated, annotate with this.
-pub fn annotateManualParse(comptime mc_version_str: []const u8) void {
-    comptime {
-        if (!std.mem.eql(u8, mc_version_str, Proto.minecraftVersion)) {
-            @compileError("Manually parsed function for different minecraft version: " ++ mc_version_str ++ ", expected: " ++ Proto.minecraftVersion);
-        }
-    }
-}
+const annotateManualParse = mc.annotateManualParse;
 
 pub fn myLogFn(
     comptime level: std.log.Level,
@@ -103,10 +95,12 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
         var parse = parseT.init(fbs_.reader(), arena_alloc);
         const pid = parse.varInt();
         switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
+            .cookie_request => {
+                annotateManualParse("1.21.3");
+            },
             .disconnect => {
-                annotateManualParse("1.19.4");
-                const reason = try parse.string(null);
-                log.warn("Disconnected: {s}\n", .{reason});
+                const d = try Proto.Login_Clientbound.packets.Type_packet_disconnect.parse(&parse);
+                log.warn("Disconnected: {s}\n", .{d.reason});
                 return error.disconnectedDuringLogin;
             },
             .compress => {
@@ -127,25 +121,10 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 std.process.exit(1);
             },
             .success => {
-                annotateManualParse("1.19.4");
-                const uuid = parse.int(u128);
-                const username = try parse.string(16);
-                const n_props = @as(u32, @intCast(parse.varInt()));
-                log.info("Login Success: {d}: {s}", .{ uuid, username });
-                var n: u32 = 0;
-                while (n < n_props) : (n += 1) {
-                    const prop_name = try parse.string(null);
-                    const value = try parse.string(null);
-                    if (parse.boolean()) {
-                        const sig = try parse.string(null);
-                        _ = sig;
-                    }
-                    _ = prop_name;
-                    _ = value;
-                    //log.info("\t{s}: {s}\n", .{ prop_name, value });
-                }
+                const d = try Proto.Login_Clientbound.packets.Type_packet_success.parse(&parse);
+                log.info("Login Success: {d}: {s}", .{ d.uuid, d.username });
 
-                bot1.uuid = uuid;
+                bot1.uuid = d.uuid;
                 bot1.connection_state = .play;
             },
             .login_plugin_request => {
@@ -258,17 +237,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const d = try CB.Type_packet_abilities.parse(&parse);
             log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
         },
-        .feature_flags => {
-            const d = try CB.Type_packet_feature_flags.parse(&parse);
-            log.info("Feature_Flags:", .{});
-
-            for (d.features) |f|
-                log.info("\t{s}", .{f.i_features});
-        },
-        .named_entity_spawn => {
-            const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
-            try world.putEntity(bot1, data, data.playerUUID, Proto.EntityEnum.player);
-        },
+        //.named_entity_spawn => {
+        //    const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
+        //    try world.putEntity(bot1, data, data.playerUUID, Proto.EntityEnum.player);
+        //},
         .spawn_entity => {
             const data = try CB.Type_packet_spawn_entity.parse(&parse);
             const t: Proto.EntityEnum = @enumFromInt(data.type);
@@ -326,7 +298,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .tile_entity_data => {
-            annotateManualParse("1.19.4");
+            annotateManualParse("1.21.3");
             const pos = parse.position();
             const btype = parse.varInt();
             _ = btype;
@@ -353,7 +325,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             _ = e_id;
         },
         .multi_block_change => {
-            annotateManualParse("1.19.4");
+            annotateManualParse("1.21.3");
             const chunk_pos = parse.chunk_position();
             const sup_light = parse.boolean();
             _ = sup_light;
@@ -373,7 +345,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             try world.chunkdata(bot1.dimension_id).setBlock(d.location, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
         },
         .map_chunk => {
-            annotateManualParse("1.19.4");
+            annotateManualParse("1.21.3");
             const cx = parse.int(i32);
             const cy = parse.int(i32);
             if (!try world.chunkdata(bot1.dimension_id).tryOwn(cx, cy, bot1.uuid)) {
@@ -520,36 +492,36 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .respawn => {
             //TODO how to notify bot thread we have changed dimension?
-            const d = try Ap(Penum, .respawn, &parse);
-            log.warn("Respawn sent, changing dimension: {s}, {s}", .{ d.dimension, d.worldName });
-            if (world.dimension_map.get(d.dimension)) |dim| {
-                bot1.dimension_id = dim.id;
-            }
+            const d = (try Ap(Penum, .respawn, &parse)).worldState;
+            log.warn("Respawn sent, changing dimension: {d}, {s}", .{ d.dimension, d.name });
+            bot1.dimension_id = d.dimension;
         },
         .login => {
-            const d = try CB.Type_packet_login.parse(&parse);
-            bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
-            bot1.init_status.has_login = true;
-            std.debug.print("{s} {s}\n", .{ d.worldType, d.worldName });
-            world.modify_mutex.lock();
-            defer world.modify_mutex.unlock();
-            for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
-                const name = dims.compound.get("name").?;
-                const elem = dims.compound.get("element").?.compound;
-                const new_dim = McWorld.DimInfo{
-                    .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
-                    //.height = elem.get("height").?.int,
-                    .min_y = elem.get("min_y").?.int,
-                    .bed_works = elem.get("bed_works").?.byte > 0,
-                    .id = dims.compound.get("id").?.int,
-                };
-                if (world.dimension_map.get(name.string) == null)
-                    try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
-                if (world.dimensions.get(new_dim.id) == null)
-                    try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
-            }
-            const player_dim = world.dimension_map.get(d.worldName).?;
-            bot1.dimension_id = player_dim.id;
+            unreachable;
+            //const d = try CB.Type_packet_login.parse(&parse);
+            //const ws = d.worldState;
+            //bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
+            //bot1.init_status.has_login = true;
+            //std.debug.print("{s} {s}\n", .{ d.worldType, d.worldName });
+            //world.modify_mutex.lock();
+            //defer world.modify_mutex.unlock();
+            //for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
+            //    const name = dims.compound.get("name").?;
+            //    const elem = dims.compound.get("element").?.compound;
+            //    const new_dim = McWorld.DimInfo{
+            //        .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
+            //        //.height = elem.get("height").?.int,
+            //        .min_y = elem.get("min_y").?.int,
+            //        .bed_works = elem.get("bed_works").?.byte > 0,
+            //        .id = dims.compound.get("id").?.int,
+            //    };
+            //    if (world.dimension_map.get(name.string) == null)
+            //        try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
+            //    if (world.dimensions.get(new_dim.id) == null)
+            //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
+            //}
+            //const player_dim = world.dimension_map.get(d.worldName).?;
+            //bot1.dimension_id = player_dim.id;
 
             //const j = try d.dimensionCodec.entry.toJsonValue(arena_alloc);
             //const wr = std.io.getStdOut().writer();
@@ -557,7 +529,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         },
         .death_combat_event => {
             const d = try CB.Type_packet_death_combat_event.parse(&parse);
-            log.warn("Combat death, id: {d}, killer_id: {d}, msg: {s}", .{ d.playerId, d.entityId, d.message });
+            log.warn("Combat death, id: {d}, msg: {s}", .{ d.playerId, d.message });
             try pctx.clientCommand(0);
         },
         .kick_disconnect => {
@@ -565,8 +537,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             log.warn("Disconnected. Reason:  {s}", .{d.reason});
         },
         .held_item_slot => {
-            annotateManualParse("1.19.4");
-            bot1.selected_slot = parse.int(u8);
+            const d = try CB.Type_packet_held_item_slot.parse(&parse);
+            bot1.selected_slot = @intCast(d.slot);
             try pctx.setHeldItem(bot1.selected_slot);
         },
         .set_slot => {
@@ -602,7 +574,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 }
             } else {
                 try bot1.interacted_inventory.setSize(@intCast(d.items.len));
-                bot1.interacted_inventory.win_id = d.windowId;
+                bot1.interacted_inventory.win_id = @intCast(d.windowId);
                 bot1.container_state = d.stateId;
                 const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
                 for (d.items, 0..) |it, i| {
@@ -651,7 +623,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             bot1.food_saturation = d.foodSaturation;
         },
         .tags => {
-            annotateManualParse("1.19.4");
+            annotateManualParse("1.21.3");
             if (!world.has_tag_table) {
                 world.has_tag_table = true;
 
@@ -684,7 +656,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .player_chat => {
-            annotateManualParse("1.19.4");
+            annotateManualParse("1.21.3");
             const header = parse.auto(PT(&.{
                 P(.uuid, "sender_uuid"),
                 P(.varInt, "index"),
@@ -1977,7 +1949,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             .eat => {
                                 const EATING_TIME_S = 1.61;
                                 if (th_d.timer == null) {
-                                    try bp.useItem(.main, 0);
+                                    try bp.useItem(.main, 0, .{ .x = 0, .y = 0 });
                                     th_d.timer = dt;
                                 } else {
                                     th_d.timer.? += dt;

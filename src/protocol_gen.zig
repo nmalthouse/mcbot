@@ -51,7 +51,7 @@ pub fn main() !void {
         .{ "position", "Vector.V3i" },
         .{ "restBuffer", "[]const u8" },
         .{ "nbt", "mc.nbt_zig.EntryWithName" },
-        .{ "anonymousNbt", em },
+        .{ "anonymousNbt", "mc.nbt_zig.Entry" },
         .{ "anonOptionalNbt", em },
         .{ "particle", em },
         .{ "optionalNbt", em },
@@ -64,13 +64,13 @@ pub fn main() !void {
         .{ "ContainerID", "varint" },
         .{ "ByteArray", "[]const u8" }, //Wiki vg, parse this with varint as counter
         .{ "Slot", "mc.Slot" },
-        .{ "MovementFlags", em },
-        .{ "SpawnInfo", em },
-        .{ "vec2f", em },
+        .{ "MovementFlags", "mc.MovementFlags" },
+        .{ "SpawnInfo", "Play_Clientbound.packets.Type_SpawnInfo" }, //Ugly
+        .{ "vec2f", "mc.Vec2f" },
         .{ "Particle", em },
-        .{ "vec3f", em },
+        .{ "vec3f", "mc.V3f" },
         .{ "IDSet", em },
-        .{ "PositionUpdateRelatives", em },
+        .{ "PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
         .{ "RecipeDisplay", em },
         .{ "SlotDisplay", em },
         .{ "ChatTypeParameterType", em },
@@ -184,6 +184,7 @@ const SupportedTypes = enum {
     option,
     buffer,
     bitfield,
+    mapper,
     //Unsupported
     //bitfield
     //switch
@@ -441,6 +442,15 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     std.debug.print("TOTAL BITFIELD SIZE {d}\n", .{total_size});
                     if (gen_fields)
                         try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
+                },
+                .mapper => {
+                    const fields = getV(a.items[1], .object);
+                    const type_name = getV(fields.get("type").?, .string);
+                    try parent.fields.append(.{
+                        .name = fname,
+                        .optional = optional,
+                        .type = .{ .primitive = type_name },
+                    });
                 },
                 .container => {
                     const Tname = try printString("Type_{s}", .{fname});

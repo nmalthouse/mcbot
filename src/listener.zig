@@ -11,6 +11,15 @@ const Queue = std.atomic.Queue;
 
 const com = @import("common.zig");
 
+///When manually parsing a packet rather than using generated, annotate with this.
+pub fn annotateManualParse(comptime mc_version_str: []const u8) void {
+    comptime {
+        if (!std.mem.eql(u8, mc_version_str, Proto.minecraftVersion)) {
+            @compileError("Manually parsed function for different minecraft version: " ++ mc_version_str ++ ", expected: " ++ Proto.minecraftVersion);
+        }
+    }
+}
+
 //TODO Edit api to use vector structs for everything
 
 pub const AutoParseFromEnum = struct {
@@ -66,10 +75,11 @@ pub const PacketCtx = struct {
         try self.packet.writeToServer(self.server, self.mutex);
     }
 
-    pub fn useItem(self: *@This(), hand: enum { main, off_hand }, sequence: i32) !void {
+    pub fn useItem(self: *@This(), hand: enum { main, off_hand }, sequence: i32, rotation: Vec2f) !void {
         try self.sendAuto(Proto.Play_Serverbound, .use_item, .{
             .hand = @as(i32, @intFromEnum(hand)),
             .sequence = sequence,
+            .rotation = rotation,
         });
     }
 
@@ -141,11 +151,6 @@ pub const PacketCtx = struct {
     pub fn sendCommand(self: *@This(), command: []const u8) !void {
         try self.sendAuto(Play, .chat_command, .{
             .command = command,
-            .timestamp = 0,
-            .salt = 0,
-            .argumentSignatures = &.{},
-            .messageCount = 1,
-            .acknowledged = [_]Play.packets.Type_packet_chat_command.Array_acknowledged{.{ .i_acknowledged = 0 }} ** 3,
         });
     }
 
@@ -205,7 +210,7 @@ pub const PacketCtx = struct {
     pub fn loginStart(self: *@This(), username: []const u8) !void {
         try self.sendAuto(Proto.Login_Serverbound, .login_start, .{
             .username = username,
-            .playerUUID = null,
+            .playerUUID = 0, //Unused according to wikivg
         });
     }
 
@@ -228,7 +233,7 @@ pub const PacketCtx = struct {
             .z = pos.z,
             .yaw = yaw,
             .pitch = pitch,
-            .onGround = grounded,
+            .flags = if (grounded) 1 else 0,
         });
     }
 
@@ -245,6 +250,7 @@ pub const PacketCtx = struct {
             .locale = locale,
             .viewDistance = @as(i8, @intCast(render_dist)),
             .chatFlags = 0,
+            .particleStatus = 0,
             .chatColors = true,
             .skinParts = 0,
             .mainHand = @as(i32, @intCast(main_hand)),
@@ -336,9 +342,21 @@ pub const Packet = struct {
     pub const send_f64 = double;
     pub const send_restBuffer = slice;
 
+    pub fn send_vec2f(self: *Self, v: Vec2f) !void {
+        try self.float(v.x);
+        try self.float(v.y);
+    }
+
     pub fn send_UUID(self: *Self, v: u128) !void {
         const wr = self.buffer.writer();
         _ = try wr.writeInt(u128, v, .big);
+    }
+
+    pub fn send_MovementFlags(self: *Self, v: u8) !void {
+        annotateManualParse("1.21.3");
+        _ = self;
+        _ = v;
+        unreachable;
     }
 
     pub fn send_i8(self: *Self, v: i8) !void {
@@ -496,6 +514,11 @@ pub const Slot = struct {
     count: u8,
     nbt_buffer: ?[]u8 = null,
 };
+
+pub const MovementFlags = u8;
+pub const Vec2f = struct { x: f32, y: f32 };
+
+pub const PositionUpdateRelatives = struct {};
 
 pub const BlockEntityP = struct {
     rel_x: u4,
@@ -725,6 +748,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn blockEntity(self: *Self) BlockEntityP {
+            annotateManualParse("1.19.4");
             const pxz = self.int(u8);
             const y = self.int(i16);
             const btype = self.varInt();
@@ -740,6 +764,11 @@ pub fn packetParseCtx(comptime readerT: type) type {
             };
         }
 
+        pub fn parse_anonymousNbt(self: *Self) !nbt_zig.Entry {
+            const nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
+            return nbt_data;
+        }
+
         pub fn parse_nbt(self: *Self) !nbt_zig.EntryWithName {
             const nbt = try nbt_zig.parse(self.alloc, self.reader);
             //var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
@@ -750,7 +779,35 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return self.slot();
         }
 
+        pub fn parse_SpawnInfo(self: *Self) !Proto.Play_Clientbound.packets.Type_SpawnInfo {
+            return try Proto.Play_Clientbound.packets.Type_SpawnInfo.parse(self);
+        }
+
+        pub fn parse_Slot(self: *Self) !Slot {
+            annotateManualParse("1.21.3");
+            _ = self;
+            unreachable;
+        }
+
+        pub fn parse_MovementFlags(self: *Self) !MovementFlags {
+            _ = self;
+            annotateManualParse("1.21.3");
+            unreachable;
+        }
+
+        pub fn parse_ContainerID(self: *Self) !i32 {
+            annotateManualParse("1.21.3");
+            return self.varInt();
+        }
+
+        pub fn parse_PositionUpdateRelatives(self: *Self) !PositionUpdateRelatives {
+            annotateManualParse("1.21.3");
+            _ = self;
+            unreachable;
+        }
+
         pub fn slot(self: *Self) ?Slot {
+            annotateManualParse("1.19.4");
             if (self.boolean()) { //Is item present
                 var s = Slot{
                     .item_id = @as(u16, @intCast(self.varInt())),

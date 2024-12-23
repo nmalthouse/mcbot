@@ -1,5 +1,5 @@
 const std = @import("std");
-const MC_VERSION_STRING = "1.19.4";
+const MC_VERSION_STRING = "1.21.3";
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
