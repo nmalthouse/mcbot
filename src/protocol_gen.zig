@@ -10,6 +10,10 @@ fn getV(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) @TypeOf(@
     return getVal(v, tag) orelse unreachable;
 }
 
+fn getVE(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) !@TypeOf(@field(v, @tagName(tag))) {
+    return getVal(v, tag) orelse error.notSupported;
+}
+
 fn getVal(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) ?@TypeOf(@field(v, @tagName(tag))) {
     if (v == tag) {
         return @field(v, @tagName(tag));
@@ -56,6 +60,21 @@ pub fn main() !void {
         .{ "tags", em },
         .{ "chunkBlockEntity", em },
         .{ "entityMetadata", em },
+        //All that follow are for 1.21
+        .{ "ContainerID", "varint" },
+        .{ "ByteArray", "[]const u8" }, //Wiki vg, parse this with varint as counter
+        .{ "Slot", "mc.Slot" },
+        .{ "MovementFlags", em },
+        .{ "SpawnInfo", em },
+        .{ "vec2f", em },
+        .{ "Particle", em },
+        .{ "vec3f", em },
+        .{ "IDSet", em },
+        .{ "PositionUpdateRelatives", em },
+        .{ "RecipeDisplay", em },
+        .{ "SlotDisplay", em },
+        .{ "ChatTypeParameterType", em },
+        .{ "ChatTypes", em },
     };
 
     //
@@ -431,6 +450,10 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const fields = getV(a.items[1], .array).items;
                     for (fields) |f| {
                         const ob = getV(f, .object);
+                        if (ob.get("anon")) |anon| {
+                            if (getV(anon, .bool))
+                                return error.notSupported;
+                        }
                         const ident = getV(ob.get("name").?, .string);
                         const field_type = ob.get("type").?;
                         try newGenType(field_type, &child.d._struct, ident, true, false);
@@ -443,7 +466,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
 
                     const ekind: ParseStructGen.EmitKind = blk: {
                         const count_type_str = getV(array_def.get("countType") orelse {
-                            const count = getV(array_def.get("count").?, .integer);
+                            const count = try getVE(array_def.get("count").?, .integer);
                             break :blk .{ .array_count = @intCast(count) };
                         }, .string);
                         const count_type = strToEnum(enum { varint }, count_type_str) orelse return error.invalidArrayCount;
