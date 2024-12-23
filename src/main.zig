@@ -1429,6 +1429,7 @@ pub const LuaApi = struct {
 
         ///Args: landmarkName, blockname to search
         ///Returns, array of v3i
+        //TODO add a maximum distance argument or max node count
         pub export fn getFieldFlood(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 3);
@@ -1538,6 +1539,40 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub export fn getInv(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const interacted = self.vm.getArg(L, ?bool, 1);
+
+            const inventory = if (interacted != null) &self.bo.interacted_inventory else &self.bo.inventory;
+            const upper_index = if (interacted != null) inventory.slots.items.len - 36 else inventory.slots.items.len;
+            var count: usize = 0;
+            for (inventory.slots.items[0..upper_index]) |item| {
+                if (item != null)
+                    count += 1;
+            }
+            const LuaItem = struct {
+                name: []const u8,
+                count: i32,
+            };
+            const ret_slice: []LuaItem = self.vm.getAlloc().alloc(LuaItem, count) catch return 0;
+            var i: usize = 0;
+            for (inventory.slots.items[0..upper_index]) |item| {
+                if (item) |it| {
+                    ret_slice[i] = .{
+                        .count = it.count,
+                        .name = self.world.reg.getItem(it.item_id).name,
+                    };
+                    i += 1;
+                }
+            }
+
+            Lua.pushV(L, ret_slice);
+            return 1;
+            //for(inventory.slots.items[0..upper_index])
+        }
+
         pub const DOC_interactChest: []const u8 = "Arg:[landmark_name, []inv_interact_action]";
         pub export fn interactChest(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
@@ -1612,8 +1647,9 @@ pub const LuaApi = struct {
         pub export fn itemCount(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
-            Lua.c.lua_settop(L, 1);
+            Lua.c.lua_settop(L, 2);
             const query = self.vm.getArg(L, []const u8, 1);
+            const interacted = self.vm.getArg(L, ?bool, 2);
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
@@ -1665,7 +1701,9 @@ pub const LuaApi = struct {
                 else => {},
             }
             var item_count: usize = 0;
-            for (self.bo.inventory.slots.items) |sl| {
+            const inventory = if (interacted != null) &self.bo.interacted_inventory else &self.bo.inventory;
+            const upper_index = if (interacted != null) inventory.slots.items.len - 36 else inventory.slots.items.len;
+            for (inventory.slots.items[0..upper_index]) |sl| {
                 const slot = sl orelse continue;
 
                 switch (match) {
@@ -2250,6 +2288,7 @@ pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot,
         var num_removed: usize = 0;
         bot1.modify_mutex.lock();
         const dim = bot1.dimension_id;
+        const pos = bot1.pos;
         bot1.modify_mutex.unlock();
         const cdata = world.chunkdata(dim);
         {
@@ -2269,6 +2308,8 @@ pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot,
                 if (cdata.x.get(item.x)) |xx| {
                     if (xx.get(item.y)) |chunk| {
                         for (chunk.sections.items, 0..) |sec, sec_i| {
+                            if (@divTrunc(@as(i32, @intFromFloat(pos.?.y)) - cdata.y_offset, 16) - @as(i32, @intCast(sec_i)) > 3)
+                                continue; //Only render chunks close to player, for quick render when debug
                             //if (!display_caves and sec_i < 7) continue;
                             if (sec.bits_per_entry == 0) continue;
                             //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };

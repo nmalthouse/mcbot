@@ -177,7 +177,6 @@ pub const Entity = struct {
 };
 pub const EntitiesJson = []const Entity;
 
-//TODO get materials to work, currently causes memory leak with default json.parse
 pub const Block = struct {
     pub const BoundingBox = enum(u8) {
         empty,

@@ -81,6 +81,7 @@ pub const AStarContext = struct {
         };
 
         parent: ?*Node = null,
+        block_id: Reg.StateId = 0,
         G: u32 = 0,
         H: u32 = 0,
 
@@ -251,9 +252,11 @@ pub const AStarContext = struct {
             for (FACE_ADJ) |avec| {
                 const coord = V3i.new(pv.x + avec.x, pv.y + avec.y, pv.z + avec.z);
                 if (self.world.chunkdata(self.dim_id).getBlock(coord)) |id| {
-                    if (self.world.reg.getBlockIdFromState(id) == blockid) {
+                    const state_id = self.world.reg.getBlockIdFromState(id);
+                    if (state_id == blockid) {
                         last_matching_pos = coord.toF();
                         try self.addNode(.{
+                            .block_id = id,
                             .ntype = .walk,
                             .x = coord.x,
                             .y = coord.y,
@@ -264,6 +267,7 @@ pub const AStarContext = struct {
                     } else {
                         if (last_matching_pos.subtract(coord.toF()).magnitude() < max_dist) {
                             try self.addNode(.{
+                                .block_id = id,
                                 .ntype = .walk,
                                 .x = coord.x,
                                 .y = coord.y,
@@ -279,7 +283,8 @@ pub const AStarContext = struct {
                 var tiles = std.ArrayList(V3i).init(self.alloc);
                 var cit = self.closed.valueIterator();
                 while (cit.next()) |p| {
-                    try tiles.append(V3i.new(p.*.x, p.*.y, p.*.z));
+                    if (self.world.reg.getBlockIdFromState(p.*.block_id) == blockid)
+                        try tiles.append(V3i.new(p.*.x, p.*.y, p.*.z));
                 }
                 return tiles;
             }
