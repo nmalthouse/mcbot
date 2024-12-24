@@ -100,19 +100,19 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
             },
             .disconnect => {
                 const d = try Proto.Login_Clientbound.packets.Type_packet_disconnect.parse(&parse);
-                log.warn("Disconnected: {s}\n", .{d.reason});
+                log.warn("Disconnected: {s}\n", .{d.f_reason});
                 return error.disconnectedDuringLogin;
             },
             .compress => {
                 const d = try Proto.Login_Clientbound.packets.Type_packet_compress.parse(&parse);
-                comp_thresh = d.threshold;
-                log.info("Setting Compression threshhold: {d}\n", .{d.threshold});
-                if (d.threshold < 0) {
-                    log.err("Invalid compression threshold from server: {d}", .{d.threshold});
+                comp_thresh = d.f_threshold;
+                log.info("Setting Compression threshhold: {d}\n", .{d.f_threshold});
+                if (d.f_threshold < 0) {
+                    log.err("Invalid compression threshold from server: {d}", .{d.f_threshold});
                     return error.invalidCompressionThreshold;
                 } else {
-                    bot1.compression_threshold = d.threshold;
-                    pctx.packet.comp_thresh = d.threshold;
+                    bot1.compression_threshold = d.f_threshold;
+                    pctx.packet.comp_thresh = d.f_threshold;
                 }
             },
             .encryption_begin => {
@@ -122,18 +122,18 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
             },
             .success => {
                 const d = try Proto.Login_Clientbound.packets.Type_packet_success.parse(&parse);
-                log.info("Login Success: {d}: {s}", .{ d.uuid, d.username });
+                log.info("Login Success: {d}: {s}", .{ d.f_uuid, d.f_username });
 
-                bot1.uuid = d.uuid;
+                bot1.uuid = d.f_uuid;
                 bot1.connection_state = .play;
             },
             .login_plugin_request => {
                 const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);
-                log.info("Login plugin request {d} {s}", .{ data.messageId, data.channel });
-                log.info("Payload {s}", .{data.data});
+                log.info("Login plugin request {d} {s}", .{ data.f_messageId, data.f_channel });
+                log.info("Payload {s}", .{data.f_data});
 
                 try pctx.loginPluginResponse(
-                    data.messageId,
+                    data.f_messageId,
                     null, // We tell the server we don't understand any plugin requests, might be a problem
                 );
             },
@@ -224,18 +224,18 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //WORLD specific packets
         .custom_payload => {
             const d = try Ap(Penum, .custom_payload, &parse);
-            log.info("{s}: {s}", .{ @tagName(penum), d.channel });
+            log.info("{s}: {s}", .{ @tagName(penum), d.f_channel });
 
             try pctx.pluginMessage("tony:brand");
             try pctx.clientInfo("en_US", 6, 1);
         },
         .difficulty => {
             const d = try CB.Type_packet_difficulty.parse(&parse);
-            log.info("Set difficulty: {d}, Locked: {any}", .{ d.difficulty, d.difficultyLocked });
+            log.info("Set difficulty: {d}, Locked: {any}", .{ d.f_difficulty, d.f_difficultyLocked });
         },
         .abilities => {
             const d = try CB.Type_packet_abilities.parse(&parse);
-            log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
+            log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.f_flyingSpeed, d.f_walkingSpeed });
         },
         //.named_entity_spawn => {
         //    const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
@@ -243,21 +243,21 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //},
         .spawn_entity => {
             const data = try CB.Type_packet_spawn_entity.parse(&parse);
-            const t: Proto.EntityEnum = @enumFromInt(data.type);
-            log.info("Spawn entity {x} {s} at {d:.2}, {d:.2}, {d:.2}", .{ data.objectUUID, @tagName(t), data.x, data.y, data.z });
-            try world.putEntity(bot1, data, data.objectUUID, t);
+            const t: Proto.EntityEnum = @enumFromInt(data.f_type);
+            log.info("Spawn entity {x} {s} at {d:.2}, {d:.2}, {d:.2}", .{ data.f_objectUUID, @tagName(t), data.f_x, data.f_y, data.f_z });
+            try world.putEntity(bot1, data, data.f_objectUUID, t);
         },
         .entity_destroy => {
             const d = try CB.Type_packet_entity_destroy.parse(&parse);
-            for (d.entityIds) |e| {
-                world.removeEntity(bot1.index_id, e.i_entityIds);
+            for (d.f_entityIds) |e| {
+                world.removeEntity(bot1.index_id, e.i_f_entityIds);
             }
         },
         .entity_look => {
             const data = try CB.Type_packet_entity_look.parse(&parse);
-            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
-                e.pitch = data.pitch;
-                e.yaw = data.yaw;
+            if (world.modifyEntityLocal(bot1.index_id, data.f_entityId)) |e| {
+                e.pitch = data.f_pitch;
+                e.yaw = data.f_yaw;
                 world.entities_mutex.unlock();
             }
         },

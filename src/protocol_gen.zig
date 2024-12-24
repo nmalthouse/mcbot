@@ -77,11 +77,45 @@ pub fn main() !void {
         .{ "Type_ByteArray", "[]const u8" },
         .{ "Type_entityMetadata", em },
         .{ "Type_MovementFlags", em },
+        .{ "Type_ingredient", em },
         //.{ "RecipeDisplay", em },
         //.{ "SlotDisplay", em },
         //.{ "ChatTypeParameterType", em },
         //.{ "ChatTypes", em },
     };
+
+    const ddd = "error.protodefisdumb";
+    const native_mapper = [_]struct { []const u8, []const u8 }{
+        .{ "varint", "i32" },
+        .{ "varlong", "i32" },
+        .{ "restBuffer", "[]const u8" },
+        .{ "UUID", "u128" },
+        .{ "u8", "u8" },
+        .{ "u16", "u16" },
+        .{ "u32", "u32" },
+        .{ "u64", "u64" },
+        .{ "i8", "i8" },
+        .{ "i16", "i16" },
+        .{ "i32", "i32" },
+        .{ "i64", "i64" },
+        .{ "bool", "bool" },
+        .{ "f32", "f32" },
+        .{ "f64", "f64" },
+        .{ "container", ddd },
+        .{ "switch", ddd },
+        .{ "bitfield", ddd },
+        .{ "void", ddd },
+        .{ "array", ddd },
+        .{ "bitflags", ddd },
+        .{ "option", ddd },
+        .{ "topBitSetTerminatedArray", ddd },
+    };
+
+    var native_map = std.StringHashMap([]const u8).init(alloc);
+    defer native_map.deinit();
+    for (native_mapper) |item| {
+        try native_map.put(item[0], item[1]);
+    }
 
     //
     var args = try std.process.argsWithAllocator(alloc);
@@ -153,13 +187,19 @@ pub fn main() !void {
                     if (!std.mem.eql(u8, s, "native")) {
                         try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, s });
                     } else {
-                        try w.print("pub const Type_{s} = void;\n", .{ty.key_ptr.*});
+                        if (native_map.get(ty.key_ptr.*)) |has| {
+                            try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, has });
+                        } else {
+                            try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, em });
+                        }
                     }
                 },
                 .array => {
                     newGenType(ty.value_ptr.*, &parent, ty.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
-                        const last = parent.getLastDecl();
-                        last.unsupported = true;
+                        if (parent.decls.items.len > 0) {
+                            const last = parent.getLastDecl();
+                            last.unsupported = true;
+                        }
                         std.debug.print("{any}\n", .{err});
                         //std.debug.print("Omitting {s}:{s} {s} {any}\n", .{ game_state, direction, p.key_ptr.*, err });
                         continue;
@@ -227,8 +267,10 @@ pub fn emitPacketEnum(alloc: std.mem.Allocator, root: *std.json.ObjectMap, write
         while (p_it.next()) |p| {
             if (std.mem.eql(u8, "packet", p.key_ptr.*)) continue;
             newGenType(p.value_ptr.*, &parent, p.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
-                const last = parent.getLastDecl();
-                last.unsupported = true;
+                if (parent.decls.items.len > 0) {
+                    const last = parent.getLastDecl();
+                    last.unsupported = true;
+                }
                 std.debug.print("Omitting {s}:{s} {s} {any}\n", .{ game_state, direction, p.key_ptr.*, err });
                 continue;
             };

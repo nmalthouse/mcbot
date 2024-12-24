@@ -179,19 +179,19 @@ pub const PacketCtx = struct {
 
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
         try self.sendAuto(Proto.Play_Serverbound, .block_dig, .{
-            .status = @as(i32, @intFromEnum(status)),
-            .location = block_pos,
-            .face = 0,
-            .sequence = 0,
+            .f_status = @as(i32, @intFromEnum(status)),
+            .f_location = block_pos,
+            .f_face = 0,
+            .f_sequence = 0,
         });
     }
 
     pub fn setProtocol(self: *@This(), hostname: []const u8, port: u16, protocol_version: i32) !void {
         try self.sendAuto(Proto.Handshake_Serverbound, .set_protocol, .{
-            .protocolVersion = protocol_version,
-            .serverHost = hostname,
-            .serverPort = port,
-            .nextState = 2,
+            .f_protocolVersion = protocol_version,
+            .f_serverHost = hostname,
+            .f_serverPort = port,
+            .f_nextState = 2,
         });
     }
 
@@ -200,7 +200,7 @@ pub const PacketCtx = struct {
     }
 
     pub fn loginPluginResponse(self: *@This(), message_id: i32, payload: ?[]const u8) !void {
-        try self.sendAuto(Proto.Login_Serverbound, .login_plugin_response, .{ .messageId = message_id, .data = payload });
+        try self.sendAuto(Proto.Login_Serverbound, .login_plugin_response, .{ .f_messageId = message_id, .f_data = payload });
     }
 
     pub fn completeLogin(self: *@This()) !void {
@@ -209,8 +209,8 @@ pub const PacketCtx = struct {
 
     pub fn loginStart(self: *@This(), username: []const u8) !void {
         try self.sendAuto(Proto.Login_Serverbound, .login_start, .{
-            .username = username,
-            .playerUUID = 0, //Unused according to wikivg
+            .f_username = username,
+            .f_playerUUID = 0, //Unused according to wikivg
         });
     }
 
@@ -242,20 +242,20 @@ pub const PacketCtx = struct {
     }
 
     pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
-        try self.sendAuto(Play, .custom_payload, .{ .channel = brand, .data = &.{} });
+        try self.sendAuto(Play, .custom_payload, .{ .f_channel = brand, .f_data = &.{} });
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
         try self.sendAuto(Proto.Play_Serverbound, .settings, .{
-            .locale = locale,
-            .viewDistance = @as(i8, @intCast(render_dist)),
-            .chatFlags = 0,
-            .particleStatus = .minimal,
-            .chatColors = true,
-            .skinParts = 0,
-            .mainHand = @as(i32, @intCast(main_hand)),
-            .enableTextFiltering = false,
-            .enableServerListing = true,
+            .f_locale = locale,
+            .f_viewDistance = @as(i8, @intCast(render_dist)),
+            .f_chatFlags = 0,
+            .f_particleStatus = .minimal,
+            .f_chatColors = true,
+            .f_skinParts = 0,
+            .f_mainHand = @as(i32, @intCast(main_hand)),
+            .f_enableTextFiltering = false,
+            .f_enableServerListing = true,
         });
     }
 };
