@@ -293,6 +293,7 @@ const SupportedTypes = enum {
     buffer,
     bitfield,
     mapper,
+    @"switch",
     //Unsupported
     //bitfield
     //switch
@@ -618,17 +619,34 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const fields = getV(a.items[1], .array).items;
                     for (fields) |f| {
                         const ob = getV(f, .object);
-                        if (ob.get("anon")) |anon| {
-                            if (getV(anon, .bool))
-                                return error.notSupported;
-                        }
-                        const ident = getV(ob.get("name").?, .string);
+                        const ident = blk: {
+                            //There are 12 instances of anon in 1.21.3 protocol, (2 in 1.19.4), 11 are switches, one is a bitfield.
+                            //Anon switches can't be sensibly attached to parent structs as a switch's memory representation is a union.
+                            //The additional complexity of somehow attaching anon fields to the parent for the one bitfield, including parse/send functions is not worth it. (a packed xz for block ents). So we just give the anon field a name: anon
+                            //Anon is dumb
+                            if (ob.get("anon")) |anon| {
+                                if (getV(anon, .bool))
+                                    break :blk "anon";
+                            }
+                            break :blk getV(ob.get("name").?, .string);
+                        };
+                        //We have to add something to every field identifier because of a global type named "tags" and multiple fields named "tags"
                         const ident_mangle = try printString("f_{s}", .{ident});
                         const field_type = ob.get("type").?;
                         try newGenType(field_type, &child.d._struct, ident_mangle, .{ .gen_fields = true, .optional = false });
                     }
                     if (flags.gen_fields)
                         try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
+                },
+                .@"switch" => {
+                    //A switch is a union
+                    //Has fields:
+                    //compareTo
+                    //type
+                    const sw_def = getV(a.items[1], .object);
+                    _ = sw_def;
+
+                    return error.notSupported;
                 },
                 .buffer, .array => {
                     const array_def = getV(a.items[1], .object);
