@@ -44,37 +44,43 @@ pub fn main() !void {
         .{ "Vector", "@import(\"vector.zig\")" },
         .{ "PSend", "mc.Packet" },
         .{ "varint", "i32" },
-        .{ "vec3f64", "Vector.V3f" },
+        //.{ "vec3f64", "Vector.V3f" },
         .{ "UUID", "u128" },
-        .{ "Slot", "mc.Slot" },
+        //.{ "Slot", "mc.Slot" },
         .{ "string", "[]const u8" },
-        .{ "position", "Vector.V3i" },
+        //.{ "position", "Vector.V3i" },
         .{ "restBuffer", "[]const u8" },
         .{ "nbt", "mc.nbt_zig.EntryWithName" },
         .{ "anonymousNbt", "mc.nbt_zig.Entry" },
         .{ "anonOptionalNbt", em },
         //.{ "particle", em },
         .{ "optionalNbt", em },
-        .{ "command_node", em },
-        .{ "packedChunkPos", em },
-        .{ "tags", em },
-        .{ "chunkBlockEntity", em },
+        //.{ "command_node", em },
+        //.{ "packedChunkPos", em },
+        //.{ "tags", em },
+        //.{ "chunkBlockEntity", em },
         .{ "entityMetadata", em },
         //All that follow are for 1.21
-        .{ "ContainerID", "varint" },
+        //.{ "ContainerID", "varint" },
         .{ "ByteArray", "[]const u8" }, //Wiki vg, parse this with varint as counter
         //.{ "Slot", "mc.Slot" },
         .{ "MovementFlags", "mc.MovementFlags" },
-        .{ "SpawnInfo", "Play_Clientbound.packets.Type_SpawnInfo" }, //Ugly
-        .{ "vec2f", "mc.Vec2f" },
-        .{ "Particle", em },
-        .{ "vec3f", "mc.V3f" },
+        //.{ "SpawnInfo", "Play_Clientbound.packets.Type_SpawnInfo" }, //Ugly
+        //.{ "vec2f", "mc.Vec2f" },
+        //.{ "Particle", em },
+        //.{ "vec3f", "mc.V3f" },
         .{ "IDSet", em },
-        .{ "PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
-        .{ "RecipeDisplay", em },
-        .{ "SlotDisplay", em },
-        .{ "ChatTypeParameterType", em },
-        .{ "ChatTypes", em },
+        .{ "Type_PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
+        .{ "Type_IDSet", em },
+        .{ "Type_tags", em },
+        .{ "Type_string", "[]const u8" },
+        .{ "Type_ByteArray", "[]const u8" },
+        .{ "Type_entityMetadata", em },
+        .{ "Type_MovementFlags", em },
+        //.{ "RecipeDisplay", em },
+        //.{ "SlotDisplay", em },
+        //.{ "ChatTypeParameterType", em },
+        //.{ "ChatTypes", em },
     };
 
     //
@@ -111,6 +117,66 @@ pub fn main() !void {
     }
 
     //try w.print("{s}", .{@embedFile("datatype.zig")});
+    { //TRY to emit all the stupid types
+
+        //try w.print("pub const STUPID = struct{{\n", .{});
+        const types = getV(root.get("types").?, .object);
+        var p_it = types.iterator();
+        //const write_types = true;
+        //if (write_types) {
+        //    str_w.reset();
+        //    var parent = ParseStructGen.init(alloc);
+        //    while (p_it.next()) |p| {
+        //        if (std.mem.eql(u8, "packet", p.key_ptr.*)) continue;
+        //        newGenType(p.value_ptr.*, &parent, p.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
+        //            const last = parent.getLastDecl();
+        //            last.unsupported = true;
+        //            std.debug.print("{any}\n", .{err});
+        //            //std.debug.print("Omitting {s}:{s} {s} {any}\n", .{ game_state, direction, p.key_ptr.*, err });
+        //            continue;
+        //        };
+        //    }
+        //    try w.print("pub const packets = struct {{\n", .{});
+        //    try parent.emit(
+        //        w,
+        //        .{ .none = {} },
+        //        .recv,
+        //    );
+        //    try w.print("}};\n", .{});
+        //}
+        //try w.print("pub const STUPID = struct {{\n", .{});
+        var parent = ParseStructGen.init(arena_alloc);
+        str_w.reset();
+        while (p_it.next()) |ty| {
+            switch (ty.value_ptr.*) {
+                .string => |s| {
+                    if (!std.mem.eql(u8, s, "native")) {
+                        try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, s });
+                    } else {
+                        try w.print("pub const Type_{s} = void;\n", .{ty.key_ptr.*});
+                    }
+                },
+                .array => {
+                    newGenType(ty.value_ptr.*, &parent, ty.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
+                        const last = parent.getLastDecl();
+                        last.unsupported = true;
+                        std.debug.print("{any}\n", .{err});
+                        //std.debug.print("Omitting {s}:{s} {s} {any}\n", .{ game_state, direction, p.key_ptr.*, err });
+                        continue;
+                    };
+                },
+                else => {
+                    unreachable;
+                },
+            }
+        }
+        try parent.emit(
+            w,
+            .{ .none = {} },
+            .recv,
+        );
+        //try w.print("}};\n", .{});
+    }
 
     try emitPacketEnum(arena_alloc, &root, w, "play", "toClient", "Play_Clientbound");
     try emitPacketEnum(arena_alloc, &root, w, "play", "toServer", "Play_Serverbound");
@@ -195,7 +261,7 @@ const SupportedTypes = enum {
 // for fn first len = parse(countType)
 // while(parse(arraychild
 
-var strbuf: [10000]u8 = undefined;
+var strbuf: [40000]u8 = undefined;
 var str_w = std.io.FixedBufferStream([]u8){ .buffer = &strbuf, .pos = 0 };
 
 pub fn printString(comptime fmt: []const u8, args: anytype) ![]const u8 {
@@ -212,7 +278,8 @@ pub const ParseStructGen = struct {
 
         pub fn getIdentifier(self: @This()) ![]const u8 {
             return switch (self) {
-                .primitive => |p| p,
+                .primitive => |p| try printString("Type_{s}", .{p}),
+                //.primitive => |p| p,
                 .compound => |co| {
                     if (co.d == ._array) {
                         switch (co.d._array.emit_kind) {
@@ -441,13 +508,15 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
     gen_fields: bool = false,
     optional: bool = false,
 }) !void {
+    const ns_prefix = "Type_";
+    //const ns_prefix = "";
     switch (v) {
         .array => |a| { //An array is some compound type definition
             const t = strToEnum(SupportedTypes, getV(a.items[0], .string)) orelse return error.notSupported;
             switch (t) {
                 .bitfield => { //Bitfield is like a struct/container
 
-                    const Tname = try printString("Type_{s}", .{fname});
+                    const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
                     const child = try parent.newDecl(Tname);
 
                     child.d = .{ ._struct = ParseStructGen.init(parent.alloc) };
@@ -479,7 +548,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                 .mapper => {
                     const fields = getV(a.items[1], .object);
                     const type_name = getV(fields.get("type").?, .string);
-                    const Tname = try printString("Type_{s}", .{fname});
+                    const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._enum = .{ .fields = std.ArrayList(ParseStructGen.EnumT.FType).init(parent.alloc), .tag_type = type_name } };
                     const mappings = getV(fields.get("mappings").?, .object);
@@ -500,7 +569,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         });
                 },
                 .container => {
-                    const Tname = try printString("Type_{s}", .{fname});
+                    const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
 
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._struct = ParseStructGen.init(parent.alloc) };
@@ -512,8 +581,9 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                                 return error.notSupported;
                         }
                         const ident = getV(ob.get("name").?, .string);
+                        const ident_mangle = try printString("f_{s}", .{ident});
                         const field_type = ob.get("type").?;
-                        try newGenType(field_type, &child.d._struct, ident, .{ .gen_fields = true, .optional = false });
+                        try newGenType(field_type, &child.d._struct, ident_mangle, .{ .gen_fields = true, .optional = false });
                     }
                     if (flags.gen_fields)
                         try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
@@ -551,7 +621,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     .type = .{ .primitive = str },
                 });
             } else {
-                const child = try parent.newDecl(try printString("Type_{s}", .{fname}));
+                const child = try parent.newDecl(try printString("{s}{s}", .{ ns_prefix, fname }));
                 child.d = .{ .alias = str };
             }
         },
