@@ -156,29 +156,6 @@ pub fn main() !void {
         //try w.print("pub const STUPID = struct{{\n", .{});
         const types = getV(root.get("types").?, .object);
         var p_it = types.iterator();
-        //const write_types = true;
-        //if (write_types) {
-        //    str_w.reset();
-        //    var parent = ParseStructGen.init(alloc);
-        //    while (p_it.next()) |p| {
-        //        if (std.mem.eql(u8, "packet", p.key_ptr.*)) continue;
-        //        newGenType(p.value_ptr.*, &parent, p.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
-        //            const last = parent.getLastDecl();
-        //            last.unsupported = true;
-        //            std.debug.print("{any}\n", .{err});
-        //            //std.debug.print("Omitting {s}:{s} {s} {any}\n", .{ game_state, direction, p.key_ptr.*, err });
-        //            continue;
-        //        };
-        //    }
-        //    try w.print("pub const packets = struct {{\n", .{});
-        //    try parent.emit(
-        //        w,
-        //        .{ .none = {} },
-        //        .recv,
-        //    );
-        //    try w.print("}};\n", .{});
-        //}
-        //try w.print("pub const STUPID = struct {{\n", .{});
         var parent = ParseStructGen.init(arena_alloc);
         str_w.reset();
         while (p_it.next()) |ty| {
@@ -343,7 +320,7 @@ pub const ParseStructGen = struct {
         optional: bool = false,
         //type_identifier: []const u8,
     };
-    pub const EnumT = struct {
+    pub const EnumT = struct { //These are from "mappers"
         const FType = struct {
             name: []const u8,
             value: i64,
@@ -352,11 +329,28 @@ pub const ParseStructGen = struct {
         tag_type: []const u8, //This is always a primitive value (int), hence string
     };
 
+    pub const UnionT = struct { //These are "switches"
+        psg: ParseStructGen,
+        tag_type: []const u8,
+    };
+
+    pub const BitfieldT = struct {
+        const FieldT = struct {
+            name: []const u8,
+            int_t: []const u8,
+            int_w: i64,
+        };
+        fields: std.ArrayList(FieldT),
+        parent_t: i64, //Parent must be a integer type,
+    };
+
     pub const Decl = struct {
         unsupported: bool = false,
         name: []const u8,
         d: union(enum) {
+            bitfield: BitfieldT,
             _enum: EnumT,
+            _union: UnionT,
             _struct: ParseStructGen,
             _array: struct {
                 s: ParseStructGen,
@@ -410,6 +404,35 @@ pub const ParseStructGen = struct {
                 continue;
             }
             switch (d.d) {
+                .bitfield => |b| {
+                    try w.print("pub const {s} = struct {{\n", .{d.name});
+                    try w.print("//Bitfield\n", .{});
+                    for (b.fields.items) |f| {
+                        try w.print("{s}: {s},\n", .{ f.name, f.int_t });
+                    }
+
+                    switch (dir) {
+                        .recv => {
+                            try w.print("pub fn parse(pctx:anytype)!@This(){{\n", .{});
+                            try w.print("const val = try pctx.parse_u{d}();\n", .{b.parent_t});
+                            try w.print("return @This(){{\n", .{});
+                            var sig_w: i64 = 0;
+                            var insig_w: i64 = b.parent_t;
+                            for (b.fields.items) |f| {
+                                insig_w -= f.int_w;
+                                try w.print(".{s} = @as({s}, @intCast(val << {d} >> {d})),\n", .{ f.name, f.int_t, sig_w, insig_w + sig_w });
+                                sig_w += f.int_w;
+                            }
+                            try w.print("}};\n", .{});
+                            //try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
+                            try w.print("}}\n", .{});
+                        },
+                        .send => {
+                            return error.notSupported;
+                        },
+                    }
+                    try w.print("}};\n", .{});
+                },
                 ._enum => |e| {
                     try w.print("pub const {s} = enum({s}) {{\n", .{ d.name, e.tag_type });
                     //Enums can't have nested types so we can just emit parse or send here without recursion
@@ -439,6 +462,12 @@ pub const ParseStructGen = struct {
                 ._array => |a| {
                     try w.print("pub const {s} = struct{{\n", .{d.name});
                     try a.s.emit(w, a.emit_kind, dir);
+                    try w.print("}};\n\n", .{});
+                },
+                ._union => |u| {
+                    try w.print("pub const {s} = union{{\n", .{d.name});
+                    try w.print("//{s}\n", .{u.tag_type});
+                    try u.psg.emit(w, .{ .none = {} }, dir);
                     try w.print("}};\n\n", .{});
                 },
                 ._struct => |s| {
@@ -484,25 +513,19 @@ pub const ParseStructGen = struct {
                         try w.print("}}\n", .{});
                     },
                     .none => {
-                        try w.print("\npub fn parse(pctx:anytype)!@This() {{\n", .{});
+                        try w.print("\npub fn parse({s}:anytype)!@This() {{\n", .{if (self.fields.items.len > 0) "pctx" else "_"});
                         const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
                         try w.print("{s} ret: @This() = undefined;\n", .{cvar});
-                        var discard_pctx = true;
                         for (self.fields.items) |f| {
-                            if (f.optional) {
+                            if (f.optional)
                                 try w.print("if(try pctx.parse_bool()){{\n", .{});
-                            }
-                            discard_pctx = false;
                             switch (f.type) {
                                 .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
                                 .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx);\n", .{ f.name, co.name }),
                             }
-                            if (f.optional) {
+                            if (f.optional)
                                 try w.print("}}", .{});
-                            }
                         }
-                        if (discard_pctx)
-                            try w.print("_ = pctx;\n", .{});
                         try w.print("return ret;\n", .{});
                         try w.print("}}\n\n", .{});
                     },
@@ -562,7 +585,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
                     const child = try parent.newDecl(Tname);
 
-                    child.d = .{ ._struct = ParseStructGen.init(parent.alloc) };
+                    //child.d = .{ ._struct = ParseStructGen.init(parent.alloc) };
                     const fields = getV(a.items[1], .array).items;
                     var total_size: i64 = 0;
                     for (fields) |f| {
@@ -572,19 +595,33 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         total_size += field_size;
                         //const is_signed = getV(ob.get("signed").?, .bool);
                     }
-                    try newGenType(
-                        .{ .string = try printString("u{d}", .{@as(usize, switch (total_size) {
-                            32 => 32,
-                            64 => 64,
-                            8 => 8,
-                            16 => 16,
-                            else => return error.notSupported,
-                        })}) },
-                        &child.d._struct,
-                        "bitfield",
-                        .{ .gen_fields = true, .optional = false },
-                    );
-                    std.debug.print("TOTAL BITFIELD SIZE {d}\n", .{total_size});
+                    child.d = .{ .bitfield = .{
+                        .fields = std.ArrayList(ParseStructGen.BitfieldT.FieldT).init(parent.alloc),
+                        .parent_t = @intCast(total_size),
+                    } };
+                    for (fields) |f| {
+                        const ob = getV(f, .object);
+                        const field_size = getV(ob.get("size").?, .integer);
+                        const signed = getV(ob.get("signed").?, .bool);
+                        try child.d.bitfield.fields.append(.{
+                            .name = getV(ob.get("name").?, .string),
+                            .int_t = try printString("{c}{d}", .{ @as(u8, if (signed) 'i' else 'u'), field_size }),
+                            .int_w = @intCast(field_size),
+                        });
+                    }
+                    //try newGenType(
+                    //    .{ .string = try printString("u{d}", .{@as(usize, switch (total_size) {
+                    //        32 => 32,
+                    //        64 => 64,
+                    //        8 => 8,
+                    //        16 => 16,
+                    //        else => return error.notSupported,
+                    //    })}) },
+                    //    &child.d._struct,
+                    //    "bitfield",
+                    //    .{ .gen_fields = true, .optional = false },
+                    //);
+                    //std.debug.print("TOTAL BITFIELD SIZE {d}\n", .{total_size});
                     if (flags.gen_fields)
                         try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
                 },
@@ -644,9 +681,36 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //compareTo
                     //type
                     const sw_def = getV(a.items[1], .object);
-                    _ = sw_def;
+                    const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
+                    const tag_type_name = try printString("f_{s}", .{sw_def.get("compareTo").?.string});
+                    var found = false;
+                    //TODO these (1.21.3) packets have the switch's tag variable somewhere other than the direct parent and use a path notation: ../mystupid/path
+                    //packet_player_info
+                    //packet_declare_commands
+                    //packet_advancements
+                    var index: usize = 0;
+                    for (parent.fields.items, 0..) |f, i| { //Search through parent's fields for matching tag
+                        if (std.mem.eql(u8, f.name, tag_type_name)) {
+                            index = i;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found)
+                        return error.notSupported;
 
-                    return error.notSupported;
+                    //Switch on either enum or bare number
+                    //switches using numbers will need names for union fields
+
+                    const child = try parent.newDecl(Tname);
+                    child.d = .{ ._union = .{
+                        .psg = ParseStructGen.init(parent.alloc),
+                        .tag_type = try parent.fields.items[index].type.getIdentifier(),
+                    } };
+                    //const fields = getV(a.items[1], .array).items;
+                    //First memory represent, then worry about logic to retrieve switch(value)
+                    if (flags.gen_fields)
+                        try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
                 },
                 .buffer, .array => {
                     const array_def = getV(a.items[1], .object);
