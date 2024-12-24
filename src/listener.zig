@@ -118,10 +118,10 @@ pub const PacketCtx = struct {
         try self.sendAuto(Play, .close_window, .{ .windowId = win_id });
     }
 
-    pub fn doRecipeBook(self: *@This(), window: u8, rec_id: []const u8, shift_pressed: bool) !void {
+    pub fn doRecipeBook(self: *@This(), window: u8, rec_id: i32, shift_pressed: bool) !void {
         try self.sendAuto(Play, .craft_recipe_request, .{
             .windowId = @intCast(window),
-            .recipe = rec_id,
+            .recipeId = rec_id,
             .makeAll = shift_pressed,
         });
     }
@@ -135,7 +135,7 @@ pub const PacketCtx = struct {
         mode: u8,
         new_slot_data: []const Play.packets.Type_packet_window_click.Array_changedSlots,
         //new_slot_data: []const struct { sloti: u32, slot: ?Slot },
-        held_slot: ?Slot,
+        held_slot: Slot,
     ) !void {
         try self.sendAuto(Play, .window_click, .{
             .windowId = win,
@@ -250,7 +250,7 @@ pub const PacketCtx = struct {
             .locale = locale,
             .viewDistance = @as(i8, @intCast(render_dist)),
             .chatFlags = 0,
-            .particleStatus = 0,
+            .particleStatus = .minimal,
             .chatColors = true,
             .skinParts = 0,
             .mainHand = @as(i32, @intCast(main_hand)),
@@ -308,6 +308,7 @@ pub const Packet = struct {
     }
 
     pub fn slot(self: *Self, val: ?Slot) !void {
+        annotateManualParse("1.19.3");
         const wr = self.buffer.writer();
         try self.boolean(val != null);
         if (val) |sl| {
@@ -331,6 +332,7 @@ pub const Packet = struct {
         _ = try wr.write(val.getSlice());
     }
 
+    pub const send_Slot = slot;
     pub const send_slot = slot;
     pub const send_bool = boolean;
     pub const send_varint = varInt;
@@ -341,6 +343,7 @@ pub const Packet = struct {
     pub const send_f32 = float;
     pub const send_f64 = double;
     pub const send_restBuffer = slice;
+    pub const send_ContainerID = varInt;
 
     pub fn send_vec2f(self: *Self, v: Vec2f) !void {
         try self.float(v.x);
@@ -510,8 +513,8 @@ pub fn toVarInt(input: i32) VarInt {
 }
 
 pub const Slot = struct {
-    item_id: u16,
-    count: u8,
+    count: u8 = 0,
+    item_id: u16 = 0,
     nbt_buffer: ?[]u8 = null,
 };
 
@@ -748,7 +751,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn blockEntity(self: *Self) BlockEntityP {
-            annotateManualParse("1.19.4");
+            annotateManualParse("1.21.3");
             const pxz = self.int(u8);
             const y = self.int(i16);
             const btype = self.varInt();
@@ -806,30 +809,42 @@ pub fn packetParseCtx(comptime readerT: type) type {
             unreachable;
         }
 
-        pub fn slot(self: *Self) ?Slot {
-            annotateManualParse("1.19.4");
-            if (self.boolean()) { //Is item present
-                var s = Slot{
-                    .item_id = @as(u16, @intCast(self.varInt())),
-                    .count = self.int(u8),
-                    .nbt_buffer = null,
-                };
-
-                const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
-                var tracker = tr.init(self.alloc, self.reader);
-
-                const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
-                if (tracker.buffer.items.len > 1) {
-                    s.nbt_buffer = tracker.buffer.items;
-                    _ = nbt;
-                    //std.debug.print("NBT: {s}\n", .{nbt.name.?});
-                    //nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
-                }
-
-                return s;
+        pub fn slot(self: *Self) Slot {
+            annotateManualParse("1.21.3");
+            const item_count = self.varInt();
+            if (item_count == 0) {
+                return .{ .item_id = 0, .count = 0 };
             }
-            return null;
+            //const item_id = self.varInt();
+            //const num_add = self.varInt();
+            //const num_rm = self.varInt();
+            unreachable;
         }
+
+        //pub fn slot(self: *Self) ?Slot {
+        //    annotateManualParse("1.19.4");
+        //    if (self.boolean()) { //Is item present
+        //        var s = Slot{
+        //            .item_id = @as(u16, @intCast(self.varInt())),
+        //            .count = self.int(u8),
+        //            .nbt_buffer = null,
+        //        };
+
+        //        const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
+        //        var tracker = tr.init(self.alloc, self.reader);
+
+        //        const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
+        //        if (tracker.buffer.items.len > 1) {
+        //            s.nbt_buffer = tracker.buffer.items;
+        //            _ = nbt;
+        //            //std.debug.print("NBT: {s}\n", .{nbt.name.?});
+        //            //nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
+        //        }
+
+        //        return s;
+        //    }
+        //    return null;
+        //}
 
         pub fn auto(self: *Self, comptime p_type: AutoParse.parseTypeReturnType) p_type.t {
             const r = self.reader;

@@ -1966,13 +1966,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                             .hold_item_name => |in| {
                                 try bp.setHeldItem(0);
                                 if (bo.inventory.findItemFromId(in)) |found| {
-                                    try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, null);
+                                    try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
                                 }
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .hold_item => |si| {
                                 try bp.setHeldItem(0);
-                                try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, null);
+                                try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, .{});
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .craft => |cr| {
@@ -1981,17 +1981,16 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         th_d.craft_item_counter = cr.count;
                                     }
                                     const count = &th_d.craft_item_counter.?;
-                                    const item = world.reg.getItem(cr.product_id);
                                     if (count.* == 64) {
-                                        try bp.doRecipeBook(wid, item.name, true);
+                                        try bp.doRecipeBook(wid, cr.product_id, true);
                                         count.* = 0;
                                     } else {
-                                        try bp.doRecipeBook(wid, item.name, false);
+                                        try bp.doRecipeBook(wid, cr.product_id, false);
                                         if (count.* >= 1)
                                             count.* -= 1;
                                     }
                                     if (count.* == 0) {
-                                        try bp.clickContainer(wid, bo.container_state, 0, 1, 1, &.{}, null);
+                                        try bp.clickContainer(wid, bo.container_state, 0, 1, 1, &.{}, .{});
                                         th_d.nextAction(0, bo.pos.?);
                                     } else {
                                         skip_ticks = 1; //Throttle the packets we are sending
@@ -2034,7 +2033,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                             },
                                         }
                                         if (should_move) {
-                                            try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, null);
+                                            try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, .{});
                                             num_transfered += 1;
                                             if (num_transfered == inv.count)
                                                 break;
@@ -2051,7 +2050,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         for (taglist) |t| {
                                             if (bo.inventory.findItemFromId(@intCast(t))) |found| {
                                                 try bp.setHeldItem(0);
-                                                try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, null);
+                                                try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
                                                 break;
                                             }
                                         }

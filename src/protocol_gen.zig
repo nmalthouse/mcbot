@@ -46,14 +46,14 @@ pub fn main() !void {
         .{ "varint", "i32" },
         .{ "vec3f64", "Vector.V3f" },
         .{ "UUID", "u128" },
-        .{ "slot", "?mc.Slot" },
+        .{ "Slot", "mc.Slot" },
         .{ "string", "[]const u8" },
         .{ "position", "Vector.V3i" },
         .{ "restBuffer", "[]const u8" },
         .{ "nbt", "mc.nbt_zig.EntryWithName" },
         .{ "anonymousNbt", "mc.nbt_zig.Entry" },
         .{ "anonOptionalNbt", em },
-        .{ "particle", em },
+        //.{ "particle", em },
         .{ "optionalNbt", em },
         .{ "command_node", em },
         .{ "packedChunkPos", em },
@@ -63,7 +63,7 @@ pub fn main() !void {
         //All that follow are for 1.21
         .{ "ContainerID", "varint" },
         .{ "ByteArray", "[]const u8" }, //Wiki vg, parse this with varint as counter
-        .{ "Slot", "mc.Slot" },
+        //.{ "Slot", "mc.Slot" },
         .{ "MovementFlags", "mc.MovementFlags" },
         .{ "SpawnInfo", "Play_Clientbound.packets.Type_SpawnInfo" }, //Ugly
         .{ "vec2f", "mc.Vec2f" },
@@ -160,7 +160,7 @@ pub fn emitPacketEnum(alloc: std.mem.Allocator, root: *std.json.ObjectMap, write
         var p_it = type_it.iterator();
         while (p_it.next()) |p| {
             if (std.mem.eql(u8, "packet", p.key_ptr.*)) continue;
-            newGenType(p.value_ptr.*, &parent, p.key_ptr.*, false, false) catch |err| {
+            newGenType(p.value_ptr.*, &parent, p.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
                 const last = parent.getLastDecl();
                 last.unsupported = true;
                 std.debug.print("Omitting {s}:{s} {s} {any}\n", .{ game_state, direction, p.key_ptr.*, err });
@@ -233,11 +233,20 @@ pub const ParseStructGen = struct {
         optional: bool = false,
         //type_identifier: []const u8,
     };
+    pub const EnumT = struct {
+        const FType = struct {
+            name: []const u8,
+            value: i64,
+        };
+        fields: std.ArrayList(FType),
+        tag_type: []const u8, //This is always a primitive value (int), hence string
+    };
 
     pub const Decl = struct {
         unsupported: bool = false,
         name: []const u8,
         d: union(enum) {
+            _enum: EnumT,
             _struct: ParseStructGen,
             _array: struct {
                 s: ParseStructGen,
@@ -291,7 +300,29 @@ pub const ParseStructGen = struct {
                 continue;
             }
             switch (d.d) {
-                else => {},
+                ._enum => |e| {
+                    try w.print("pub const {s} = enum({s}) {{\n", .{ d.name, e.tag_type });
+                    //Enums can't have nested types so we can just emit parse or send here without recursion
+                    switch (dir) {
+                        .recv => {
+                            try w.print("pub fn parse(pctx:anytype)!@This(){{\n", .{});
+                            try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
+                            try w.print("}}\n", .{});
+                        },
+                        .send => {
+                            try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
+                            try w.print("return pk.send_{s}(@as({s},@intFromEnum(self.*)));", .{ e.tag_type, e.tag_type });
+                            try w.print("}}\n", .{});
+                        },
+                    }
+
+                    for (e.fields.items) |item| {
+                        try w.print("{s} = {d},\n", .{ item.name, item.value });
+                    }
+                    try w.print("}};\n", .{});
+                },
+
+                .none => {},
                 .alias => |a| {
                     try w.print("pub const {s} = {s};\n\n", .{ d.name, a });
                 },
@@ -406,7 +437,10 @@ pub const ParseStructGen = struct {
 //Easy bitfields?
 //just have a struct with single sized integer and let user extract the fields
 
-pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8, gen_fields: bool, optional: bool) !void {
+pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8, flags: struct {
+    gen_fields: bool = false,
+    optional: bool = false,
+}) !void {
     switch (v) {
         .array => |a| { //An array is some compound type definition
             const t = strToEnum(SupportedTypes, getV(a.items[0], .string)) orelse return error.notSupported;
@@ -436,21 +470,34 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         })}) },
                         &child.d._struct,
                         "bitfield",
-                        true,
-                        false,
+                        .{ .gen_fields = true, .optional = false },
                     );
                     std.debug.print("TOTAL BITFIELD SIZE {d}\n", .{total_size});
-                    if (gen_fields)
-                        try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
+                    if (flags.gen_fields)
+                        try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
                 },
                 .mapper => {
                     const fields = getV(a.items[1], .object);
                     const type_name = getV(fields.get("type").?, .string);
-                    try parent.fields.append(.{
-                        .name = fname,
-                        .optional = optional,
-                        .type = .{ .primitive = type_name },
-                    });
+                    const Tname = try printString("Type_{s}", .{fname});
+                    const child = try parent.newDecl(Tname);
+                    child.d = .{ ._enum = .{ .fields = std.ArrayList(ParseStructGen.EnumT.FType).init(parent.alloc), .tag_type = type_name } };
+                    const mappings = getV(fields.get("mappings").?, .object);
+                    var map_it = mappings.iterator();
+                    while (map_it.next()) |m_item| {
+                        const name_dupe = try parent.alloc.dupe(u8, getV(m_item.value_ptr.*, .string));
+                        std.mem.replaceScalar(u8, name_dupe, '.', '_');
+                        try child.d._enum.fields.append(.{
+                            .name = name_dupe,
+                            .value = try std.fmt.parseInt(i64, m_item.key_ptr.*, 10),
+                        });
+                    }
+                    if (flags.gen_fields)
+                        try parent.fields.append(.{
+                            .name = fname,
+                            .optional = flags.optional,
+                            .type = .{ .compound = child },
+                        });
                 },
                 .container => {
                     const Tname = try printString("Type_{s}", .{fname});
@@ -466,10 +513,10 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         }
                         const ident = getV(ob.get("name").?, .string);
                         const field_type = ob.get("type").?;
-                        try newGenType(field_type, &child.d._struct, ident, true, false);
+                        try newGenType(field_type, &child.d._struct, ident, .{ .gen_fields = true, .optional = false });
                     }
-                    if (gen_fields)
-                        try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
+                    if (flags.gen_fields)
+                        try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
                 },
                 .buffer, .array => {
                     const array_def = getV(a.items[1], .object);
@@ -488,19 +535,19 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const Tname = try printString("Array_{s}", .{fname});
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._array = .{ .s = ParseStructGen.init(parent.alloc), .emit_kind = ekind } };
-                    try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), true, false);
-                    try parent.fields.append(.{ .name = fname, .optional = optional, .type = .{ .compound = child } });
+                    try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), .{ .gen_fields = true, .optional = false });
+                    try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
                 },
                 .option => {
-                    try newGenType(a.items[1], parent, fname, true, true);
+                    try newGenType(a.items[1], parent, fname, .{ .gen_fields = true, .optional = true });
                 },
             }
         },
         .string => |str| { //A string is a literal type
-            if (gen_fields) {
+            if (flags.gen_fields) {
                 try parent.fields.append(.{
                     .name = fname,
-                    .optional = optional,
+                    .optional = flags.optional,
                     .type = .{ .primitive = str },
                 });
             } else {
