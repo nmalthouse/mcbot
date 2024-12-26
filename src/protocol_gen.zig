@@ -11,7 +11,10 @@ fn getV(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) @TypeOf(@
 }
 
 fn getVE(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) !@TypeOf(@field(v, @tagName(tag))) {
-    return getVal(v, tag) orelse error.notSupported;
+    return getVal(v, tag) orelse {
+        std.debug.print("Error with getVE\n", .{});
+        return error.notSupported;
+    };
 }
 
 fn getVal(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) ?@TypeOf(@field(v, @tagName(tag))) {
@@ -78,6 +81,7 @@ pub fn main() !void {
         .{ "Type_entityMetadata", em },
         .{ "Type_MovementFlags", em },
         .{ "Type_ingredient", em },
+        .{ "Type_previousMessages", "Array_previousMessages" },
         //.{ "RecipeDisplay", em },
         //.{ "SlotDisplay", em },
         //.{ "ChatTypeParameterType", em },
@@ -85,6 +89,7 @@ pub fn main() !void {
     };
 
     const ddd = "error.protodefisdumb";
+    const omit = "omit";
     const native_mapper = [_]struct { []const u8, []const u8 }{
         .{ "varint", "i32" },
         .{ "varlong", "i32" },
@@ -101,7 +106,7 @@ pub fn main() !void {
         .{ "bool", "bool" },
         .{ "f32", "f32" },
         .{ "f64", "f64" },
-        .{ "container", ddd },
+        .{ "container", omit }, //You gotta love protodef
         .{ "switch", ddd },
         .{ "bitfield", ddd },
         .{ "void", ddd },
@@ -165,6 +170,9 @@ pub fn main() !void {
                         try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, s });
                     } else {
                         if (native_map.get(ty.key_ptr.*)) |has| {
+                            if (std.mem.eql(u8, has, omit)) {
+                                continue;
+                            }
                             try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, has });
                         } else {
                             try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, em });
@@ -271,6 +279,8 @@ const SupportedTypes = enum {
     bitfield,
     mapper,
     @"switch",
+    registryEntryHolder,
+    registryEntryHolderSet,
     //Unsupported
     //bitfield
     //switch
@@ -364,6 +374,7 @@ pub const ParseStructGen = struct {
     pub const EmitKind = union(enum) {
         none: void,
         array_varint: void,
+        array_ref: struct { ref_name: []const u8 },
         array_count: usize,
     };
 
@@ -465,7 +476,7 @@ pub const ParseStructGen = struct {
                     try w.print("}};\n\n", .{});
                 },
                 ._union => |u| {
-                    try w.print("pub const {s} = union{{\n", .{d.name});
+                    try w.print("pub const {s} = union(enum){{\n", .{d.name});
                     try w.print("//{s}\n", .{u.tag_type});
                     try u.psg.emit(w, .{ .none = {} }, dir);
                     try w.print("}};\n\n", .{});
@@ -492,14 +503,18 @@ pub const ParseStructGen = struct {
         switch (dir) {
             .recv => {
                 switch (emit_kind) {
-                    .array_count, .array_varint => {
+                    .array_count, .array_varint, .array_ref => {
                         if (self.fields.items.len != 1) return error.invalidArrayStructure;
                         const item_field = self.fields.items[0];
-                        try w.print("pub fn parse(pctx:anytype)![]@This(){{\n", .{});
-                        if (emit_kind == .array_count) {
-                            try w.print("const item_count:usize = {d};\n", .{emit_kind.array_count});
-                        } else {
-                            try w.print("const item_count:usize = @intCast(try pctx.parse_varint());\n", .{});
+                        if (emit_kind == .array_ref) {}
+                        try w.print("pub fn parse(pctx:anytype {s})![]@This(){{\n", .{
+                            if (emit_kind == .array_ref) ",item_count:usize " else "",
+                        });
+                        switch (emit_kind) {
+                            .array_count => try w.print("const item_count:usize = {d};\n", .{emit_kind.array_count}),
+                            .array_varint => try w.print("const item_count:usize = @intCast(try pctx.parse_varint());\n", .{}),
+                            .array_ref => try w.print("//ARRAY_REF {s}\n", .{emit_kind.array_ref.ref_name}),
+                            else => unreachable,
                         }
                         try w.print("const array = try pctx.alloc.alloc(@This(), item_count);\n", .{});
                         try w.print("for(0..item_count)|i|{{\n", .{});
@@ -567,9 +582,7 @@ pub const ParseStructGen = struct {
     }
 };
 
-//Easy bitfields?
-//just have a struct with single sized integer and let user extract the fields
-
+var state_anon_level: usize = 0;
 pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8, flags: struct {
     gen_fields: bool = false,
     optional: bool = false,
@@ -577,11 +590,21 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
     const ns_prefix = "Type_";
     //const ns_prefix = "";
     switch (v) {
+        //Needed for Slot
+        //UNKOWN TYPE_DEF bitflags
+        //UNKOWN TYPE_DEF pstring
+        //UNKOWN TYPE_DEF registryEntryHolder
+        //UNKOWN TYPE_DEF registryEntryHolderSet
+        //
         .array => |a| { //An array is some compound type definition
-            const t = strToEnum(SupportedTypes, getV(a.items[0], .string)) orelse return error.notSupported;
+            const t = strToEnum(SupportedTypes, getV(a.items[0], .string)) orelse {
+                std.debug.print("UNKOWN TYPE_DEF {s}\n", .{getV(a.items[0], .string)});
+                return error.notSupported;
+                //
+            };
             switch (t) {
-                .bitfield => { //Bitfield is like a struct/container
-
+                .registryEntryHolder, .registryEntryHolderSet => {},
+                .bitfield => {
                     const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
                     const child = try parent.newDecl(Tname);
 
@@ -662,9 +685,14 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                             //The additional complexity of somehow attaching anon fields to the parent for the one bitfield, including parse/send functions is not worth it. (a packed xz for block ents). So we just give the anon field a name: anon
                             //Anon is dumb
                             if (ob.get("anon")) |anon| {
-                                if (getV(anon, .bool))
-                                    break :blk "anon";
+                                if (getV(anon, .bool)) {
+                                    const n = try printString("anon_{d}", .{state_anon_level});
+                                    state_anon_level += 1;
+                                    break :blk n;
+                                }
                             }
+                            //Jukebox_playable has 3 deep nest of anon switch
+                            //Slot as well
                             break :blk getV(ob.get("name").?, .string);
                         };
                         //We have to add something to every field identifier because of a global type named "tags" and multiple fields named "tags"
@@ -696,8 +724,11 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                             break;
                         }
                     }
-                    if (!found)
+                    if (!found) {
+                        //
+                        std.debug.print("CANT FIND TAG {s}\n", .{tag_type_name});
                         return error.notSupported;
+                    }
 
                     //Switch on either enum or bare number
                     //switches using numbers will need names for union fields
@@ -707,6 +738,20 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         .psg = ParseStructGen.init(parent.alloc),
                         .tag_type = try parent.fields.items[index].type.getIdentifier(),
                     } };
+                    const fields = sw_def.get("fields").?.object;
+                    var f_it = fields.iterator();
+                    while (f_it.next()) |f| {
+                        const int_val = std.fmt.parseInt(i64, f.key_ptr.*, 10) catch {
+                            //Not an int so we can continue
+                            try newGenType(f.value_ptr.*, &child.d._union.psg, f.key_ptr.*, .{ .gen_fields = true, .optional = false });
+                            continue;
+                        };
+                        try newGenType(f.value_ptr.*, &child.d._union.psg, try printString("{s}_v_{d}", .{ fname, int_val }), .{ .gen_fields = true, .optional = false });
+                    }
+
+                    if (sw_def.get("default")) |default| {
+                        try newGenType(default, &child.d._union.psg, "default", .{ .gen_fields = true, .optional = false });
+                    }
                     //const fields = getV(a.items[1], .array).items;
                     //First memory represent, then worry about logic to retrieve switch(value)
                     if (flags.gen_fields)
@@ -717,10 +762,36 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
 
                     const ekind: ParseStructGen.EmitKind = blk: {
                         const count_type_str = getV(array_def.get("countType") orelse {
-                            const count = try getVE(array_def.get("count").?, .integer);
-                            break :blk .{ .array_count = @intCast(count) };
+                            switch (t) {
+                                .array => { //An array without a countType must have a string count that points to parent var
+                                    const count_name = try printString("f_{s}", .{try getVE(array_def.get("count").?, .string)});
+                                    var found = false;
+                                    var index: usize = 0;
+                                    for (parent.fields.items, 0..) |f, i| { //Search through parent's fields for matching tag
+                                        if (std.mem.eql(u8, f.name, count_name)) {
+                                            index = i;
+                                            found = true;
+                                            break;
+                                        }
+                                    }
+                                    if (!found) {
+                                        std.debug.print("CANNOT FIND ARRAY TAG\n", .{});
+                                        return error.notSupported;
+                                    }
+                                    break :blk .{ .array_ref = .{ .ref_name = count_name } };
+                                },
+                                .buffer => { //buffers have count as a fixed integer
+
+                                    const count = try getVE(array_def.get("count").?, .integer);
+                                    break :blk .{ .array_count = @intCast(count) };
+                                },
+                                else => unreachable,
+                            }
                         }, .string);
-                        const count_type = strToEnum(enum { varint }, count_type_str) orelse return error.invalidArrayCount;
+                        const count_type = strToEnum(enum { varint }, count_type_str) orelse {
+                            std.debug.print("INVALID ARRAY COUNT ON {s}\n", .{count_type_str});
+                            return error.invalidArrayCount;
+                        };
                         _ = count_type;
                         break :blk .{ .array_varint = {} };
                     };
@@ -749,7 +820,10 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                 child.d = .{ .alias = str };
             }
         },
-        else => return error.notSupported,
+        else => {
+            std.debug.print("Type not supported: {any}\n", .{v});
+            return error.notSupported;
+        },
     }
 }
 
