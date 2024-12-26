@@ -73,13 +73,13 @@ pub fn main() !void {
         //.{ "Particle", em },
         //.{ "vec3f", "mc.V3f" },
         .{ "IDSet", em },
-        .{ "Type_PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
+        //.{ "Type_PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
         .{ "Type_IDSet", em },
         .{ "Type_tags", em },
         .{ "Type_string", "[]const u8" },
         .{ "Type_ByteArray", "[]const u8" },
         .{ "Type_entityMetadata", em },
-        .{ "Type_MovementFlags", em },
+        //.{ "Type_MovementFlags", em },
         .{ "Type_ingredient", em },
         .{ "Type_previousMessages", "Array_previousMessages" },
         //.{ "RecipeDisplay", em },
@@ -281,9 +281,7 @@ const SupportedTypes = enum {
     @"switch",
     registryEntryHolder,
     registryEntryHolderSet,
-    //Unsupported
-    //bitfield
-    //switch
+    bitflags,
 };
 
 // Handling array type
@@ -355,10 +353,16 @@ pub const ParseStructGen = struct {
         parent_t: i64, //Parent must be a integer type,
     };
 
+    pub const BitFlagT = struct {
+        flags: std.ArrayList([]const u8), //Index of the array represents bitindex
+        primitive_type: []const u8,
+    };
+
     pub const Decl = struct {
         unsupported: bool = false,
         name: []const u8,
         d: union(enum) {
+            bitflag: BitFlagT,
             bitfield: BitfieldT,
             _enum: EnumT,
             _union: UnionT,
@@ -420,6 +424,31 @@ pub const ParseStructGen = struct {
                 continue;
             }
             switch (d.d) {
+                .bitflag => |b| {
+                    try w.print("pub const {s} = struct {{\n", .{d.name});
+                    try w.print("//Bitflag\n", .{});
+                    for (b.flags.items, 0..) |fl, i| {
+                        try w.print("pub const flag_{s} = 0b{b};\n", .{ fl, @as(usize, 0x1) << @as(u6, @intCast(i)) });
+                    }
+                    try w.print("flag: {s},", .{b.primitive_type});
+                    switch (dir) {
+                        .recv => {
+                            try w.print("pub fn parse(pctx:anytype)!@This(){{\n", .{});
+                            try w.print("const val = try pctx.parse_{s}();\n", .{b.primitive_type});
+                            try w.print("return @This(){{\n", .{});
+                            try w.print(".flag = val\n", .{});
+                            try w.print("}};\n", .{});
+                            //try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
+                            try w.print("}}\n", .{});
+                        },
+                        .send => {
+                            try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
+                            try w.print("pk.send_{s}(self.flag);\n", .{b.primitive_type});
+                            try w.print("}}\n", .{});
+                        },
+                    }
+                    try w.print("}};\n", .{});
+                },
                 .bitfield => |b| {
                     try w.print("pub const {s} = struct {{\n", .{d.name});
                     try w.print("//Bitfield\n", .{});
@@ -595,7 +624,6 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
     //const ns_prefix = "";
     switch (v) {
         //Needed for Slot
-        //UNKOWN TYPE_DEF bitflags
         //UNKOWN TYPE_DEF pstring
         //UNKOWN TYPE_DEF registryEntryHolder
         //UNKOWN TYPE_DEF registryEntryHolderSet
@@ -607,7 +635,52 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                 //
             };
             switch (t) {
-                .registryEntryHolder, .registryEntryHolderSet => {},
+                .bitflags => {
+                    //Has the fields: type, flags;array of flag vars
+                    const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
+                    const child = try parent.newDecl(Tname);
+                    const ob = getV(a.items[1], .object);
+                    child.d = .{ .bitflag = .{
+                        .flags = std.ArrayList([]const u8).init(parent.alloc),
+                        .primitive_type = getV(ob.get("type").?, .string),
+                    } };
+                    const flag_names = getV(ob.get("flags").?, .array).items;
+                    for (flag_names) |f| {
+                        try child.d.bitflag.flags.append(getV(f, .string));
+                    }
+                },
+                .registryEntryHolderSet => {
+                    //Has the fields:
+                    //base: {name, type}
+                    //otherwise: {name, type}
+                    //
+                    //if type==0
+                    //  base
+                    //else
+                    //  otherwise
+                    //
+                    //In the wild we have 2 all same types, differnt namse for otherwise ,ids/blockids
+                    //parsing is as follows for IDSET
+                    //type = parse.varint()
+                    //if type == 0
+                    //  const reg_tag = parse.string()
+                    //else
+                    //  parse array of size (type -1) of type: varint
+                    //  so its a union
+                },
+                .registryEntryHolder => {
+                    //has the fields
+                    //baseName
+                    //otherwise
+                    //
+                    //parse is as follows
+                    //id = parse.varint()
+                    //if id == 0
+                    //  return parse.childTYpe
+                    //else
+                    //  return id + 1
+                },
+                //.registryEntryHolder, .registryEntryHolderSet => {},
                 .bitfield => {
                     const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
                     const child = try parent.newDecl(Tname);
