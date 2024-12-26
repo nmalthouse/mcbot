@@ -32,6 +32,16 @@ pub fn getDir(version_map: *const std.json.ArrayHashMap([]const u8), wanted_file
     return try mcdir.openDir(path, .{});
 }
 
+const NameManglerT = std.StringHashMap(struct { collision_counter: usize = 0 });
+var name_mangler_3000: NameManglerT = undefined;
+var mangle_map: std.StringHashMap(usize) = undefined;
+
+//About name mangling.
+//packet_tags contains a lovely naming scheme,
+//It defines an array type named "tags" which contains a struct containing a field named "tags" of type "tags"
+//the field "tags" is ambiguously defined. It is supposed to refer to the top level type "tags"
+//Name mangling will not help us we either have to check that types can't be self referential or just special case this dumb packet
+
 //var primitive_types =
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -87,6 +97,10 @@ pub fn main() !void {
         //.{ "ChatTypeParameterType", em },
         //.{ "ChatTypes", em },
     };
+    name_mangler_3000 = NameManglerT.init(alloc);
+    defer name_mangler_3000.deinit();
+    mangle_map = std.StringHashMap(usize).init(alloc);
+    defer mangle_map.deinit();
 
     const ddd = "error.protodefisdumb";
     const omit = "omit";
@@ -195,6 +209,7 @@ pub fn main() !void {
                 },
             }
         }
+        try mangleTypeNames(&parent, &mangle_map);
         try parent.emit(
             w,
             .{ .none = {} },
@@ -260,6 +275,7 @@ pub fn emitPacketEnum(alloc: std.mem.Allocator, root: *std.json.ObjectMap, write
                 continue;
             };
         }
+        try mangleTypeNames(&parent, &mangle_map);
         try writer.print("pub const packets = struct {{\n", .{});
         try parent.emit(
             writer,
@@ -298,11 +314,69 @@ pub fn printString(comptime fmt: []const u8, args: anytype) ![]const u8 {
     return str_w.buffer[start..str_w.pos];
 }
 
+const MangleItem = struct {
+    ident: []const u8,
+    count: usize = 0,
+};
+//Recursivly walk through psg defining types while going along
+//returns how many items it append to list
+var nest_level: i64 = 0;
+pub fn mangleTypeNames(parent: *ParseStructGen, mangle_list: *std.StringHashMap(usize)) !void {
+    nest_level += 1;
+    defer nest_level -= 1;
+    //add all decls to hash_map, any existing will be given a mangle counter
+    for (parent.decls.items) |decl| {
+        const res = try mangle_list.getOrPut(try parent.alloc.dupe(u8, decl.name));
+        if (res.found_existing) { //remember to update the name
+            res.value_ptr.* += 1;
+            std.debug.print("{d} ADDING EXISTING {s} {d}\n", .{ nest_level, decl.name, res.value_ptr.* });
+        } else {
+            std.debug.print("iNIT PUT {s}\n", .{decl.name});
+            res.value_ptr.* = 0;
+        }
+        //If the decl already exists, indicate that it needs to be mangled
+    }
+    for (parent.fields.items) |*f| {
+        switch (f.type) {
+            .primitive => {},
+            .compound => |co| {
+                if (mangle_list.get(co.name)) |found| {
+                    if (found > 0)
+                        co.name = try printString("{s}_{d}", .{ co.name, found });
+                }
+            },
+        }
+    }
+    for (parent.decls.items) |decl| {
+        if (mangle_list.getPtr(decl.name)) |item| {
+            if (item.* > 0) {
+                decl.name = try printString("{s}_{d}", .{ decl.name, item.* });
+                //
+                item.* -= 1;
+            }
+        }
+    }
+    for (parent.decls.items) |decl| {
+        switch (decl.d) {
+            else => {},
+            ._union => |*d| {
+                try mangleTypeNames(&d.psg, mangle_list);
+            },
+            ._struct => |*d| {
+                try mangleTypeNames(d, mangle_list);
+            },
+            ._array => |*d| {
+                try mangleTypeNames(&d.s, mangle_list);
+            },
+        }
+    }
+}
+
 pub const ParseStructGen = struct {
     const Self = @This();
     pub const PType = union(enum) {
         primitive: []const u8, // all primitive types have a mc.parse_primitiveName() function
-        compound: *const Decl,
+        compound: *Decl,
 
         pub fn getIdentifier(self: @This()) ![]const u8 {
             return switch (self) {
@@ -326,7 +400,8 @@ pub const ParseStructGen = struct {
         name: []const u8,
         type: PType,
         optional: bool = false,
-        counter_arg_name: ?[]const u8 = null,
+        counter_arg_name: ?[]const u8 = null, //If set, parse funtions will have this as an additional arg, should be f_myCounterArg
+        switch_arg_name: ?[]const u8 = null, //Same as counter but for switching
         //type_identifier: []const u8,
     };
     pub const EnumT = struct { //These are from "mappers"
@@ -556,22 +631,47 @@ pub const ParseStructGen = struct {
                         try w.print("}}\n", .{});
                     },
                     .none => {
-                        try w.print("\npub fn parse({s}:anytype)!@This() {{\n", .{if (self.fields.items.len > 0) "pctx" else "_"});
+                        const pctx_var: []const u8 = if (self.fields.items.len > 0) "pctx" else "_";
                         const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
-                        try w.print("{s} ret: @This() = undefined;\n", .{cvar});
-                        for (self.fields.items) |f| {
-                            const extra_args = if (f.counter_arg_name) |cn| try printString(",ret.{s}", .{cn}) else "";
-                            if (f.optional)
-                                try w.print("if(try pctx.parse_bool()){{\n", .{});
-                            switch (f.type) {
-                                .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
-                                .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx {s});\n", .{ f.name, co.name, extra_args }),
+                        if (self.parse_as_union) {
+                            try w.print("\npub fn parse({s}:anytype, switch_arg: i32)!@This() {{\n", .{pctx_var});
+                            try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                            try w.print("switch(switch_arg){{\n", .{});
+                            for (self.fields.items) |f| {
+                                try w.print(".{s} => {{ \n", .{f.name});
+                                if (f.optional)
+                                    try w.print("if(try pctx.parse_bool()){{\n", .{});
+                                switch (f.type) {
+                                    .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
+                                    .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx);\n", .{ f.name, co.name }),
+                                }
+                                if (f.optional) {
+                                    try w.print("}}", .{});
+                                    try w.print("ret.{s} = null\n;", .{f.name});
+                                }
+                                try w.print("}},", .{});
                             }
-                            if (f.optional)
-                                try w.print("}}", .{});
+
+                            try w.print("}}\nreturn ret;\n", .{});
+                            try w.print("}}\n", .{});
+                        } else {
+                            try w.print("\npub fn parse({s}:anytype)!@This() {{\n", .{pctx_var});
+                            try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                            for (self.fields.items) |f| {
+                                const switch_args = if (f.switch_arg_name) |sn| try printString(",ret.{s}", .{sn}) else "";
+                                const extra_args = if (f.counter_arg_name) |cn| try printString(",ret.{s}", .{cn}) else "";
+                                if (f.optional)
+                                    try w.print("if(try pctx.parse_bool()){{\n", .{});
+                                switch (f.type) {
+                                    .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
+                                    .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx {s} {s});\n", .{ f.name, co.name, extra_args, switch_args }),
+                                }
+                                if (f.optional)
+                                    try w.print("}}", .{});
+                            }
+                            try w.print("return ret;\n", .{});
+                            try w.print("}}\n\n", .{});
                         }
-                        try w.print("return ret;\n", .{});
-                        try w.print("}}\n\n", .{});
                     },
                 }
             },
@@ -772,7 +872,8 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                             break :blk getV(ob.get("name").?, .string);
                         };
                         //We have to add something to every field identifier because of a global type named "tags" and multiple fields named "tags"
-                        const ident_mangle = try printString("f_{s}", .{ident});
+                        const ident_mangle = ident;
+                        //const ident_mangle = try printString("f_{s}", .{ident});
                         const field_type = ob.get("type").?;
                         try newGenType(field_type, &child.d._struct, ident_mangle, .{ .gen_fields = true, .optional = false });
                     }
@@ -786,7 +887,9 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //type
                     const sw_def = getV(a.items[1], .object);
                     const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
-                    const tag_type_name = try printString("f_{s}", .{sw_def.get("compareTo").?.string});
+                    //const tag_type_name = try getLastMangled(sw_def.get("compareTo",.?))
+                    const tag_type_name = sw_def.get("compareTo").?.string;
+                    //const tag_type_name = try printString("f_{s}", .{sw_def.get("compareTo").?.string});
                     var found = false;
                     //TODO these (1.21.3) packets have the switch's tag variable somewhere other than the direct parent and use a path notation: ../mystupid/path
                     //packet_player_info
@@ -814,6 +917,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         .psg = ParseStructGen.init(parent.alloc),
                         .tag_type = try parent.fields.items[index].type.getIdentifier(),
                     } };
+                    child.d._union.psg.parse_as_union = true;
                     const fields = sw_def.get("fields").?.object;
                     var f_it = fields.iterator();
                     while (f_it.next()) |f| {
@@ -831,7 +935,12 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //const fields = getV(a.items[1], .array).items;
                     //First memory represent, then worry about logic to retrieve switch(value)
                     if (flags.gen_fields)
-                        try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
+                        try parent.fields.append(.{
+                            .name = fname,
+                            .optional = flags.optional,
+                            .type = .{ .compound = child },
+                            .switch_arg_name = tag_type_name,
+                        });
                 },
                 .buffer, .array => {
                     const array_def = getV(a.items[1], .object);
@@ -840,7 +949,8 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         const count_type_str = getV(array_def.get("countType") orelse {
                             switch (t) {
                                 .array => { //An array without a countType must have a string count that points to parent var
-                                    const count_name = try printString("f_{s}", .{try getVE(array_def.get("count").?, .string)});
+                                    //const count_name = try printString("f_{s}", .{try getVE(array_def.get("count").?, .string)});
+                                    const count_name = try getVE(array_def.get("count").?, .string);
                                     var found = false;
                                     var index: usize = 0;
                                     for (parent.fields.items, 0..) |f, i| { //Search through parent's fields for matching tag
@@ -877,12 +987,13 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._array = .{ .s = ParseStructGen.init(parent.alloc), .emit_kind = ekind } };
                     try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), .{ .gen_fields = true, .optional = false });
-                    try parent.fields.append(.{
-                        .name = fname,
-                        .optional = flags.optional,
-                        .type = .{ .compound = child },
-                        .counter_arg_name = if (ekind == .array_ref) ekind.array_ref.ref_name else null,
-                    });
+                    if (flags.gen_fields)
+                        try parent.fields.append(.{
+                            .name = fname,
+                            .optional = flags.optional,
+                            .type = .{ .compound = child },
+                            .counter_arg_name = if (ekind == .array_ref) ekind.array_ref.ref_name else null,
+                        });
                 },
                 .option => {
                     try newGenType(a.items[1], parent, fname, .{ .gen_fields = true, .optional = true });
