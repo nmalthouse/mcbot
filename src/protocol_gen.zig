@@ -326,7 +326,7 @@ pub const ParseStructGen = struct {
         name: []const u8,
         type: PType,
         optional: bool = false,
-        requires_count: bool = false,
+        counter_arg_name: ?[]const u8 = null,
         //type_identifier: []const u8,
     };
     pub const EnumT = struct { //These are from "mappers"
@@ -392,6 +392,7 @@ pub const ParseStructGen = struct {
     fields: std.ArrayList(Field),
     decls: std.ArrayList(*Decl), //Pointer so we can store references to it
     alloc: std.mem.Allocator,
+    parse_as_union: bool = false, //this is here as we store unions as a ParseStructgen type and need a way to indicate.
 
     pub fn init(alloc: std.mem.Allocator) @This() {
         return .{
@@ -438,7 +439,6 @@ pub const ParseStructGen = struct {
                             try w.print("return @This(){{\n", .{});
                             try w.print(".flag = val\n", .{});
                             try w.print("}};\n", .{});
-                            //try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
                             try w.print("}}\n", .{});
                         },
                         .send => {
@@ -469,7 +469,6 @@ pub const ParseStructGen = struct {
                                 sig_w += f.int_w;
                             }
                             try w.print("}};\n", .{});
-                            //try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
                             try w.print("}}\n", .{});
                         },
                         .send => {
@@ -510,7 +509,7 @@ pub const ParseStructGen = struct {
                     try w.print("}};\n\n", .{});
                 },
                 ._union => |u| {
-                    try w.print("pub const {s} = union(enum){{\n", .{d.name});
+                    try w.print("pub const {s} = union(enum(i32)){{\n", .{d.name});
                     try w.print("//{s}\n", .{u.tag_type});
                     try u.psg.emit(w, .{ .none = {} }, dir);
                     try w.print("}};\n\n", .{});
@@ -561,7 +560,7 @@ pub const ParseStructGen = struct {
                         const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
                         try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                         for (self.fields.items) |f| {
-                            const extra_args = if (f.requires_count) ",69" else "";
+                            const extra_args = if (f.counter_arg_name) |cn| try printString(",ret.{s}", .{cn}) else "";
                             if (f.optional)
                                 try w.print("if(try pctx.parse_bool()){{\n", .{});
                             switch (f.type) {
@@ -878,7 +877,12 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._array = .{ .s = ParseStructGen.init(parent.alloc), .emit_kind = ekind } };
                     try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), .{ .gen_fields = true, .optional = false });
-                    try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child }, .requires_count = ekind == .array_ref });
+                    try parent.fields.append(.{
+                        .name = fname,
+                        .optional = flags.optional,
+                        .type = .{ .compound = child },
+                        .counter_arg_name = if (ekind == .array_ref) ekind.array_ref.ref_name else null,
+                    });
                 },
                 .option => {
                     try newGenType(a.items[1], parent, fname, .{ .gen_fields = true, .optional = true });
