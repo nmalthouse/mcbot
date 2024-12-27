@@ -1,4 +1,6 @@
 const std = @import("std");
+/// This constant determines which version of java edition minecraft the bot will build for.
+/// Maps to keys inside of minecraft-data/data/dataPaths.json["pc"]
 const MC_VERSION_STRING = "1.21.3";
 
 pub fn build(b: *std.Build) void {

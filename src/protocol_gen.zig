@@ -82,10 +82,9 @@ pub fn main() !void {
         //.{ "vec2f", "mc.Vec2f" },
         //.{ "Particle", em },
         //.{ "vec3f", "mc.V3f" },
-        .{ "IDSet", em },
         //.{ "Type_PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
-        .{ "Type_IDSet", em },
         .{ "Type_tags", em },
+        .{ "Type_IDSet", "void" },
         .{ "Type_string", "[]const u8" },
         .{ "Type_ByteArray", "[]const u8" },
         .{ "Type_entityMetadata", em },
@@ -120,15 +119,20 @@ pub fn main() !void {
         .{ "bool", "bool" },
         .{ "f32", "f32" },
         .{ "f64", "f64" },
+        .{ "string", "[]const u8" },
+        .{ "ContainerID", "i32" },
+        .{ "anonymousNbt", "mc.nbt_zig.Entry" },
+        .{ "anonOptionalNbt", "?mc.nbt_zig.Entry" },
         .{ "container", omit }, //You gotta love protodef
         .{ "switch", ddd },
         .{ "bitfield", ddd },
-        .{ "void", ddd },
+        .{ "void", "void" },
         .{ "array", ddd },
         .{ "bitflags", ddd },
         .{ "option", ddd },
         .{ "topBitSetTerminatedArray", ddd },
     };
+    //Need to have a map that indicates if something can be parsed by pctx or not
 
     var native_map = std.StringHashMap([]const u8).init(alloc);
     defer native_map.deinit();
@@ -209,23 +213,24 @@ pub fn main() !void {
                 },
             }
         }
-        try mangleTypeNames(&parent, &mangle_map);
+        try mangleTypeNames(&parent, &mangle_map, false);
         try parent.emit(
             w,
             .{ .none = {} },
             .recv,
+            &native_map,
         );
         //try w.print("}};\n", .{});
     }
 
-    try emitPacketEnum(arena_alloc, &root, w, "play", "toClient", "Play_Clientbound");
-    try emitPacketEnum(arena_alloc, &root, w, "play", "toServer", "Play_Serverbound");
-    try emitPacketEnum(arena_alloc, &root, w, "handshaking", "toServer", "Handshake_Serverbound");
-    try emitPacketEnum(arena_alloc, &root, w, "handshaking", "toClient", "Handshake_Clientbound");
-    try emitPacketEnum(arena_alloc, &root, w, "login", "toClient", "Login_Clientbound");
-    try emitPacketEnum(arena_alloc, &root, w, "login", "toServer", "Login_Serverbound");
-    try emitPacketEnum(arena_alloc, &root, w, "configuration", "toClient", "Config_Clientbound");
-    try emitPacketEnum(arena_alloc, &root, w, "configuration", "toServer", "Config_Serverbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "play", "toClient", "Play_Clientbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "play", "toServer", "Play_Serverbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "handshaking", "toServer", "Handshake_Serverbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "handshaking", "toClient", "Handshake_Clientbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "login", "toClient", "Login_Clientbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "login", "toServer", "Login_Serverbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "configuration", "toClient", "Config_Clientbound");
+    try emitPacketEnum(&native_map, arena_alloc, &root, w, "configuration", "toServer", "Config_Serverbound");
 
     { //Various enums
         var ents = try com.readJson(try getDir(&version_map, "entities"), "entities.json", alloc, []struct { id: u32, name: []const u8 });
@@ -248,7 +253,7 @@ pub fn main() !void {
     }
 }
 
-pub fn emitPacketEnum(alloc: std.mem.Allocator, root: *std.json.ObjectMap, writer: anytype, game_state: []const u8, direction: []const u8, enum_name: []const u8) !void {
+pub fn emitPacketEnum(native_map: *const std.StringHashMap([]const u8), alloc: std.mem.Allocator, root: *std.json.ObjectMap, writer: anytype, game_state: []const u8, direction: []const u8, enum_name: []const u8) !void {
     const play = (getV(root.get(game_state) orelse return, .object));
     const type_it = getV((getV(play.get(direction) orelse unreachable, .object)).get("types") orelse unreachable, .object);
     const map = getV(getV(getV(getV(getV(getV(type_it.get("packet") orelse unreachable, .array).items[1], .array).items[0], .object).get("type") orelse unreachable, .array).items[1], .object).get("mappings") orelse unreachable, .object);
@@ -275,12 +280,13 @@ pub fn emitPacketEnum(alloc: std.mem.Allocator, root: *std.json.ObjectMap, write
                 continue;
             };
         }
-        try mangleTypeNames(&parent, &mangle_map);
+        try mangleTypeNames(&parent, &mangle_map, true);
         try writer.print("pub const packets = struct {{\n", .{});
         try parent.emit(
             writer,
             .{ .none = {} },
             if (std.mem.eql(u8, "toClient", direction)) .recv else .send,
+            native_map,
         );
         try writer.print("}};\n", .{});
     }
@@ -321,7 +327,7 @@ const MangleItem = struct {
 //Recursivly walk through psg defining types while going along
 //returns how many items it append to list
 var nest_level: i64 = 0;
-pub fn mangleTypeNames(parent: *ParseStructGen, mangle_list: *std.StringHashMap(usize)) !void {
+pub fn mangleTypeNames(parent: *ParseStructGen, mangle_list: *std.StringHashMap(usize), remove_tl: bool) !void {
     nest_level += 1;
     defer nest_level -= 1;
     //add all decls to hash_map, any existing will be given a mangle counter
@@ -329,9 +335,7 @@ pub fn mangleTypeNames(parent: *ParseStructGen, mangle_list: *std.StringHashMap(
         const res = try mangle_list.getOrPut(try parent.alloc.dupe(u8, decl.name));
         if (res.found_existing) { //remember to update the name
             res.value_ptr.* += 1;
-            std.debug.print("{d} ADDING EXISTING {s} {d}\n", .{ nest_level, decl.name, res.value_ptr.* });
         } else {
-            std.debug.print("iNIT PUT {s}\n", .{decl.name});
             res.value_ptr.* = 0;
         }
         //If the decl already exists, indicate that it needs to be mangled
@@ -360,14 +364,23 @@ pub fn mangleTypeNames(parent: *ParseStructGen, mangle_list: *std.StringHashMap(
         switch (decl.d) {
             else => {},
             ._union => |*d| {
-                try mangleTypeNames(&d.psg, mangle_list);
+                try mangleTypeNames(&d.psg, mangle_list, true);
             },
             ._struct => |*d| {
-                try mangleTypeNames(d, mangle_list);
+                try mangleTypeNames(d, mangle_list, true);
             },
             ._array => |*d| {
-                try mangleTypeNames(&d.s, mangle_list);
+                try mangleTypeNames(&d.s, mangle_list, true);
             },
+        }
+    }
+    if (remove_tl) {
+        for (parent.decls.items) |decl| {
+            if (mangle_list.getPtr(decl.name)) |item| {
+                if (item.* == 0) {
+                    _ = mangle_list.remove(decl.name);
+                }
+            }
         }
     }
 }
@@ -400,9 +413,30 @@ pub const ParseStructGen = struct {
         name: []const u8,
         type: PType,
         optional: bool = false,
+        dont_emit_default: bool = false,
         counter_arg_name: ?[]const u8 = null, //If set, parse funtions will have this as an additional arg, should be f_myCounterArg
         switch_arg_name: ?[]const u8 = null, //Same as counter but for switching
         //type_identifier: []const u8,
+
+        pub fn printParseFn(f: *const Field, w: anytype, native_mapper: *const std.StringHashMap([]const u8), ret_str: []const u8) !void {
+            const switch_args = if (f.switch_arg_name) |sn| try printString(",ret.{s}", .{sn}) else "";
+            const extra_args = if (f.counter_arg_name) |cn| try printString(",@intCast(ret.{s})", .{cn}) else "";
+            if (f.optional)
+                try w.print("if(try pctx.parse_bool()){{\n", .{});
+            switch (f.type) {
+                .primitive => |p| {
+                    if (native_mapper.get(p) != null) {
+                        try w.print("{s}{s} = try pctx.parse_{s}();\n", .{ ret_str, f.name, p });
+                    } else {
+                        try w.print("{s}{s} = try Type_{s}.parse(pctx);\n", .{ ret_str, f.name, p });
+                    }
+                },
+                //.primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
+                .compound => |co| try w.print("{s}{s} = try {s}.parse(pctx {s} {s});\n", .{ ret_str, f.name, co.name, extra_args, switch_args }),
+            }
+            if (f.optional)
+                try w.print("}}", .{});
+        }
     };
     pub const EnumT = struct { //These are from "mappers"
         const FType = struct {
@@ -468,6 +502,8 @@ pub const ParseStructGen = struct {
     decls: std.ArrayList(*Decl), //Pointer so we can store references to it
     alloc: std.mem.Allocator,
     parse_as_union: bool = false, //this is here as we store unions as a ParseStructgen type and need a way to indicate.
+    parse_as_union_type: []const u8 = "",
+    parse_as_union_is_num: bool = false,
 
     pub fn init(alloc: std.mem.Allocator) @This() {
         return .{
@@ -488,7 +524,7 @@ pub const ParseStructGen = struct {
         return new_decl;
     }
 
-    pub fn emit(self: *const Self, w: anytype, emit_kind: EmitKind, dir: EmitDir) !void {
+    pub fn emit(self: *const Self, w: anytype, emit_kind: EmitKind, dir: EmitDir, native_mapper: *const std.StringHashMap([]const u8)) !void {
         for (self.decls.items) |d| {
             if (d.unsupported) {
                 try w.print("pub const {s} = error.cannotBeAutoGenerated;\n", .{d.name});
@@ -580,24 +616,24 @@ pub const ParseStructGen = struct {
                 },
                 ._array => |a| {
                     try w.print("pub const {s} = struct{{\n", .{d.name});
-                    try a.s.emit(w, a.emit_kind, dir);
+                    try a.s.emit(w, a.emit_kind, dir, native_mapper);
                     try w.print("}};\n\n", .{});
                 },
                 ._union => |u| {
-                    try w.print("pub const {s} = union(enum(i32)){{\n", .{d.name});
+                    try w.print("pub const {s} = union(enum){{\n", .{d.name});
                     try w.print("//{s}\n", .{u.tag_type});
-                    try u.psg.emit(w, .{ .none = {} }, dir);
+                    try u.psg.emit(w, .{ .none = {} }, dir, native_mapper);
                     try w.print("}};\n\n", .{});
                 },
                 ._struct => |s| {
                     try w.print("pub const {s} = struct{{\n", .{d.name});
-                    try s.emit(w, .{ .none = {} }, dir);
+                    try s.emit(w, .{ .none = {} }, dir, native_mapper);
                     try w.print("}};\n\n", .{});
                 },
             }
         }
         for (self.fields.items) |f| {
-            if (f.optional) {
+            if (f.optional and !f.dont_emit_default) {
                 try w.print("{s}: ?{s} = null,\n", .{ f.name, try f.type.getIdentifier() });
             } else {
                 try w.print("{s}: {s},\n", .{ f.name, try f.type.getIdentifier() });
@@ -621,10 +657,11 @@ pub const ParseStructGen = struct {
                         }
                         try w.print("const array = try pctx.alloc.alloc(@This(), item_count);\n", .{});
                         try w.print("for(0..item_count)|i|{{\n", .{});
-                        switch (item_field.type) {
-                            .primitive => |p| try w.print("array[i].{s} = try pctx.parse_{s}();\n", .{ item_field.name, p }),
-                            .compound => |co| try w.print("array[i].{s} = try {s}.parse(pctx);\n", .{ item_field.name, co.name }),
-                        }
+                        try item_field.printParseFn(w, native_mapper, "array[i].");
+                        //switch (item_field.type) {
+                        //    .primitive => |p| try w.print("array[i].{s} = try pctx.parse_{s}();\n", .{ item_field.name, p }),
+                        //    .compound => |co| try w.print("array[i].{s} = try {s}.parse(pctx);\n", .{ item_field.name, co.name }),
+                        //}
                         try w.print("}}\n", .{});
 
                         try w.print("return array;\n", .{});
@@ -634,19 +671,31 @@ pub const ParseStructGen = struct {
                         const pctx_var: []const u8 = if (self.fields.items.len > 0) "pctx" else "_";
                         const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
                         if (self.parse_as_union) {
-                            try w.print("\npub fn parse({s}:anytype, switch_arg: i32)!@This() {{\n", .{pctx_var});
+                            try w.print("\npub fn parse({s}:anytype, switch_arg: {s})!@This() {{\n", .{
+                                pctx_var,
+                                if (self.parse_as_union_is_num) "i32" else self.parse_as_union_type,
+                            });
                             try w.print("{s} ret: @This() = undefined;\n", .{cvar});
-                            try w.print("switch(switch_arg){{\n", .{});
+                            //try w.print("switch(@as({s}, @enumFromInt(switch_arg))){{\n", .{self.parse_as_union_type});
+                            //const int_str = "switch(@as(@typeInfo({s}).Union.tag_type.?, @enumFromInt(switch_arg))){{\n";
+                            const int_str = "switch(@as({s}, @enumFromInt(switch_arg))){{\n";
+                            const enum_str = "switch(switch_arg){\n";
+                            if (self.parse_as_union_is_num) {
+                                try w.print(int_str, .{self.parse_as_union_type});
+                            } else {
+                                try w.print("{s}", .{enum_str});
+                            }
                             for (self.fields.items) |f| {
                                 try w.print(".{s} => {{ \n", .{f.name});
-                                if (f.optional)
-                                    try w.print("if(try pctx.parse_bool()){{\n", .{});
-                                switch (f.type) {
-                                    .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
-                                    .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx);\n", .{ f.name, co.name }),
-                                }
+                                try f.printParseFn(w, native_mapper, "ret.");
+                                //if (f.optional)
+                                //    try w.print("if(try pctx.parse_bool()){{\n", .{});
+                                //switch (f.type) {
+                                //    .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
+                                //    .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx);\n", .{ f.name, co.name }),
+                                //}
                                 if (f.optional) {
-                                    try w.print("}}", .{});
+                                    //    try w.print("}}", .{});
                                     try w.print("ret.{s} = null\n;", .{f.name});
                                 }
                                 try w.print("}},", .{});
@@ -658,16 +707,7 @@ pub const ParseStructGen = struct {
                             try w.print("\npub fn parse({s}:anytype)!@This() {{\n", .{pctx_var});
                             try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                             for (self.fields.items) |f| {
-                                const switch_args = if (f.switch_arg_name) |sn| try printString(",ret.{s}", .{sn}) else "";
-                                const extra_args = if (f.counter_arg_name) |cn| try printString(",ret.{s}", .{cn}) else "";
-                                if (f.optional)
-                                    try w.print("if(try pctx.parse_bool()){{\n", .{});
-                                switch (f.type) {
-                                    .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
-                                    .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx {s} {s});\n", .{ f.name, co.name, extra_args, switch_args }),
-                                }
-                                if (f.optional)
-                                    try w.print("}}", .{});
+                                try f.printParseFn(w, native_mapper, "ret.");
                             }
                             try w.print("return ret;\n", .{});
                             try w.print("}}\n\n", .{});
@@ -768,6 +808,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //  so its a union
                 },
                 .registryEntryHolder => {
+
                     //has the fields
                     //baseName
                     //otherwise
@@ -918,19 +959,32 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         .tag_type = try parent.fields.items[index].type.getIdentifier(),
                     } };
                     child.d._union.psg.parse_as_union = true;
+                    child.d._union.psg.parse_as_union_type = Tname;
+                    //If its a number
+                    //we parse an varint
+                    //we pass a varint to the thing and need to convert it into a tag
+                    //we need to cast on both sides or pass the correct one
+                    //DO THE IS NUM THINGE
                     const fields = sw_def.get("fields").?.object;
                     var f_it = fields.iterator();
+                    var is_num = true;
                     while (f_it.next()) |f| {
                         const int_val = std.fmt.parseInt(i64, f.key_ptr.*, 10) catch {
                             //Not an int so we can continue
                             try newGenType(f.value_ptr.*, &child.d._union.psg, f.key_ptr.*, .{ .gen_fields = true, .optional = false });
+                            is_num = false;
                             continue;
                         };
                         try newGenType(f.value_ptr.*, &child.d._union.psg, try printString("{s}_v_{d}", .{ fname, int_val }), .{ .gen_fields = true, .optional = false });
                     }
+                    child.d._union.psg.parse_as_union_is_num = is_num;
 
+                    //make the default branch the else branch
                     if (sw_def.get("default")) |default| {
                         try newGenType(default, &child.d._union.psg, "default", .{ .gen_fields = true, .optional = false });
+                    }
+                    for (child.d._union.psg.fields.items) |*f| {
+                        f.dont_emit_default = true;
                     }
                     //const fields = getV(a.items[1], .array).items;
                     //First memory represent, then worry about logic to retrieve switch(value)

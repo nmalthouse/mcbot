@@ -272,20 +272,20 @@ pub const McWorld = struct {
         self.entities_mutex.lock();
         defer self.entities_mutex.unlock();
 
-        const g = try self.entities.getOrPut(data.f_entityId);
+        const g = try self.entities.getOrPut(data.entityId);
         if (g.found_existing) {
             g.value_ptr.owners.set(bot.index_id);
         } else {
-            g.key_ptr.* = data.f_entityId;
+            g.key_ptr.* = data.entityId;
             var set = Entity.OwnersT.initEmpty();
             set.set(bot.index_id);
             g.value_ptr.* = .{
                 .owners = set,
                 .kind = etype, //TODO fixme
                 .uuid = uuid,
-                .pos = V3f.new(data.f_x, data.f_y, data.f_z),
-                .pitch = data.f_pitch,
-                .yaw = data.f_yaw,
+                .pos = V3f.new(data.x, data.y, data.z),
+                .pitch = data.pitch,
+                .yaw = data.yaw,
             };
         }
     }

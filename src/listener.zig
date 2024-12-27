@@ -10,6 +10,7 @@ const V3i = vector.V3i;
 const Queue = std.atomic.Queue;
 
 const com = @import("common.zig");
+const MoveFlags = Proto.Play_Serverbound.packets.Type_MovementFlags;
 
 ///When manually parsing a packet rather than using generated, annotate with this.
 pub fn annotateManualParse(comptime mc_version_str: []const u8) void {
@@ -179,19 +180,19 @@ pub const PacketCtx = struct {
 
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
         try self.sendAuto(Proto.Play_Serverbound, .block_dig, .{
-            .f_status = @as(i32, @intFromEnum(status)),
-            .f_location = block_pos,
-            .f_face = 0,
-            .f_sequence = 0,
+            .status = @as(i32, @intFromEnum(status)),
+            .location = block_pos,
+            .face = 0,
+            .sequence = 0,
         });
     }
 
     pub fn setProtocol(self: *@This(), hostname: []const u8, port: u16, protocol_version: i32) !void {
         try self.sendAuto(Proto.Handshake_Serverbound, .set_protocol, .{
-            .f_protocolVersion = protocol_version,
-            .f_serverHost = hostname,
-            .f_serverPort = port,
-            .f_nextState = 2,
+            .protocolVersion = protocol_version,
+            .serverHost = hostname,
+            .serverPort = port,
+            .nextState = 2,
         });
     }
 
@@ -200,7 +201,7 @@ pub const PacketCtx = struct {
     }
 
     pub fn loginPluginResponse(self: *@This(), message_id: i32, payload: ?[]const u8) !void {
-        try self.sendAuto(Proto.Login_Serverbound, .login_plugin_response, .{ .f_messageId = message_id, .f_data = payload });
+        try self.sendAuto(Proto.Login_Serverbound, .login_plugin_response, .{ .messageId = message_id, .data = payload });
     }
 
     pub fn completeLogin(self: *@This()) !void {
@@ -209,8 +210,8 @@ pub const PacketCtx = struct {
 
     pub fn loginStart(self: *@This(), username: []const u8) !void {
         try self.sendAuto(Proto.Login_Serverbound, .login_start, .{
-            .f_username = username,
-            .f_playerUUID = 0, //Unused according to wikivg
+            .username = username,
+            .playerUUID = 0, //Unused according to wikivg
         });
     }
 
@@ -233,7 +234,7 @@ pub const PacketCtx = struct {
             .z = pos.z,
             .yaw = yaw,
             .pitch = pitch,
-            .flags = if (grounded) 1 else 0,
+            .flags = .{ .flag = if (grounded) MoveFlags.flag_onGround else 0 },
         });
     }
 
@@ -242,20 +243,20 @@ pub const PacketCtx = struct {
     }
 
     pub fn pluginMessage(self: *@This(), brand: []const u8) !void {
-        try self.sendAuto(Play, .custom_payload, .{ .f_channel = brand, .f_data = &.{} });
+        try self.sendAuto(Play, .custom_payload, .{ .channel = brand, .data = &.{} });
     }
 
     pub fn clientInfo(self: *@This(), locale: []const u8, render_dist: u8, main_hand: u8) !void {
         try self.sendAuto(Proto.Play_Serverbound, .settings, .{
-            .f_locale = locale,
-            .f_viewDistance = @as(i8, @intCast(render_dist)),
-            .f_chatFlags = 0,
-            .f_particleStatus = .minimal,
-            .f_chatColors = true,
-            .f_skinParts = 0,
-            .f_mainHand = @as(i32, @intCast(main_hand)),
-            .f_enableTextFiltering = false,
-            .f_enableServerListing = true,
+            .locale = locale,
+            .viewDistance = @as(i8, @intCast(render_dist)),
+            .chatFlags = 0,
+            .particleStatus = .minimal,
+            .chatColors = true,
+            .skinParts = 0,
+            .mainHand = @as(i32, @intCast(main_hand)),
+            .enableTextFiltering = false,
+            .enableServerListing = true,
         });
     }
 };
@@ -666,10 +667,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
                 .z = @as(i32, @intCast(pos << 26 >> 38)),
             };
         }
-
-        pub fn parse_position(self: *Self) !vector.V3i {
-            return self.position();
-        }
+        pub const parse_position = Proto.Type_position.parse;
 
         pub fn v3f(self: *Self) V3f {
             return .{
@@ -691,6 +689,8 @@ pub fn packetParseCtx(comptime readerT: type) type {
             try self.reader.readNoEof(slice);
             return slice;
         }
+
+        pub fn parse_void(_: *Self) !void {}
 
         pub fn parse_string(self: *Self) ![]const u8 {
             return try self.string(null);
@@ -728,6 +728,10 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
         pub fn parse_u8(self: *Self) !u8 {
             return self.int(u8);
+        }
+
+        pub fn parse_u64(self: *Self) !u64 {
+            return self.int(u64);
         }
 
         pub fn parse_UUID(self: *Self) !u128 {
@@ -786,10 +790,9 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return try Proto.Play_Clientbound.packets.Type_SpawnInfo.parse(self);
         }
 
-        pub fn parse_Slot(self: *Self) !Slot {
+        pub fn parse_Slot(self: *Self) !Proto.Type_Slot {
             annotateManualParse("1.21.3");
-            _ = self;
-            unreachable;
+            return try Proto.Type_Slot.parse(self);
         }
 
         pub fn parse_MovementFlags(self: *Self) !MovementFlags {
