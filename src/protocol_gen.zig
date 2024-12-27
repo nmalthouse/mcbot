@@ -5,6 +5,57 @@ const JValue = std.json.Value;
 const eql = std.mem.eql;
 const Alloc = std.mem.Allocator;
 const com = @import("common.zig");
+// All the different types of "switch" in the wild: (As of 1.21.3)
+// Type 1
+// A direct mapping of enum values to union members without a default field
+//      ex: RecipeDisplay.data, SlotDisplay.data, SlotComponent.data
+//
+// Type 2
+// A variant of Id(string) or x(int) if parse.varint() == 0, parse the only field in switch (field "0") else return a int
+//      Ex: SlotComponent.trim.materialType (anon), SlotComponent.trimPattern.trimPatternType (anon)
+//          SlotComponent.instrument.instrumentType(anon)
+//          SlotComponent.jukebox_playable.directmode.jukeboxsongtype
+//          SlotComponent.jukebox_playable.directmode.jukeboxsongtype.soundEventType
+//          SlotComponent.banner_patterns.layers.patternType
+//
+// Type 3
+// Essentially an optional type, maps a boolean to two different structs
+//      Ex: SlotComponent.jukebox_playable
+//
+// Type 4
+//  Another variant of optional types with a numerical fields "0","1".. and default used with Slot.itemCount
+//      Ex: if Slot.itemCount > 0 item data is present else nothing
+//          packet_boss_bar.title has two numbers(0,3) and a default
+//
+//  This category is also overloaded to an extent. With a single number field it is essentially an optional.
+//  More than one number field should not occur as the meanings of the numbers should be specifed using an enum/mapper
+//
+// Type 5
+//  Has a single value without a default field, :( see packet_common_server_links
+//  Will not support, it is a bug in the protocol spec imo as we have to infer a default of void
+//
+// Memory Representations
+// Type #, zig type         , parsing method
+//      1, union(enum)      , switch on compareTo enum
+//      2, union(enum)      , switch with else on bare integer
+//      3, union(enum)      , if statement on boolean
+//      4, optional type    , non standard optional code, could probably use (2)
+//
+// Thus, generating code for these "switch" types is annoying.
+// It's worth noting that the code for Type_Slot is around 2000 lines or 1/4 of all generated code and all but one switch are within Type_Slot. As items are sent within arrays and there is no way to determine the byte length of metadata without parsing, it is necessary to generate all this code. If only each component was prefixed with a length field.
+//
+// Json layout for each type of switch
+// Type #, fields
+//      1, "compareTo"(str)->parentFieldEnumIdentifier, "fields"(dict)-> maps enum strings to types, NO "default" field
+//      2, "compareTo"(str)->parentFieldInteger,"fields(dict)->contains a single number key, NO "default" field
+//      3, "compareTo"(str)->parentFieldBool, "fields"(dict)->contains two fields, true, false
+//      4, "compareTo"(str)->parentFieldInteger, "fields"(dict)->"0", contains default field
+//
+// Parsing plan
+// Categorize the "switch"
+// case A: all numerical (opt default)
+// case B: boolean with exactly two fields (NO DEFAULT)
+// case C: all strings mapping to enum (opt default)
 
 fn getV(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) @TypeOf(@field(v, @tagName(tag))) {
     return getVal(v, tag) orelse unreachable;
