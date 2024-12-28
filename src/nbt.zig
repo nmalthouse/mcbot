@@ -238,21 +238,40 @@ pub fn ParseError(comptime ReaderType: type) type {
 pub const EntryWithName = struct { name: ?[]const u8, entry: Entry };
 
 /// Caller owns returned memory. Using an Arena is recommended.
-pub fn parse(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(reader))!EntryWithName {
-    return (try parseWithOptions(allocator, reader, true, null));
+//pub fn parse(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(reader))!EntryWithName {
+//    return (try parseWithOptions(allocator, reader, true, null));
+//}
+
+pub fn parseAnonCompound(alloc: std.mem.Allocator, reader: anytype, is_network: bool) ParseError(@TypeOf(reader))!Entry {
+    const res = try parse(alloc, reader, .{ .in_compound = true, .tag_type = null, .is_networked_root = is_network });
+    //if (res.entry != .compound) return error.InvalidNbt;
+    return res.entry;
 }
 
-pub fn parseAsCompoundEntry(allocator: std.mem.Allocator, reader: anytype) ParseError(@TypeOf(reader))!Entry {
-    const result = try parse(allocator, reader);
+pub fn parseAsCompoundEntry(allocator: std.mem.Allocator, reader: anytype, is_network: bool) ParseError(@TypeOf(reader))!Entry {
+    const result = try parse(allocator, reader, .{
+        .in_compound = true,
+        .tag_type = null,
+        .is_networked_root = is_network,
+    });
     var com = Entry.Compound{};
-    try com.put(allocator, result.name orelse return error.InvalidNbt, result.entry);
+    try com.put(allocator, result.name orelse "", result.entry);
     return Entry{ .compound = com };
 }
 
 /// Caller owns returned memory. Using an Arena is recommended.
-pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compound: bool, tag_type: ?Tag) ParseError(@TypeOf(reader))!EntryWithName {
-    const tag = tag_type orelse (std.meta.intToEnum(Tag, try reader.readByte()) catch return error.InvalidNbt);
-    const name = if (in_compound and tag != .end) n: {
+pub fn parse(
+    allocator: std.mem.Allocator,
+    reader: anytype,
+    options: struct {
+        in_compound: bool = true,
+        tag_type: ?Tag = null,
+        is_networked_root: bool = false,
+    },
+) ParseError(@TypeOf(reader))!EntryWithName {
+    const tag = options.tag_type orelse (std.meta.intToEnum(Tag, try reader.readByte()) catch return error.InvalidNbt);
+
+    const name = if (!options.is_networked_root and options.in_compound and tag != .end) n: {
         const nn = try allocator.alloc(u8, try reader.readInt(u16, .big));
         _ = try reader.readAll(nn);
         break :n nn;
@@ -289,14 +308,14 @@ pub fn parseWithOptions(allocator: std.mem.Allocator, reader: anytype, in_compou
             entries.items.len = @as(usize, @intCast(len));
 
             for (entries.items) |*item|
-                item.* = (try parseWithOptions(allocator, reader, false, @"type")).entry;
+                item.* = (try parse(allocator, reader, .{ .in_compound = false, .tag_type = @"type" })).entry;
 
             break :lis .{ .list = .{ .type = @"type", .entries = entries } };
         },
         .compound => com: {
             var hashmap = Entry.Compound{};
             while (true) {
-                const result = try parseWithOptions(allocator, reader, true, null);
+                const result = try parse(allocator, reader, .{ .in_compound = true });
                 if (result.entry == .end) break;
                 try hashmap.put(allocator, result.name.?, result.entry);
             }

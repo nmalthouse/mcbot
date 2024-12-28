@@ -3,6 +3,7 @@ const Proto = @import("protocol.zig");
 
 const graph = @import("graph");
 const mcBlockAtlas = @import("mc_block_atlas.zig");
+const botJoin = @import("botJoin.zig").botJoin;
 
 const mc = @import("listener.zig");
 const id_list = @import("list.zig");
@@ -68,112 +69,6 @@ pub fn myLogFn(
     defer std.debug.unlockStdErr();
     const stderr = std.io.getStdErr().writer();
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
-}
-
-pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16, version_id: i32) !Bot {
-    const log = std.log.scoped(.parsing);
-    var bot1 = try Bot.init(alloc, bot_name, script_name);
-    errdefer bot1.deinit();
-    const s = try std.net.tcpConnectToHost(alloc, ip, port);
-    bot1.fd = s.handle;
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(alloc, -1), .server = s.writer(), .mutex = &bot1.fd_mutex };
-    defer pctx.packet.deinit();
-    try pctx.setProtocol(ip, port, version_id);
-    try pctx.loginStart(bot1.name);
-    bot1.connection_state = .login;
-    var arena_allocs = std.heap.ArenaAllocator.init(alloc);
-    defer arena_allocs.deinit();
-    const arena_alloc = arena_allocs.allocator();
-    var comp_thresh: i32 = -1;
-
-    while (bot1.connection_state == .login or bot1.connection_state == .config) {
-        const pd = try mc.recvPacket(alloc, s.reader(), comp_thresh);
-        defer alloc.free(pd);
-        var fbs_ = mc.fbsT{ .buffer = pd, .pos = 0 };
-        //const parseT = mc.packetParseCtx(fbsT.Reader);
-        var parse = mc.parseT.init(fbs_.reader(), arena_alloc);
-        const pid = parse.varInt();
-        switch (bot1.connection_state) {
-            else => {},
-            .config => switch (@as(Proto.Config_Clientbound, @enumFromInt(pid))) {
-                .select_known_packs => {
-                    const d = try Proto.Type_packet_common_select_known_packs.parse(&parse);
-                    try pctx.sendManual(Proto.Config_Serverbound.select_known_packs, d);
-                },
-                .custom_payload => {}, //Just ignore, shouldn't need response
-                .feature_flags => {
-                    const d = try Proto.Config_Clientbound.packets.Type_packet_feature_flags.parse(&parse);
-                    log.info("feature flags:", .{});
-                    for (d.features) |f| {
-                        log.info("flag: {s}", .{f.i_features});
-                    }
-                },
-                .ping => {
-                    const d = try Proto.Config_Clientbound.packets.Type_packet_ping.parse(&parse);
-                    try pctx.sendAuto(Proto.Config_Serverbound, .pong, .{ .id = d.id });
-                },
-                .finish_configuration => {
-                    log.info("Config finished", .{});
-                    bot1.connection_state = .play;
-                    try pctx.sendAuto(Proto.Config_Serverbound, .finish_configuration, .{});
-                },
-                .disconnect => {
-                    const d = try Proto.Config_Clientbound.packets.Type_packet_disconnect.parse(&parse);
-                    log.warn("Disconnected: {s}\n", .{d.reason});
-                    return error.disconnectedDuringConfig;
-                },
-                else => {
-                    std.debug.print("CONFIG PACKET {s}\n", .{@tagName(@as(Proto.Config_Clientbound, @enumFromInt(pid)))});
-                },
-            },
-            .login => switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
-                .cookie_request => {
-                    annotateManualParse("1.21.3");
-                },
-                .disconnect => {
-                    const d = try Proto.Login_Clientbound.packets.Type_packet_disconnect.parse(&parse);
-                    log.warn("Disconnected: {s}\n", .{d.reason});
-                    return error.disconnectedDuringLogin;
-                },
-                .compress => {
-                    const d = try Proto.Login_Clientbound.packets.Type_packet_compress.parse(&parse);
-                    comp_thresh = d.threshold;
-                    log.info("Setting Compression threshhold: {d}\n", .{d.threshold});
-                    if (d.threshold < 0) {
-                        log.err("Invalid compression threshold from server: {d}", .{d.threshold});
-                        return error.invalidCompressionThreshold;
-                    } else {
-                        bot1.compression_threshold = d.threshold;
-                        pctx.packet.comp_thresh = d.threshold;
-                    }
-                },
-                .encryption_begin => {
-                    std.debug.print("\n!!!!!!!!!!!\n", .{});
-                    std.debug.print("ONLINE MODE NOT SUPPORTED\nDISABLE with online-mode=false in server.properties\n", .{});
-                    std.process.exit(1);
-                },
-                .success => {
-                    const d = try Proto.Login_Clientbound.packets.Type_packet_success.parse(&parse);
-                    log.info("Login Success: {d}: {s}", .{ d.uuid, d.username });
-
-                    try pctx.sendAuto(Proto.Login_Serverbound, .login_acknowledged, .{});
-                    bot1.uuid = d.uuid;
-                    bot1.connection_state = .config;
-                },
-                .login_plugin_request => {
-                    const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);
-                    log.info("Login plugin request {d} {s}", .{ data.messageId, data.channel });
-                    log.info("Payload {s}", .{data.data});
-
-                    try pctx.loginPluginResponse(
-                        data.messageId,
-                        null, // We tell the server we don't understand any plugin requests, might be a problem
-                    );
-                },
-            },
-        }
-    }
-    return bot1;
 }
 
 pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8, .scalar)) ?vector.V3f {
@@ -339,7 +234,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             var tracker = tr.init(arena_alloc, parse.reader);
             defer tracker.deinit();
 
-            const nbt_data = nbt_zig.parse(arena_alloc, tracker.reader()) catch null;
+            const nbt_data = nbt_zig.parse(arena_alloc, tracker.reader(), .{ .is_networked_root = true }) catch null;
             if (nbt_data) |nbt| {
                 try world.putBlockEntity(bot1.dimension_id, pos, nbt.entry, arena_alloc);
             }
@@ -388,7 +283,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
             const dim = world.dimensions.getPtr(bot1.dimension_id).?; //CHECK ERR
 
-            const nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader);
+            const nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader, true);
             _ = nbt_data;
             const data_size = parse.varInt();
             var raw_chunk = std.ArrayList(u8).init(alloc);
@@ -531,14 +426,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             bot1.dimension_id = d.dimension;
         },
         .login => {
-            unreachable;
-            //const d = try CB.Type_packet_login.parse(&parse);
-            //const ws = d.worldState;
-            //bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
-            //bot1.init_status.has_login = true;
-            //std.debug.print("{s} {s}\n", .{ d.worldType, d.worldName });
-            //world.modify_mutex.lock();
-            //defer world.modify_mutex.unlock();
+            const d = try CB.Type_packet_login.parse(&parse);
+            const ws = d.worldState;
+            bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
+            bot1.init_status.has_login = true;
+            std.debug.print("{s} id:{d}\n", .{ ws.name, ws.dimension });
+            world.modify_mutex.lock();
+            defer world.modify_mutex.unlock();
             //for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
             //    const name = dims.compound.get("name").?;
             //    const elem = dims.compound.get("element").?.compound;
@@ -554,8 +448,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //    if (world.dimensions.get(new_dim.id) == null)
             //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
             //}
-            //const player_dim = world.dimension_map.get(d.worldName).?;
-            //bot1.dimension_id = player_dim.id;
+            bot1.dimension_id = ws.dimension;
+            unreachable;
 
             //const j = try d.dimensionCodec.entry.toJsonValue(arena_alloc);
             //const wr = std.io.getStdOut().writer();

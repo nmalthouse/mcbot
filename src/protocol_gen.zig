@@ -518,8 +518,10 @@ pub const ParseStructGen = struct {
                 if (f.switch_arg_is_bool) ")" else "",
             }) else "";
             const extra_args = if (f.counter_arg_name) |cn| try printString(",@intCast(ret.{s})", .{cn}) else "";
-            if (f.optional == .yes)
+            if (f.optional == .yes) {
+                try w.print("{s}{s} = null;", .{ ret_str, f.name }); //Ret is undefined, prevent undefined memory
                 try w.print("if(try pctx.parse_bool()){{\n", .{});
+            }
             if (f.optional == .yes_ptr) {
                 //UGLY HACK for this ugly packet
                 try w.print("const stupid = try pctx.alloc.create({s});\n", .{try f.type.getIdentifier()});

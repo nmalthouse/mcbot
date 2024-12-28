@@ -827,7 +827,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const btype = self.varInt();
             const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
             var tracker = tr.init(self.alloc, self.reader);
-            const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
+            const nbt = nbt_zig.parse(self.alloc, tracker.reader(), .{ .is_networked_root = true }) catch unreachable;
             return BlockEntityP{
                 .rel_x = @intCast(pxz >> 4),
                 .rel_z = @intCast(pxz & 0xf),
@@ -838,12 +838,12 @@ pub fn packetParseCtx(comptime readerT: type) type {
         }
 
         pub fn parse_anonymousNbt(self: *Self) ParseError!nbt_zig.Entry {
-            const nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
+            const nbt_data = try nbt_zig.parseAnonCompound(self.alloc, self.reader, true);
             return nbt_data;
         }
 
         pub fn parse_anonOptionalNbt(self: *Self) ParseError!?nbt_zig.Entry {
-            const nbt_data = nbt_zig.parseAsCompoundEntry(self.alloc, self.reader) catch return null;
+            const nbt_data = nbt_zig.parseAsCompoundEntry(self.alloc, self.reader, true) catch return null;
             return nbt_data;
         }
 
