@@ -418,7 +418,7 @@ pub const Bot = struct {
     view_dist: u8 = 2,
     handshake_complete: bool = false,
     compression_threshold: i32 = -1,
-    connection_state: enum { play, login, none } = .none,
+    connection_state: enum { play, login, config, none } = .none,
     script_filename: ?[]const u8 = null,
     uuid: u128 = 0,
     name: []const u8,

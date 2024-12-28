@@ -104,6 +104,13 @@ pub const PacketCtx = struct {
         try self.wr();
     }
 
+    pub fn sendManual(self: *@This(), packet_id: anytype, packet: anytype) !void {
+        try self.packet.clear();
+        try self.packet.packetId(packet_id);
+        try packet.send(&self.packet);
+        try self.wr();
+    }
+
     pub fn deinit(self: *@This()) void {
         self.packet.deinit();
     }
@@ -791,10 +798,11 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return self.varInt();
         }
 
-        //TODO currently in 1.21.3 protocol.json there is an extra field, optvarint that shoudln't be there
-        //this not parsing anything breaks the following packets
+        //TODO currently in 1.21.3 protocol.json there is an extra field,(numberOfOverrides) optvarint that shouldn't be there
+        //this not parsing anything breaks the following packets but ensures Type_Slot is parsed correctly
         //entity metadata
         //packet_recipe_book_add
+        //An issue should probably be filed assuming I am correct
         pub fn parse_optvarint(self: *Self) ParseError!i32 {
             _ = self;
             return 0;

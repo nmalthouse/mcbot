@@ -39,7 +39,7 @@ pub const std_options = .{
     .log_level = .debug,
     .logFn = myLogFn,
 };
-const LOG_ALL = false;
+const LOG_ALL = true;
 const annotateManualParse = mc.annotateManualParse;
 
 pub fn myLogFn(
@@ -86,55 +86,90 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     const arena_alloc = arena_allocs.allocator();
     var comp_thresh: i32 = -1;
 
-    while (bot1.connection_state == .login) {
+    while (bot1.connection_state == .login or bot1.connection_state == .config) {
         const pd = try mc.recvPacket(alloc, s.reader(), comp_thresh);
         defer alloc.free(pd);
         var fbs_ = mc.fbsT{ .buffer = pd, .pos = 0 };
         //const parseT = mc.packetParseCtx(fbsT.Reader);
         var parse = mc.parseT.init(fbs_.reader(), arena_alloc);
         const pid = parse.varInt();
-        switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
-            .cookie_request => {
-                annotateManualParse("1.21.3");
+        switch (bot1.connection_state) {
+            else => {},
+            .config => switch (@as(Proto.Config_Clientbound, @enumFromInt(pid))) {
+                .select_known_packs => {
+                    const d = try Proto.Type_packet_common_select_known_packs.parse(&parse);
+                    try pctx.sendManual(Proto.Config_Serverbound.select_known_packs, d);
+                },
+                .custom_payload => {}, //Just ignore, shouldn't need response
+                .feature_flags => {
+                    const d = try Proto.Config_Clientbound.packets.Type_packet_feature_flags.parse(&parse);
+                    log.info("feature flags:", .{});
+                    for (d.features) |f| {
+                        log.info("flag: {s}", .{f.i_features});
+                    }
+                },
+                .ping => {
+                    const d = try Proto.Config_Clientbound.packets.Type_packet_ping.parse(&parse);
+                    try pctx.sendAuto(Proto.Config_Serverbound, .pong, .{ .id = d.id });
+                },
+                .finish_configuration => {
+                    log.info("Config finished", .{});
+                    bot1.connection_state = .play;
+                    try pctx.sendAuto(Proto.Config_Serverbound, .finish_configuration, .{});
+                },
+                .disconnect => {
+                    const d = try Proto.Config_Clientbound.packets.Type_packet_disconnect.parse(&parse);
+                    log.warn("Disconnected: {s}\n", .{d.reason});
+                    return error.disconnectedDuringConfig;
+                },
+                else => {
+                    std.debug.print("CONFIG PACKET {s}\n", .{@tagName(@as(Proto.Config_Clientbound, @enumFromInt(pid)))});
+                },
             },
-            .disconnect => {
-                const d = try Proto.Login_Clientbound.packets.Type_packet_disconnect.parse(&parse);
-                log.warn("Disconnected: {s}\n", .{d.reason});
-                return error.disconnectedDuringLogin;
-            },
-            .compress => {
-                const d = try Proto.Login_Clientbound.packets.Type_packet_compress.parse(&parse);
-                comp_thresh = d.threshold;
-                log.info("Setting Compression threshhold: {d}\n", .{d.threshold});
-                if (d.threshold < 0) {
-                    log.err("Invalid compression threshold from server: {d}", .{d.threshold});
-                    return error.invalidCompressionThreshold;
-                } else {
-                    bot1.compression_threshold = d.threshold;
-                    pctx.packet.comp_thresh = d.threshold;
-                }
-            },
-            .encryption_begin => {
-                std.debug.print("\n!!!!!!!!!!!\n", .{});
-                std.debug.print("ONLINE MODE NOT SUPPORTED\nDISABLE with online-mode=false in server.properties\n", .{});
-                std.process.exit(1);
-            },
-            .success => {
-                const d = try Proto.Login_Clientbound.packets.Type_packet_success.parse(&parse);
-                log.info("Login Success: {d}: {s}", .{ d.uuid, d.username });
+            .login => switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
+                .cookie_request => {
+                    annotateManualParse("1.21.3");
+                },
+                .disconnect => {
+                    const d = try Proto.Login_Clientbound.packets.Type_packet_disconnect.parse(&parse);
+                    log.warn("Disconnected: {s}\n", .{d.reason});
+                    return error.disconnectedDuringLogin;
+                },
+                .compress => {
+                    const d = try Proto.Login_Clientbound.packets.Type_packet_compress.parse(&parse);
+                    comp_thresh = d.threshold;
+                    log.info("Setting Compression threshhold: {d}\n", .{d.threshold});
+                    if (d.threshold < 0) {
+                        log.err("Invalid compression threshold from server: {d}", .{d.threshold});
+                        return error.invalidCompressionThreshold;
+                    } else {
+                        bot1.compression_threshold = d.threshold;
+                        pctx.packet.comp_thresh = d.threshold;
+                    }
+                },
+                .encryption_begin => {
+                    std.debug.print("\n!!!!!!!!!!!\n", .{});
+                    std.debug.print("ONLINE MODE NOT SUPPORTED\nDISABLE with online-mode=false in server.properties\n", .{});
+                    std.process.exit(1);
+                },
+                .success => {
+                    const d = try Proto.Login_Clientbound.packets.Type_packet_success.parse(&parse);
+                    log.info("Login Success: {d}: {s}", .{ d.uuid, d.username });
 
-                bot1.uuid = d.uuid;
-                bot1.connection_state = .play;
-            },
-            .login_plugin_request => {
-                const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);
-                log.info("Login plugin request {d} {s}", .{ data.messageId, data.channel });
-                log.info("Payload {s}", .{data.data});
+                    try pctx.sendAuto(Proto.Login_Serverbound, .login_acknowledged, .{});
+                    bot1.uuid = d.uuid;
+                    bot1.connection_state = .config;
+                },
+                .login_plugin_request => {
+                    const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);
+                    log.info("Login plugin request {d} {s}", .{ data.messageId, data.channel });
+                    log.info("Payload {s}", .{data.data});
 
-                try pctx.loginPluginResponse(
-                    data.messageId,
-                    null, // We tell the server we don't understand any plugin requests, might be a problem
-                );
+                    try pctx.loginPluginResponse(
+                        data.messageId,
+                        null, // We tell the server we don't understand any plugin requests, might be a problem
+                    );
+                },
             },
         }
     }

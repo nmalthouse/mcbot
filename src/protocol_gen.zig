@@ -301,7 +301,7 @@ pub fn main() !void {
         try parent.emit(
             w,
             .{ .none = {} },
-            .recv,
+            .both,
             &native_map,
             null,
         );
@@ -615,6 +615,7 @@ pub const ParseStructGen = struct {
     pub const EmitDir = enum {
         send,
         recv,
+        both,
     };
 
     //unsupported: bool = false,
@@ -662,53 +663,45 @@ pub const ParseStructGen = struct {
                     if (r.is_array) {
                         try w.print("name: string,\n", .{});
                         try w.print("ids: []Type_varint,", .{});
-                        switch (dir) {
-                            .recv => {
-                                try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
-                                const body =
-                                    \\const v = try pctx.parse_varint();
-                                    \\return switch(v){{
-                                    \\ 0 => .{{ .name = try pctx.parse_string()   }},
-                                    \\else =>  {{ 
-                                    \\const array = try pctx.alloc.alloc(Type_varint, @intCast(v - 1));
-                                    \\for(0..array.len)|i|{{
-                                    \\  array[i] = try pctx.parse_varint();
-                                    \\}}
-                                    \\return .{{ .ids = array }};
-                                    \\}},
-                                    \\}};
-                                ;
-                                try w.print(body, .{});
-                                try w.print("}}\n", .{}); //fn body
-                            },
-                            .send => {
-                                //not implemented
-                                unreachable;
-                            },
+                        if (dir == .recv or dir == .both) {
+                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                            const body =
+                                \\const v = try pctx.parse_varint();
+                                \\return switch(v){{
+                                \\ 0 => .{{ .name = try pctx.parse_string()   }},
+                                \\else =>  {{ 
+                                \\const array = try pctx.alloc.alloc(Type_varint, @intCast(v - 1));
+                                \\for(0..array.len)|i|{{
+                                \\  array[i] = try pctx.parse_varint();
+                                \\}}
+                                \\return .{{ .ids = array }};
+                                \\}},
+                                \\}};
+                            ;
+                            try w.print(body, .{});
+                            try w.print("}}\n", .{}); //fn body
                         }
+                        if (dir == .send)
+                            unreachable;
                     } else {
                         try w.print("id: Type_varint,\n", .{});
                         try w.print("{s}: Type_{s},", .{ r.child_t_name, r.child_t });
-                        switch (dir) {
-                            .recv => {
-                                try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
-                                const body =
-                                    \\//{[is_array]any}
-                                    \\const v = try pctx.parse_varint();
-                                    \\return switch(v){{
-                                    \\  0 => .{{ .{[child_t_name]s} = try Type_{[child_t]s}.parse(pctx)
-                                    \\}},
-                                    \\else => .{{ .id = v + 1 }},
-                                    \\}};
-                                ;
-                                try w.print(body, r);
-                                try w.print("}}\n", .{}); //fn body
-                            },
-                            .send => {
-                                //not implemented
-                                unreachable;
-                            },
+                        if (dir == .recv or dir == .both) {
+                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                            const body =
+                                \\//{[is_array]any}
+                                \\const v = try pctx.parse_varint();
+                                \\return switch(v){{
+                                \\  0 => .{{ .{[child_t_name]s} = try Type_{[child_t]s}.parse(pctx)
+                                \\}},
+                                \\else => .{{ .id = v + 1 }},
+                                \\}};
+                            ;
+                            try w.print(body, r);
+                            try w.print("}}\n", .{}); //fn body
                         }
+                        if (dir == .send)
+                            unreachable;
                     }
                     try w.print("}};\n", .{});
                 },
@@ -719,20 +712,18 @@ pub const ParseStructGen = struct {
                         try w.print("pub const flag_{s} = 0b{b};\n", .{ fl, @as(usize, 0x1) << @as(u6, @intCast(i)) });
                     }
                     try w.print("flag: {s},", .{b.primitive_type});
-                    switch (dir) {
-                        .recv => {
-                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
-                            try w.print("const val = try pctx.parse_{s}();\n", .{b.primitive_type});
-                            try w.print("return @This(){{\n", .{});
-                            try w.print(".flag = val\n", .{});
-                            try w.print("}};\n", .{});
-                            try w.print("}}\n", .{});
-                        },
-                        .send => {
-                            try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
-                            try w.print("try pk.send_{s}(self.flag);\n", .{b.primitive_type});
-                            try w.print("}}\n", .{});
-                        },
+                    if (dir == .recv or dir == .both) {
+                        try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                        try w.print("const val = try pctx.parse_{s}();\n", .{b.primitive_type});
+                        try w.print("return @This(){{\n", .{});
+                        try w.print(".flag = val\n", .{});
+                        try w.print("}};\n", .{});
+                        try w.print("}}\n", .{});
+                    }
+                    if (dir == .send or dir == .both) {
+                        try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
+                        try w.print("try pk.send_{s}(self.flag);\n", .{b.primitive_type});
+                        try w.print("}}\n", .{});
                     }
                     try w.print("}};\n", .{});
                 },
@@ -743,41 +734,37 @@ pub const ParseStructGen = struct {
                         try w.print("{s}: {s},\n", .{ f.name, f.int_t });
                     }
 
-                    switch (dir) {
-                        .recv => {
-                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
-                            try w.print("const val = try pctx.parse_u{d}();\n", .{b.parent_t});
-                            try w.print("return @This(){{\n", .{});
-                            var sig_w: i64 = 0;
-                            var insig_w: i64 = b.parent_t;
-                            for (b.fields.items) |f| {
-                                insig_w -= f.int_w;
-                                try w.print(".{s} = @as({s}, @intCast(val << {d} >> {d})),\n", .{ f.name, f.int_t, sig_w, insig_w + sig_w });
-                                sig_w += f.int_w;
-                            }
-                            try w.print("}};\n", .{});
-                            try w.print("}}\n", .{});
-                        },
-                        .send => {
-                            return error.notSupported;
-                        },
+                    if (dir == .recv or dir == .both) {
+                        try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                        try w.print("const val = try pctx.parse_u{d}();\n", .{b.parent_t});
+                        try w.print("return @This(){{\n", .{});
+                        var sig_w: i64 = 0;
+                        var insig_w: i64 = b.parent_t;
+                        for (b.fields.items) |f| {
+                            insig_w -= f.int_w;
+                            try w.print(".{s} = @as({s}, @intCast(val << {d} >> {d})),\n", .{ f.name, f.int_t, sig_w, insig_w + sig_w });
+                            sig_w += f.int_w;
+                        }
+                        try w.print("}};\n", .{});
+                        try w.print("}}\n", .{});
+                    }
+                    if (dir == .send) {
+                        return error.notSupported;
                     }
                     try w.print("}};\n", .{});
                 },
                 ._enum => |e| {
                     try w.print("pub const {s} = enum({s}) {{\n", .{ d.name, e.tag_type });
                     //Enums can't have nested types so we can just emit parse or send here without recursion
-                    switch (dir) {
-                        .recv => {
-                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
-                            try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
-                            try w.print("}}\n", .{});
-                        },
-                        .send => {
-                            try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
-                            try w.print("return pk.send_{s}(@as({s},@intFromEnum(self.*)));", .{ e.tag_type, e.tag_type });
-                            try w.print("}}\n", .{});
-                        },
+                    if (dir == .recv or dir == .both) {
+                        try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                        try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
+                        try w.print("}}\n", .{});
+                    }
+                    if (dir == .send or dir == .both) {
+                        try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
+                        try w.print("return pk.send_{s}(@as({s},@intFromEnum(self.*)));", .{ e.tag_type, e.tag_type });
+                        try w.print("}}\n", .{});
                     }
 
                     for (e.fields.items) |item| {
@@ -820,141 +807,139 @@ pub const ParseStructGen = struct {
                 try w.print("{s}: {s},\n", .{ f.name, try f.type.getIdentifier() });
             }
         }
-        switch (dir) {
-            .recv => {
-                switch (emit_kind) {
-                    .array_count, .array_varint, .array_ref => {
-                        if (self.fields.items.len != 1) return error.invalidArrayStructure;
-                        const item_field = self.fields.items[0];
-                        if (emit_kind == .array_ref) {}
-                        try w.print("pub fn parse(pctx:anytype {s}){s}![]@This(){{\n", .{
-                            if (emit_kind == .array_ref) ",item_count:usize " else "",
-                            ERR_NAME,
-                        });
-                        switch (emit_kind) {
-                            .array_count => try w.print("const item_count:usize = {d};\n", .{emit_kind.array_count}),
-                            .array_varint => try w.print("const item_count:usize = @intCast(try pctx.parse_varint());\n", .{}),
-                            .array_ref => try w.print("//ARRAY_REF {s}\n", .{emit_kind.array_ref.ref_name}),
-                            else => unreachable,
-                        }
-                        try w.print("const array = try pctx.alloc.alloc(@This(), item_count);\n", .{});
-                        try w.print("for(0..item_count)|i|{{\n", .{});
-                        try item_field.printParseFn(w, native_mapper, "array[i].");
-                        //switch (item_field.type) {
-                        //    .primitive => |p| try w.print("array[i].{s} = try pctx.parse_{s}();\n", .{ item_field.name, p }),
-                        //    .compound => |co| try w.print("array[i].{s} = try {s}.parse(pctx);\n", .{ item_field.name, co.name }),
-                        //}
-                        try w.print("}}\n", .{});
+        if (dir == .recv or dir == .both) {
+            switch (emit_kind) {
+                .array_count, .array_varint, .array_ref => {
+                    if (self.fields.items.len != 1) return error.invalidArrayStructure;
+                    const item_field = self.fields.items[0];
+                    if (emit_kind == .array_ref) {}
+                    try w.print("pub fn parse(pctx:anytype {s}){s}![]@This(){{\n", .{
+                        if (emit_kind == .array_ref) ",item_count:usize " else "",
+                        ERR_NAME,
+                    });
+                    switch (emit_kind) {
+                        .array_count => try w.print("const item_count:usize = {d};\n", .{emit_kind.array_count}),
+                        .array_varint => try w.print("const item_count:usize = @intCast(try pctx.parse_varint());\n", .{}),
+                        .array_ref => try w.print("//ARRAY_REF {s}\n", .{emit_kind.array_ref.ref_name}),
+                        else => unreachable,
+                    }
+                    try w.print("const array = try pctx.alloc.alloc(@This(), item_count);\n", .{});
+                    try w.print("for(0..item_count)|i|{{\n", .{});
+                    try item_field.printParseFn(w, native_mapper, "array[i].");
+                    //switch (item_field.type) {
+                    //    .primitive => |p| try w.print("array[i].{s} = try pctx.parse_{s}();\n", .{ item_field.name, p }),
+                    //    .compound => |co| try w.print("array[i].{s} = try {s}.parse(pctx);\n", .{ item_field.name, co.name }),
+                    //}
+                    try w.print("}}\n", .{});
 
-                        try w.print("return array;\n", .{});
-                        try w.print("}}\n", .{});
-                    },
-                    .none => {
-                        const pctx_var: []const u8 = if (self.fields.items.len > 0) "pctx" else "_";
-                        const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
-                        if (union_info) |uf| {
-                            switch (uf.category) {
-                                //Enumeration parse fn's take a enum value as argument
-                                .enumeration => {
-                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s}){s}!@This(){{\n", .{
-                                        pctx_var,
-                                        uf.tag_type,
-                                        ERR_NAME,
-                                    });
-                                    try w.print("{s} ret: @This() = undefined;\n", .{cvar});
-                                    try w.print("switch(switch_arg){{\n", .{});
-                                    for (self.fields.items) |f| {
-                                        try w.print(".{s} => {{\n", .{f.name});
-                                        if (f.optional == .yes) {
-                                            //    try w.print("}}", .{});
-                                            try w.print("ret.{s} = null;\n", .{f.name});
-                                        }
-                                        try f.printParseFn(w, native_mapper, "ret.");
-                                        try w.print("}},", .{}); //switch case
+                    try w.print("return array;\n", .{});
+                    try w.print("}}\n", .{});
+                },
+                .none => {
+                    const pctx_var: []const u8 = if (self.fields.items.len > 0) "pctx" else "_";
+                    const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
+                    if (union_info) |uf| {
+                        switch (uf.category) {
+                            //Enumeration parse fn's take a enum value as argument
+                            .enumeration => {
+                                try w.print("pub fn parse({s}:anytype, switch_arg: {s}){s}!@This(){{\n", .{
+                                    pctx_var,
+                                    uf.tag_type,
+                                    ERR_NAME,
+                                });
+                                try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                                try w.print("switch(switch_arg){{\n", .{});
+                                for (self.fields.items) |f| {
+                                    try w.print(".{s} => {{\n", .{f.name});
+                                    if (f.optional == .yes) {
+                                        //    try w.print("}}", .{});
+                                        try w.print("ret.{s} = null;\n", .{f.name});
                                     }
-                                    try w.print("}}\n", .{}); //Switch body
-                                    try w.print("return ret;\n", .{});
-                                    try w.print("}}\n", .{}); //fn decl
-                                },
-                                //Boolean parse functions take a integer as argument
-                                //Numeric parse functions take an integer as argument
-                                .strict_bool, .numeric => {
-                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s}){s}!@This(){{\n", .{
-                                        pctx_var,
-                                        if (uf.category == .numeric) uf.tag_type else "u1", //no need to cast this unless bool
-                                        ERR_NAME,
-                                    });
-                                    try w.print("{s} ret: @This() = undefined;\n", .{cvar});
-                                    try w.print("switch(switch_arg){{\n", .{});
-                                    var else_branch_present = false;
-                                    for (self.fields.items) |f| {
-                                        if (f.switch_value) |sv| {
-                                            try w.print("{d} => {{\n", .{sv});
-                                        } else {
-                                            else_branch_present = true;
-                                            try w.print("else => {{\n", .{});
-                                        }
-                                        if (f.optional == .yes) {
-                                            //    try w.print("}}", .{});
-                                            try w.print("ret.{s} = null;\n", .{f.name});
-                                        }
-                                        try f.printParseFn(w, native_mapper, "ret.");
-                                        try w.print("}},", .{}); //switch case
+                                    try f.printParseFn(w, native_mapper, "ret.");
+                                    try w.print("}},", .{}); //switch case
+                                }
+                                try w.print("}}\n", .{}); //Switch body
+                                try w.print("return ret;\n", .{});
+                                try w.print("}}\n", .{}); //fn decl
+                            },
+                            //Boolean parse functions take a integer as argument
+                            //Numeric parse functions take an integer as argument
+                            .strict_bool, .numeric => {
+                                try w.print("pub fn parse({s}:anytype, switch_arg: {s}){s}!@This(){{\n", .{
+                                    pctx_var,
+                                    if (uf.category == .numeric) uf.tag_type else "u1", //no need to cast this unless bool
+                                    ERR_NAME,
+                                });
+                                try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                                try w.print("switch(switch_arg){{\n", .{});
+                                var else_branch_present = false;
+                                for (self.fields.items) |f| {
+                                    if (f.switch_value) |sv| {
+                                        try w.print("{d} => {{\n", .{sv});
+                                    } else {
+                                        else_branch_present = true;
+                                        try w.print("else => {{\n", .{});
                                     }
-                                    if (!else_branch_present and uf.category != .strict_bool) { //Prevent zig compile error, not all cases handled
-                                        try w.print("else => return error.invalidSwitchValue,", .{});
+                                    if (f.optional == .yes) {
+                                        //    try w.print("}}", .{});
+                                        try w.print("ret.{s} = null;\n", .{f.name});
                                     }
-                                    try w.print("}}\n", .{}); //Switch body
-                                    try w.print("return ret;\n", .{});
-                                    try w.print("}}\n", .{}); //fn decl
-                                },
-                            }
-                            //try w.print("switch(@as({s}, @enumFromInt(switch_arg))){{\n", .{self.parse_as_union_type});
-                            //const int_str = "switch(@as(@typeInfo({s}).Union.tag_type.?, @enumFromInt(switch_arg))){{\n";
+                                    try f.printParseFn(w, native_mapper, "ret.");
+                                    try w.print("}},", .{}); //switch case
+                                }
+                                if (!else_branch_present and uf.category != .strict_bool) { //Prevent zig compile error, not all cases handled
+                                    try w.print("else => return error.invalidSwitchValue,", .{});
+                                }
+                                try w.print("}}\n", .{}); //Switch body
+                                try w.print("return ret;\n", .{});
+                                try w.print("}}\n", .{}); //fn decl
+                            },
+                        }
+                        //try w.print("switch(@as({s}, @enumFromInt(switch_arg))){{\n", .{self.parse_as_union_type});
+                        //const int_str = "switch(@as(@typeInfo({s}).Union.tag_type.?, @enumFromInt(switch_arg))){{\n";
+                    } else {
+                        try w.print("\npub fn parse({s}:anytype){s}!@This() {{\n", .{ pctx_var, ERR_NAME });
+                        try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                        for (self.fields.items) |f| {
+                            try f.printParseFn(w, native_mapper, "ret.");
+                        }
+                        try w.print("return ret;\n", .{});
+                        try w.print("}}\n\n", .{});
+                    }
+                },
+            }
+        }
+        if (dir == .send or dir == .both) {
+            try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
+            var discard_psend = true;
+            for (self.fields.items) |f| {
+                discard_psend = false;
+                if (f.optional == .yes) {
+                    try w.print("try pk.send_bool(self.{s} != null);\n", .{f.name});
+                    try w.print("if(self.{s} != null){{\n", .{f.name});
+                }
+                const unwrapped_optional: []const u8 = if (f.optional == .yes) try printString("{s}.?", .{f.name}) else f.name;
+                switch (f.type) {
+                    //TODO determine if the array we are sending is a primitive and then just use write()
+                    .primitive => |p| try w.print("try pk.send_{s}(self.{s});\n", .{ p, unwrapped_optional }),
+                    .compound => |co| {
+                        if (co.d == ._array) {
+                            if (co.d._array.emit_kind == .array_varint)
+                                try w.print("try pk.send_varint(@intCast(self.{s}.len));\n", .{unwrapped_optional});
+                            try w.print("for(self.{s})|i_{s}|{{", .{ unwrapped_optional, f.name });
+                            try w.print("try i_{s}.send(pk);\n", .{f.name});
+                            try w.print("}}\n", .{});
                         } else {
-                            try w.print("\npub fn parse({s}:anytype){s}!@This() {{\n", .{ pctx_var, ERR_NAME });
-                            try w.print("{s} ret: @This() = undefined;\n", .{cvar});
-                            for (self.fields.items) |f| {
-                                try f.printParseFn(w, native_mapper, "ret.");
-                            }
-                            try w.print("return ret;\n", .{});
-                            try w.print("}}\n\n", .{});
+                            try w.print("try self.{s}.send(pk);\n", .{unwrapped_optional});
                         }
                     },
                 }
-            },
-            .send => {
-                try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
-                var discard_psend = true;
-                for (self.fields.items) |f| {
-                    discard_psend = false;
-                    if (f.optional == .yes) {
-                        try w.print("try pk.send_bool(self.{s} != null);\n", .{f.name});
-                        try w.print("if(self.{s} != null){{\n", .{f.name});
-                    }
-                    const unwrapped_optional: []const u8 = if (f.optional == .yes) try printString("{s}.?", .{f.name}) else f.name;
-                    switch (f.type) {
-                        //TODO determine if the array we are sending is a primitive and then just use write()
-                        .primitive => |p| try w.print("try pk.send_{s}(self.{s});\n", .{ p, unwrapped_optional }),
-                        .compound => |co| {
-                            if (co.d == ._array) {
-                                if (co.d._array.emit_kind == .array_varint)
-                                    try w.print("try pk.send_varint(@intCast(self.{s}.len));\n", .{unwrapped_optional});
-                                try w.print("for(self.{s})|i_{s}|{{", .{ unwrapped_optional, f.name });
-                                try w.print("try i_{s}.send(pk);\n", .{f.name});
-                                try w.print("}}\n", .{});
-                            } else {
-                                try w.print("try self.{s}.send(pk);\n", .{unwrapped_optional});
-                            }
-                        },
-                    }
-                    if (f.optional == .yes)
-                        try w.print("}}\n", .{});
-                }
-                if (discard_psend)
-                    try w.print("_ = pk;\n_ = self;\n", .{});
-                try w.print("}}\n", .{});
-            },
+                if (f.optional == .yes)
+                    try w.print("}}\n", .{});
+            }
+            if (discard_psend)
+                try w.print("_ = pk;\n_ = self;\n", .{});
+            try w.print("}}\n", .{});
         }
     }
 };
