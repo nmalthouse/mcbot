@@ -12,6 +12,42 @@ const Queue = std.atomic.Queue;
 const com = @import("common.zig");
 const MoveFlags = Proto.Play_Serverbound.packets.Type_MovementFlags;
 
+pub const Slot = struct {
+    item_id: u16 = 0,
+    count: u8 = 0, //If zero, ignore slot
+
+    pub fn fromProto(p: Proto.Type_Slot) @This() {
+        return .{
+            .count = @intCast(p.itemCount),
+            .item_id = if (p.itemCount > 0) @intCast(p.anon_7.default.item) else 0,
+        };
+    }
+
+    pub fn toProto(s: Slot) Proto.Type_Slot {
+        var r: Proto.Type_Slot = undefined;
+        r.itemCount = s.count;
+        r.anon_7 = .{ .anon_7_v_0 = {} };
+        if (s.count > 0)
+            r.anon_7 = .{ .default = .{
+                .item = s.item_id,
+                .addedComponentCount = 0,
+                .removedComponentCount = 0,
+                .components = &.{},
+                .removeComponents = &.{},
+            } };
+        return r;
+    }
+};
+pub const fbsT = std.io.FixedBufferStream([]const u8);
+pub const parseT = packetParseCtx(fbsT.Reader);
+pub const ParseError = error{
+    OutOfMemory,
+    EndOfStream,
+    InvalidNbt,
+    StringExceedsMaxLen,
+    StreamTooLong,
+} || fbsT.ReadError;
+
 ///When manually parsing a packet rather than using generated, annotate with this.
 pub fn annotateManualParse(comptime mc_version_str: []const u8) void {
     comptime {
@@ -97,12 +133,13 @@ pub const PacketCtx = struct {
     ) !void {
         try self.sendAuto(Play, .block_place, .{
             .hand = @as(i32, @intFromEnum(hand)),
-            .location = block_pos,
+            .location = .{ .x = @intCast(block_pos.x), .y = @intCast(block_pos.y), .z = @intCast(block_pos.z) },
             .direction = @as(i32, @intFromEnum(face)),
             .cursorX = cx,
             .cursorY = cy,
             .cursorZ = cz,
             .insideBlock = head_in_block,
+            .worldBorderHit = false,
             .sequence = sequence,
         });
     }
@@ -145,7 +182,7 @@ pub const PacketCtx = struct {
             .mouseButton = @as(i8, @intCast(button)),
             .mode = @as(i32, @intCast(mode)),
             .changedSlots = new_slot_data,
-            .cursorItem = held_slot,
+            .cursorItem = held_slot.toProto(),
         });
     }
 
@@ -181,7 +218,7 @@ pub const PacketCtx = struct {
     pub fn playerAction(self: *@This(), status: PlayerActionStatus, block_pos: vector.V3i) !void {
         try self.sendAuto(Proto.Play_Serverbound, .block_dig, .{
             .status = @as(i32, @intFromEnum(status)),
-            .location = block_pos,
+            .location = .{ .x = @intCast(block_pos.x), .y = @intCast(block_pos.y), .z = @intCast(block_pos.z) },
             .face = 0,
             .sequence = 0,
         });
@@ -223,7 +260,7 @@ pub const PacketCtx = struct {
         try self.sendAuto(Play, .look, .{
             .yaw = yaw,
             .pitch = pitch,
-            .onGround = grounded,
+            .flags = .{ .flag = if (grounded) MoveFlags.flag_onGround else 0 },
         });
     }
 
@@ -308,20 +345,20 @@ pub const Packet = struct {
         try self.buffer.writer().writeByte(if (val) 0x01 else 0x00);
     }
 
-    pub fn slot(self: *Self, val: ?Slot) !void {
-        annotateManualParse("1.19.3");
-        const wr = self.buffer.writer();
-        try self.boolean(val != null);
-        if (val) |sl| {
-            try self.varInt(sl.item_id);
-            try self.ubyte(sl.count);
-            if (sl.nbt_buffer) |buf| {
-                _ = try wr.write(buf);
-            } else {
-                try self.ubyte(0);
-            }
-        }
-    }
+    //pub fn slot(self: *Self, val: ?Slot) !void {
+    //    annotateManualParse("1.19.3");
+    //    const wr = self.buffer.writer();
+    //    try self.boolean(val != null);
+    //    if (val) |sl| {
+    //        try self.varInt(sl.item_id);
+    //        try self.ubyte(sl.count);
+    //        if (sl.nbt_buffer) |buf| {
+    //            _ = try wr.write(buf);
+    //        } else {
+    //            try self.ubyte(0);
+    //        }
+    //    }
+    //}
 
     pub fn packetId(self: *Self, val: anytype) !void {
         try self.varInt(@intFromEnum(val));
@@ -333,8 +370,8 @@ pub const Packet = struct {
         _ = try wr.write(val.getSlice());
     }
 
-    pub const send_Slot = slot;
-    pub const send_slot = slot;
+    //pub const send_Slot = slot;
+    //pub const send_slot = slot;
     pub const send_bool = boolean;
     pub const send_varint = varInt;
     pub const send_string = string;
@@ -346,6 +383,19 @@ pub const Packet = struct {
     pub const send_restBuffer = slice;
     pub const send_ContainerID = varInt;
 
+    pub fn send_MovementFlags(self: *Self, v: MoveFlags) !void {
+        return try MoveFlags.send(&v, self);
+    }
+
+    pub fn send_Slot(self: *Self, slot: Proto.Type_Slot) !void {
+        try self.send_varint(slot.itemCount);
+        if (slot.itemCount > 0) {
+            try self.send_varint(slot.anon_7.default.item);
+            try self.send_varint(0); //no removed
+            try self.send_varint(0); //no added
+        }
+    }
+
     pub fn send_vec2f(self: *Self, v: Vec2f) !void {
         try self.float(v.x);
         try self.float(v.y);
@@ -354,13 +404,6 @@ pub const Packet = struct {
     pub fn send_UUID(self: *Self, v: u128) !void {
         const wr = self.buffer.writer();
         _ = try wr.writeInt(u128, v, .big);
-    }
-
-    pub fn send_MovementFlags(self: *Self, v: u8) !void {
-        annotateManualParse("1.21.3");
-        _ = self;
-        _ = v;
-        unreachable;
     }
 
     pub fn send_i8(self: *Self, v: i8) !void {
@@ -372,8 +415,10 @@ pub const Packet = struct {
         _ = try wr.writeInt(i16, v, .big);
     }
 
-    pub fn iposition(self: *Self, v: vector.V3i) !void {
-        try self.long((@as(i64, v.x & 0x3FFFFFF) << 38) | ((v.z & 0x3FFFFFF) << 12) | (v.y & 0xFFF));
+    pub fn iposition(self: *Self, v: Proto.Type_position) !void {
+        try self.long(
+            (@as(i64, @as(i64, @intCast(v.x)) & 0x3FFFFFF) << 38) | ((@as(i64, @intCast(v.z)) & 0x3FFFFFF) << 12) | (@as(i64, @intCast(v.y)) & 0xFFF),
+        );
     }
 
     pub fn slice(self: *Self, sl: []const u8) !void {
@@ -513,14 +558,14 @@ pub fn toVarInt(input: i32) VarInt {
     }
 }
 
-pub const Slot = struct {
-    count: u8 = 0,
-    item_id: u16 = 0,
-    nbt_buffer: ?[]u8 = null,
-};
+//pub const Slot = struct {
+//    count: u8 = 0,
+//    item_id: u16 = 0,
+//    nbt_buffer: ?[]u8 = null,
+//};
 
 pub const MovementFlags = u8;
-pub const Vec2f = struct { x: f32, y: f32 };
+pub const Vec2f = Proto.Type_vec2f;
 
 pub const PositionUpdateRelatives = struct {};
 
@@ -681,7 +726,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return self.reader.readInt(intT, .big) catch unreachable;
         }
 
-        pub fn string(self: *Self, max_len: ?usize) ![]const u8 {
+        pub fn string(self: *Self, max_len: ?usize) ParseError![]const u8 {
             const len = @as(u32, @intCast(readVarInt(self.reader)));
             if (max_len) |l|
                 if (len > l) return error.StringExceedsMaxLen;
@@ -690,56 +735,69 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return slice;
         }
 
-        pub fn parse_void(_: *Self) !void {}
+        pub fn parse_void(_: *Self) ParseError!void {}
 
-        pub fn parse_string(self: *Self) ![]const u8 {
+        pub fn parse_string(self: *Self) ParseError![]const u8 {
             return try self.string(null);
         }
 
-        pub fn parse_bool(self: *Self) !bool {
+        pub fn parse_bool(self: *Self) ParseError!bool {
             return self.int(u8) == 1;
         }
 
-        pub fn parse_restBuffer(self: *Self) ![]const u8 {
+        pub fn parse_restBuffer(self: *Self) ParseError![]const u8 {
             return try self.reader.readAllAlloc(self.alloc, std.math.maxInt(usize));
         }
 
-        pub fn parse_i16(self: *Self) !i16 {
+        pub fn parse_i16(self: *Self) ParseError!i16 {
             return self.int(i16);
         }
-        pub fn parse_i32(self: *Self) !i32 {
+        pub fn parse_i32(self: *Self) ParseError!i32 {
             return self.int(i32);
         }
 
-        pub fn parse_i64(self: *Self) !i64 {
+        pub fn parse_i64(self: *Self) ParseError!i64 {
             return self.int(i64);
         }
 
-        pub fn parse_f64(self: *Self) !f64 {
+        pub fn parse_f64(self: *Self) ParseError!f64 {
             return self.float(f64);
         }
-        pub fn parse_f32(self: *Self) !f32 {
+        pub fn parse_f32(self: *Self) ParseError!f32 {
             return self.float(f32);
         }
 
-        pub fn parse_i8(self: *Self) !i8 {
+        pub fn parse_i8(self: *Self) ParseError!i8 {
             return self.int(i8);
         }
 
-        pub fn parse_u8(self: *Self) !u8 {
+        pub fn parse_u8(self: *Self) ParseError!u8 {
             return self.int(u8);
         }
 
-        pub fn parse_u64(self: *Self) !u64 {
+        pub fn parse_u64(self: *Self) ParseError!u64 {
             return self.int(u64);
         }
 
-        pub fn parse_UUID(self: *Self) !u128 {
+        pub fn parse_u32(self: *Self) ParseError!u32 {
+            return self.int(u32);
+        }
+
+        pub fn parse_UUID(self: *Self) ParseError!u128 {
             return self.int(u128);
         }
 
-        pub fn parse_varint(self: *Self) !i32 {
+        pub fn parse_varint(self: *Self) ParseError!i32 {
             return self.varInt();
+        }
+
+        //TODO currently in 1.21.3 protocol.json there is an extra field, optvarint that shoudln't be there
+        //this not parsing anything breaks the following packets
+        //entity metadata
+        //packet_recipe_book_add
+        pub fn parse_optvarint(self: *Self) ParseError!i32 {
+            _ = self;
+            return 0;
         }
 
         pub fn boolean(self: *Self) bool {
@@ -771,58 +829,76 @@ pub fn packetParseCtx(comptime readerT: type) type {
             };
         }
 
-        pub fn parse_anonymousNbt(self: *Self) !nbt_zig.Entry {
+        pub fn parse_anonymousNbt(self: *Self) ParseError!nbt_zig.Entry {
             const nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
             return nbt_data;
         }
 
-        pub fn parse_nbt(self: *Self) !nbt_zig.EntryWithName {
+        pub fn parse_anonOptionalNbt(self: *Self) ParseError!?nbt_zig.Entry {
+            const nbt_data = nbt_zig.parseAsCompoundEntry(self.alloc, self.reader) catch return null;
+            return nbt_data;
+        }
+
+        pub fn parse_nbt(self: *Self) ParseError!nbt_zig.EntryWithName {
             const nbt = try nbt_zig.parse(self.alloc, self.reader);
             //var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
             return nbt;
         }
 
-        pub fn parse_slot(self: *Self) !?Slot {
-            return self.slot();
+        pub fn parse_optionalNbt(self: *Self) ParseError!?nbt_zig.EntryWithName {
+            const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
+            var tracker = tr.init(self.alloc, self.reader);
+
+            const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
+            if (tracker.buffer.items.len > 1) {
+                return nbt;
+                //std.debug.print("NBT: {s}\n", .{nbt.name.?});
+                //nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
+            }
+            return null;
         }
 
-        pub fn parse_SpawnInfo(self: *Self) !Proto.Play_Clientbound.packets.Type_SpawnInfo {
+        //pub fn parse_slot(self: *Self) ParseError!?Slot {
+        //    return self.slot();
+        //}
+
+        pub fn parse_SpawnInfo(self: *Self) ParseError!Proto.Play_Clientbound.packets.Type_SpawnInfo {
             return try Proto.Play_Clientbound.packets.Type_SpawnInfo.parse(self);
         }
 
-        pub fn parse_Slot(self: *Self) !Proto.Type_Slot {
-            annotateManualParse("1.21.3");
-            return try Proto.Type_Slot.parse(self);
-        }
+        //pub fn parse_Slot(self: *Self) ParseError!Proto.Type_Slot {
+        //    annotateManualParse("1.21.3");
+        //    return try Proto.Type_Slot.parse(self);
+        //}
 
-        pub fn parse_MovementFlags(self: *Self) !MovementFlags {
+        pub fn parse_MovementFlags(self: *Self) ParseError!MovementFlags {
             _ = self;
             annotateManualParse("1.21.3");
             unreachable;
         }
 
-        pub fn parse_ContainerID(self: *Self) !i32 {
+        pub fn parse_ContainerID(self: *Self) ParseError!i32 {
             annotateManualParse("1.21.3");
             return self.varInt();
         }
 
-        pub fn parse_PositionUpdateRelatives(self: *Self) !PositionUpdateRelatives {
+        pub fn parse_PositionUpdateRelatives(self: *Self) ParseError!PositionUpdateRelatives {
             annotateManualParse("1.21.3");
             _ = self;
             unreachable;
         }
 
-        pub fn slot(self: *Self) Slot {
-            annotateManualParse("1.21.3");
-            const item_count = self.varInt();
-            if (item_count == 0) {
-                return .{ .item_id = 0, .count = 0 };
-            }
-            //const item_id = self.varInt();
-            //const num_add = self.varInt();
-            //const num_rm = self.varInt();
-            unreachable;
-        }
+        //pub fn slot(self: *Self) Slot {
+        //    annotateManualParse("1.21.3");
+        //    const item_count = self.varInt();
+        //    if (item_count == 0) {
+        //        return .{ .item_id = 0, .count = 0 };
+        //    }
+        //    //const item_id = self.varInt();
+        //    //const num_add = self.varInt();
+        //    //const num_rm = self.varInt();
+        //    unreachable;
+        //}
 
         //pub fn slot(self: *Self) ?Slot {
         //    annotateManualParse("1.19.4");

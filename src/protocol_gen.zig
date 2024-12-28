@@ -5,6 +5,7 @@ const JValue = std.json.Value;
 const eql = std.mem.eql;
 const Alloc = std.mem.Allocator;
 const com = @import("common.zig");
+const ERR_NAME = "PE";
 // All the different types of "switch" in the wild: (As of 1.21.3)
 // Type 1
 // A direct mapping of enum values to union members without a default field
@@ -74,6 +75,17 @@ const com = @import("common.zig");
 // Solution 3
 // Detect dependency cycles and selectively convert to pointers, annoying
 //
+// Problem:
+// SlotComponent can have a Slot field
+// Not same problem as above as Slot contains an array of SlotComponent so it has a defined size.
+// The problem is that zig can't infer the error set in recursive situations
+//
+// Solution 1, make everything anyerror
+//
+// Solution 2, parse functions cannot return an error
+//
+// Solution 3, specify the error set
+//
 
 fn getV(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) @TypeOf(@field(v, @tagName(tag))) {
     return getVal(v, tag) orelse unreachable;
@@ -123,6 +135,7 @@ pub fn main() !void {
     //Protocol.json names their types differently, rather than change our codebase to use their names just map them for now.
     const em = "error.notImplemented";
     const types_map = [_]struct { []const u8, []const u8 }{
+        .{ ERR_NAME, "mc.ParseError" },
         .{ "Vector", "@import(\"vector.zig\")" },
         .{ "PSend", "mc.Packet" },
         .{ "varint", "i32" },
@@ -132,7 +145,6 @@ pub fn main() !void {
         .{ "string", "[]const u8" },
         //.{ "position", "Vector.V3i" },
         .{ "restBuffer", "[]const u8" },
-        .{ "nbt", "mc.nbt_zig.EntryWithName" },
         .{ "anonymousNbt", "mc.nbt_zig.Entry" },
         .{ "anonOptionalNbt", em },
         //.{ "particle", em },
@@ -146,14 +158,13 @@ pub fn main() !void {
         //.{ "ContainerID", "varint" },
         .{ "ByteArray", "[]const u8" }, //Wiki vg, parse this with varint as counter
         //.{ "Slot", "mc.Slot" },
-        .{ "MovementFlags", "mc.MovementFlags" },
         //.{ "SpawnInfo", "Play_Clientbound.packets.Type_SpawnInfo" }, //Ugly
         //.{ "vec2f", "mc.Vec2f" },
         //.{ "Particle", em },
         //.{ "vec3f", "mc.V3f" },
         //.{ "Type_PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
         .{ "Type_tags", em },
-        .{ "Type_IDSet", "void" },
+        //.{ "Type_IDSet", "void" },
         .{ "Type_string", "[]const u8" },
         .{ "Type_ByteArray", "[]const u8" },
         .{ "Type_entityMetadata", em },
@@ -173,7 +184,10 @@ pub fn main() !void {
     const ddd = "error.protodefisdumb";
     const omit = "omit";
     const native_mapper = [_]struct { []const u8, []const u8 }{
+        //pub const Type_optionalNbt = error.notImplemented;
+        .{ "optionalNbt", "?mc.nbt_zig.EntryWithName" },
         .{ "varint", "i32" },
+        .{ "optvarint", "?i32" },
         .{ "varlong", "i32" },
         .{ "restBuffer", "[]const u8" },
         .{ "UUID", "u128" },
@@ -188,6 +202,7 @@ pub fn main() !void {
         .{ "bool", "bool" },
         .{ "f32", "f32" },
         .{ "f64", "f64" },
+        .{ "nbt", "mc.nbt_zig.EntryWithName" },
         .{ "string", "[]const u8" },
         .{ "ContainerID", "i32" },
         .{ "anonymousNbt", "mc.nbt_zig.Entry" },
@@ -493,10 +508,15 @@ pub const ParseStructGen = struct {
         dont_emit_default: bool = false,
         counter_arg_name: ?[]const u8 = null, //If set, parse funtions will have this as an additional arg, should be f_myCounterArg
         switch_arg_name: ?[]const u8 = null, //Same as counter but for switching
+        switch_arg_is_bool: bool = false,
         //type_identifier: []const u8,
 
         pub fn printParseFn(f: *const Field, w: anytype, native_mapper: *const std.StringHashMap([]const u8), ret_str: []const u8) !void {
-            const switch_args = if (f.switch_arg_name) |sn| try printString(",ret.{s}", .{sn}) else "";
+            const switch_args = if (f.switch_arg_name) |sn| try printString(",{s}ret.{s}{s}", .{
+                if (f.switch_arg_is_bool) "@intFromBool(" else "",
+                sn,
+                if (f.switch_arg_is_bool) ")" else "",
+            }) else "";
             const extra_args = if (f.counter_arg_name) |cn| try printString(",@intCast(ret.{s})", .{cn}) else "";
             if (f.optional == .yes)
                 try w.print("if(try pctx.parse_bool()){{\n", .{});
@@ -567,6 +587,11 @@ pub const ParseStructGen = struct {
         name: []const u8,
         d: union(enum) {
             bitflag: BitFlagT,
+            registryEntry: struct {
+                is_array: bool = false, //for registryEntryHolderSet
+                child_t: []const u8, //FIXME this only supports type references
+                child_t_name: []const u8,
+            },
             bitfield: BitfieldT,
             _enum: EnumT,
             _union: UnionT,
@@ -631,6 +656,62 @@ pub const ParseStructGen = struct {
                 continue;
             }
             switch (d.d) {
+                .registryEntry => |r| {
+                    try w.print("pub const {s} = union(enum) {{\n", .{d.name});
+                    try w.print("//REGENTRY\n", .{});
+                    if (r.is_array) {
+                        try w.print("name: string,\n", .{});
+                        try w.print("ids: []Type_varint,", .{});
+                        switch (dir) {
+                            .recv => {
+                                try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                                const body =
+                                    \\const v = try pctx.parse_varint();
+                                    \\return switch(v){{
+                                    \\ 0 => .{{ .name = try pctx.parse_string()   }},
+                                    \\else =>  {{ 
+                                    \\const array = try pctx.alloc.alloc(Type_varint, @intCast(v - 1));
+                                    \\for(0..array.len)|i|{{
+                                    \\  array[i] = try pctx.parse_varint();
+                                    \\}}
+                                    \\return .{{ .ids = array }};
+                                    \\}},
+                                    \\}};
+                                ;
+                                try w.print(body, .{});
+                                try w.print("}}\n", .{}); //fn body
+                            },
+                            .send => {
+                                //not implemented
+                                unreachable;
+                            },
+                        }
+                    } else {
+                        try w.print("id: Type_varint,\n", .{});
+                        try w.print("{s}: Type_{s},", .{ r.child_t_name, r.child_t });
+                        switch (dir) {
+                            .recv => {
+                                try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
+                                const body =
+                                    \\//{[is_array]any}
+                                    \\const v = try pctx.parse_varint();
+                                    \\return switch(v){{
+                                    \\  0 => .{{ .{[child_t_name]s} = try Type_{[child_t]s}.parse(pctx)
+                                    \\}},
+                                    \\else => .{{ .id = v + 1 }},
+                                    \\}};
+                                ;
+                                try w.print(body, r);
+                                try w.print("}}\n", .{}); //fn body
+                            },
+                            .send => {
+                                //not implemented
+                                unreachable;
+                            },
+                        }
+                    }
+                    try w.print("}};\n", .{});
+                },
                 .bitflag => |b| {
                     try w.print("pub const {s} = struct {{\n", .{d.name});
                     try w.print("//Bitflag\n", .{});
@@ -640,7 +721,7 @@ pub const ParseStructGen = struct {
                     try w.print("flag: {s},", .{b.primitive_type});
                     switch (dir) {
                         .recv => {
-                            try w.print("pub fn parse(pctx:anytype)!@This(){{\n", .{});
+                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
                             try w.print("const val = try pctx.parse_{s}();\n", .{b.primitive_type});
                             try w.print("return @This(){{\n", .{});
                             try w.print(".flag = val\n", .{});
@@ -649,7 +730,7 @@ pub const ParseStructGen = struct {
                         },
                         .send => {
                             try w.print("pub fn send(self:*const @This(), pk: *PSend)!void{{\n", .{});
-                            try w.print("pk.send_{s}(self.flag);\n", .{b.primitive_type});
+                            try w.print("try pk.send_{s}(self.flag);\n", .{b.primitive_type});
                             try w.print("}}\n", .{});
                         },
                     }
@@ -664,7 +745,7 @@ pub const ParseStructGen = struct {
 
                     switch (dir) {
                         .recv => {
-                            try w.print("pub fn parse(pctx:anytype)!@This(){{\n", .{});
+                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
                             try w.print("const val = try pctx.parse_u{d}();\n", .{b.parent_t});
                             try w.print("return @This(){{\n", .{});
                             var sig_w: i64 = 0;
@@ -688,7 +769,7 @@ pub const ParseStructGen = struct {
                     //Enums can't have nested types so we can just emit parse or send here without recursion
                     switch (dir) {
                         .recv => {
-                            try w.print("pub fn parse(pctx:anytype)!@This(){{\n", .{});
+                            try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
                             try w.print("return @enumFromInt(try pctx.parse_{s}());", .{e.tag_type});
                             try w.print("}}\n", .{});
                         },
@@ -746,8 +827,9 @@ pub const ParseStructGen = struct {
                         if (self.fields.items.len != 1) return error.invalidArrayStructure;
                         const item_field = self.fields.items[0];
                         if (emit_kind == .array_ref) {}
-                        try w.print("pub fn parse(pctx:anytype {s})![]@This(){{\n", .{
+                        try w.print("pub fn parse(pctx:anytype {s}){s}![]@This(){{\n", .{
                             if (emit_kind == .array_ref) ",item_count:usize " else "",
+                            ERR_NAME,
                         });
                         switch (emit_kind) {
                             .array_count => try w.print("const item_count:usize = {d};\n", .{emit_kind.array_count}),
@@ -774,9 +856,10 @@ pub const ParseStructGen = struct {
                             switch (uf.category) {
                                 //Enumeration parse fn's take a enum value as argument
                                 .enumeration => {
-                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s})!@This(){{\n", .{
+                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s}){s}!@This(){{\n", .{
                                         pctx_var,
                                         uf.tag_type,
+                                        ERR_NAME,
                                     });
                                     try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                                     try w.print("switch(switch_arg){{\n", .{});
@@ -790,14 +873,16 @@ pub const ParseStructGen = struct {
                                         try w.print("}},", .{}); //switch case
                                     }
                                     try w.print("}}\n", .{}); //Switch body
+                                    try w.print("return ret;\n", .{});
                                     try w.print("}}\n", .{}); //fn decl
                                 },
                                 //Boolean parse functions take a integer as argument
                                 //Numeric parse functions take an integer as argument
                                 .strict_bool, .numeric => {
-                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s})!@This(){{\n", .{
+                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s}){s}!@This(){{\n", .{
                                         pctx_var,
-                                        uf.tag_type, //no need to cast this int
+                                        if (uf.category == .numeric) uf.tag_type else "u1", //no need to cast this unless bool
+                                        ERR_NAME,
                                     });
                                     try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                                     try w.print("switch(switch_arg){{\n", .{});
@@ -816,17 +901,18 @@ pub const ParseStructGen = struct {
                                         try f.printParseFn(w, native_mapper, "ret.");
                                         try w.print("}},", .{}); //switch case
                                     }
-                                    if (!else_branch_present) { //Prevent zig compile error, not all cases handled
+                                    if (!else_branch_present and uf.category != .strict_bool) { //Prevent zig compile error, not all cases handled
                                         try w.print("else => return error.invalidSwitchValue,", .{});
                                     }
                                     try w.print("}}\n", .{}); //Switch body
+                                    try w.print("return ret;\n", .{});
                                     try w.print("}}\n", .{}); //fn decl
                                 },
                             }
                             //try w.print("switch(@as({s}, @enumFromInt(switch_arg))){{\n", .{self.parse_as_union_type});
                             //const int_str = "switch(@as(@typeInfo({s}).Union.tag_type.?, @enumFromInt(switch_arg))){{\n";
                         } else {
-                            try w.print("\npub fn parse({s}:anytype)!@This() {{\n", .{pctx_var});
+                            try w.print("\npub fn parse({s}:anytype){s}!@This() {{\n", .{ pctx_var, ERR_NAME });
                             try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                             for (self.fields.items) |f| {
                                 try f.printParseFn(w, native_mapper, "ret.");
@@ -911,26 +997,26 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         try child.d.bitflag.flags.append(getV(f, .string));
                     }
                 },
-                .registryEntryHolderSet => {
-                    //Has the fields:
-                    //base: {name, type}
-                    //otherwise: {name, type}
-                    //
-                    //if type==0
-                    //  base
-                    //else
-                    //  otherwise
-                    //
-                    //In the wild we have 2 all same types, differnt namse for otherwise ,ids/blockids
-                    //parsing is as follows for IDSET
-                    //type = parse.varint()
-                    //if type == 0
-                    //  const reg_tag = parse.string()
-                    //else
-                    //  parse array of size (type -1) of type: varint
-                    //  so its a union
-                },
-                .registryEntryHolder => {
+                //.registryEntryHolderSet => {
+                //Has the fields:
+                //base: {name, type}
+                //otherwise: {name, type}
+                //
+                //if type==0
+                //  base
+                //else
+                //  otherwise
+                //
+                //In the wild we have 2 all same types, differnt namse for otherwise ,ids/blockids
+                //parsing is as follows for IDSET
+                //type = parse.varint()
+                //if type == 0
+                //  const reg_tag = parse.string()
+                //else
+                //  parse array of size (type -1) of type: varint
+                //  so its a union
+                //},
+                .registryEntryHolderSet, .registryEntryHolder => {
 
                     //has the fields
                     //baseName
@@ -942,6 +1028,25 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //  return parse.childTYpe
                     //else
                     //  return id + 1
+                    //
+                    //The behavior of this is slightly different than switch as the id is modified
+                    const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
+                    const child = try parent.newDecl(Tname);
+                    const ob = getV(a.items[1], .object);
+                    child.d = .{ .registryEntry = .{
+                        .child_t_name = ob.get("otherwise").?.object.get("name").?.string,
+                        .child_t = ob.get("otherwise").?.object.get("type").?.string,
+                        .is_array = t == .registryEntryHolderSet,
+                    } };
+
+                    if (flags.gen_fields) {
+                        try parent.fields.append(.{
+                            .switch_value = flags.switch_value,
+                            .name = fname,
+                            .optional = flags.optional,
+                            .type = .{ .compound = child },
+                        });
+                    }
                 },
                 //.registryEntryHolder, .registryEntryHolderSet => {},
                 .bitfield => {
@@ -1173,6 +1278,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                             .optional = flags.optional,
                             .type = .{ .compound = child },
                             .switch_arg_name = tag_type_name,
+                            .switch_arg_is_bool = is_bool,
                         });
                 },
                 .buffer, .array => {

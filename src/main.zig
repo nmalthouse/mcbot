@@ -26,7 +26,6 @@ const V2i = vector.V2i;
 
 const common = @import("common.zig");
 
-const fbsT = std.io.FixedBufferStream([]const u8);
 const AutoParse = mc.AutoParse;
 
 const mcTypes = @import("mcContext.zig");
@@ -90,9 +89,9 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
     while (bot1.connection_state == .login) {
         const pd = try mc.recvPacket(alloc, s.reader(), comp_thresh);
         defer alloc.free(pd);
-        var fbs_ = fbsT{ .buffer = pd, .pos = 0 };
-        const parseT = mc.packetParseCtx(fbsT.Reader);
-        var parse = parseT.init(fbs_.reader(), arena_alloc);
+        var fbs_ = mc.fbsT{ .buffer = pd, .pos = 0 };
+        //const parseT = mc.packetParseCtx(fbsT.Reader);
+        var parse = mc.parseT.init(fbs_.reader(), arena_alloc);
         const pid = parse.varInt();
         switch (@as(Proto.Login_Clientbound, @enumFromInt(pid))) {
             .cookie_request => {
@@ -185,7 +184,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     defer bot1.modify_mutex.unlock();
 
     var fbs_ = blk: {
-        var fbs = fbsT{ .buffer = packet_buf, .pos = 0 };
+        var fbs = mc.fbsT{ .buffer = packet_buf, .pos = 0 };
         _ = mc.readVarInt(fbs.reader()); //Discard the packet length
         if (bot1.compression_threshold > -1) {
             const comp_len = mc.readVarInt(fbs.reader());
@@ -194,14 +193,13 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
             var zlib_stream = std.compress.zlib.decompressor(fbs.reader());
             const ubuf = try zlib_stream.reader().readAllAlloc(arena_alloc, std.math.maxInt(usize));
-            break :blk fbsT{ .buffer = ubuf, .pos = 0 };
+            break :blk mc.fbsT{ .buffer = ubuf, .pos = 0 };
         } else {
             break :blk fbs;
         }
     };
 
-    const parseT = mc.packetParseCtx(fbsT.Reader);
-    var parse = parseT.init(fbs_.reader(), arena_alloc);
+    var parse = mc.parseT.init(fbs_.reader(), arena_alloc);
 
     //const plen = parse.varInt();
     //_ = plen;
@@ -546,17 +544,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const d = try Ap(Penum, .set_slot, &parse);
             inv_log.info("set_slot: win_id: data: {any}", .{d});
             if (d.windowId == -1 and d.slot == -1) {
-                bot1.held_item = d.item;
+                bot1.held_item = mc.Slot.fromProto(d.item);
             } else if (d.windowId == 0) {
                 bot1.container_state = d.stateId;
-                try bot1.inventory.setSlot(@intCast(d.slot), d.item);
+                try bot1.inventory.setSlot(@intCast(d.slot), mc.Slot.fromProto(d.item));
             } else if (bot1.interacted_inventory.win_id != null and d.windowId == bot1.interacted_inventory.win_id.?) {
                 bot1.container_state = d.stateId;
-                try bot1.interacted_inventory.setSlot(@intCast(d.slot), d.item);
+                try bot1.interacted_inventory.setSlot(@intCast(d.slot), mc.Slot.fromProto(d.item));
 
                 const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
                 if (d.slot >= player_inv_start)
-                    try bot1.inventory.setSlot(@intCast(d.slot - player_inv_start + 9), d.item);
+                    try bot1.inventory.setSlot(@intCast(d.slot - player_inv_start + 9), mc.Slot.fromProto(d.item));
             }
         },
         .open_window => {
@@ -571,7 +569,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             if (d.windowId == 0) {
                 for (d.items, 0..) |it, i| {
                     bot1.container_state = d.stateId;
-                    try bot1.inventory.setSlot(@intCast(i), it.i_items);
+                    try bot1.inventory.setSlot(@intCast(i), mc.Slot.fromProto(it.i_items));
                 }
             } else {
                 try bot1.interacted_inventory.setSize(@intCast(d.items.len));
@@ -579,10 +577,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 bot1.container_state = d.stateId;
                 const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
                 for (d.items, 0..) |it, i| {
-                    try bot1.interacted_inventory.setSlot(@intCast(i), it.i_items);
+                    try bot1.interacted_inventory.setSlot(@intCast(i), mc.Slot.fromProto(it.i_items));
                     const ii: i16 = @intCast(i);
                     if (i >= player_inv_start)
-                        try bot1.inventory.setSlot(@intCast(ii - player_inv_start + 9), it.i_items);
+                        try bot1.inventory.setSlot(@intCast(ii - player_inv_start + 9), mc.Slot.fromProto(it.i_items));
                 }
             }
         },
@@ -1522,7 +1520,7 @@ pub const LuaApi = struct {
             const upper_index = if (interacted != null) inventory.slots.items.len - 36 else inventory.slots.items.len;
             var count: usize = 0;
             for (inventory.slots.items[0..upper_index]) |item| {
-                if (item != null)
+                if (item.count > 0)
                     count += 1;
             }
             const LuaItem = struct {
@@ -1532,10 +1530,10 @@ pub const LuaApi = struct {
             const ret_slice: []LuaItem = self.vm.getAlloc().alloc(LuaItem, count) catch return 0;
             var i: usize = 0;
             for (inventory.slots.items[0..upper_index]) |item| {
-                if (item) |it| {
+                if (item.count > 0) {
                     ret_slice[i] = .{
-                        .count = it.count,
-                        .name = self.world.reg.getItem(it.item_id).name,
+                        .count = item.count,
+                        .name = self.world.reg.getItem(item.item_id).name,
                     };
                     i += 1;
                 }
@@ -1677,7 +1675,7 @@ pub const LuaApi = struct {
             const inventory = if (interacted != null) &self.bo.interacted_inventory else &self.bo.inventory;
             const upper_index = if (interacted != null) inventory.slots.items.len - 36 else inventory.slots.items.len;
             for (inventory.slots.items[0..upper_index]) |sl| {
-                const slot = sl orelse continue;
+                const slot = if (sl.count > 0) sl else continue;
 
                 switch (match) {
                     .tag => {
@@ -1724,7 +1722,7 @@ pub const LuaApi = struct {
             defer self.bo.modify_mutex.unlock();
             var count: usize = 0;
             for (self.bo.inventory.slots.items) |sl| {
-                if (sl == null)
+                if (sl.count == 0)
                     count += 1;
             }
             Lua.pushV(L, count);
@@ -2010,7 +2008,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     const search_i = if (inv.direction == .deposit) player_inv_start else 0;
                                     const search_i_end = if (inv.direction == .deposit) inv_len else player_inv_start;
                                     for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
-                                        const s = slot orelse continue;
+                                        const s = if (slot.count > 0) slot else continue;
                                         var should_move = false;
                                         switch (inv.match) {
                                             .by_id => |match_id| {
@@ -2095,7 +2093,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         th_d.break_timer_max = @as(f64, @floatFromInt(btime)) / 20.0;
 
                                         try bp.setHeldItem(0);
-                                        try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, null);
+                                        try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, .{});
                                     } else {
                                         th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
                                             .best_tool = false,
@@ -2839,14 +2837,14 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             for (bot1.inventory.slots.items, 0..) |slot, i| {
                 const rr = inv_map.value.default[i];
                 const rect = graph.Rec(area.x + rr[0] * sx, area.y + rr[1] * sy, 16 * sx, 16 * sy);
-                if (slot) |s| {
-                    if (item_atlas.getTextureRecO(s.item_id)) |tr| {
+                if (slot.count > 0) {
+                    if (item_atlas.getTextureRecO(slot.item_id)) |tr| {
                         gctx.rectTex(rect, tr, item_atlas.texture);
                     } else {
-                        const item = world.reg.getItem(s.item_id);
+                        const item = world.reg.getItem(slot.item_id);
                         gctx.text(rect.pos(), item.name, &font, 14, 0xff);
                     }
-                    gctx.textFmt(rect.pos().add(.{ .x = 0, .y = rect.h / 2 }), "{d}", .{s.count}, &font, 15, 0xff);
+                    gctx.textFmt(rect.pos().add(.{ .x = 0, .y = rect.h / 2 }), "{d}", .{slot.count}, &font, 15, 0xff);
                 }
             }
 
@@ -2914,14 +2912,14 @@ fn drawInventory(
             iw - padding,
         );
         gctx.rect(rr, 0xffffffff);
-        if (slot) |s| {
-            if (item_atlas.getTextureRecO(s.item_id)) |tr| {
+        if (slot.count > 0) {
+            if (item_atlas.getTextureRecO(slot.item_id)) |tr| {
                 gctx.rectTex(rr, tr, item_atlas.texture);
             } else {
-                const item = reg.getItem(s.item_id);
+                const item = reg.getItem(slot.item_id);
                 gctx.text(rr.pos(), item.name, font, 12, 0xff);
             }
-            gctx.textFmt(rr.pos().add(.{ .x = 0, .y = rr.h / 2 }), "{d}", .{s.count}, font, 20, 0xff);
+            gctx.textFmt(rr.pos().add(.{ .x = 0, .y = rr.h / 2 }), "{d}", .{slot.count}, font, 20, 0xff);
         }
     }
 }

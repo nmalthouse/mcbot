@@ -217,46 +217,43 @@ pub const MovementState = struct {
 pub const Inventory = struct {
     const Self = @This();
     pub const FoundSlot = struct { slot: mc.Slot, index: u16 };
-    slots: std.ArrayList(?mc.Slot),
+    slots: std.ArrayList(mc.Slot),
     win_id: ?u8 = null,
     win_type: u32 = 0,
 
     alloc: std.mem.Allocator,
 
     pub fn setSize(self: *Self, size: u32) !void {
-        for (self.slots.items) |optslot| {
-            if (optslot) |slot| {
-                if (slot.nbt_buffer) |buf| {
-                    self.alloc.free(buf);
-                }
-            }
-        }
+        //TODO Don't leak the memory!
+        //for (self.slots.items) |optslot| {
+        //    if(optslot == .true)|
+        //        if (slot.nbt_buffer) |buf| {
+        //            self.alloc.free(buf);
+        //        }
+        //}
         try self.slots.resize(size);
         for (self.slots.items) |*item| {
-            item.* = null;
+            item.count = 0; //Mark as empty slot
         }
     }
 
     pub fn getCount(self: *Self, item: RegD.ItemId) usize {
         var total: usize = 0;
         for (self.slots.items) |it| {
-            if (it != null and it.?.item_id == item)
-                total += it.?.count;
+            if (it.count > 0 and it.item_id == item)
+                total += it.count;
         }
         return total;
     }
 
-    pub fn setSlot(self: *Self, index: u32, slot: ?mc.Slot) !void {
-        if (self.slots.items[index]) |old| {
-            if (old.nbt_buffer) |buf|
-                self.alloc.free(buf);
-        }
+    pub fn setSlot(self: *Self, index: u32, slot: mc.Slot) !void {
         self.slots.items[index] = slot;
-        if (slot) |*s| {
-            if (s.nbt_buffer) |buf| {
-                self.slots.items[index].?.nbt_buffer = try self.alloc.dupe(u8, buf);
-            }
-        }
+        //TODO DEAL with allocated memory
+        //if (slot) |*s| {
+        //    if (s.nbt_buffer) |buf| {
+        //        self.slots.items[index].?.nbt_buffer = try self.alloc.dupe(u8, buf);
+        //    }
+        //}
     }
 
     pub fn findItem(self: *Self, reg: *const Reg, item_name: []const u8) ?FoundSlot {
@@ -265,8 +262,8 @@ pub const Inventory = struct {
     }
 
     pub fn findItemFromId(self: *Self, item_id: RegD.ItemId) ?FoundSlot {
-        for (self.slots.items, 0..) |o_slot, i| {
-            if (o_slot) |slot| {
+        for (self.slots.items, 0..) |slot, i| {
+            if (slot.count > 0) {
                 if (slot.item_id == item_id)
                     return .{ .slot = slot, .index = @intCast(i) };
             }
@@ -277,10 +274,10 @@ pub const Inventory = struct {
     pub fn findItemFromList(self: *Self, list: anytype, comptime list_field_name: ?[]const u8) ?FoundSlot {
         for (self.slots.items, 0..) |slot, si| {
             for (list) |li| {
-                if (slot) |s| {
+                if (slot.count > 0) {
                     const id: RegD.ItemId = if (list_field_name) |lf| @field(li, lf) else li;
-                    if (s.item_id == id)
-                        return .{ .slot = s, .index = @intCast(si) };
+                    if (slot.item_id == id)
+                        return .{ .slot = slot, .index = @intCast(si) };
                 }
             }
         }
@@ -291,7 +288,7 @@ pub const Inventory = struct {
         const matching_item_ids = reg.getMaterial(material) orelse return null;
         for (self.slots.items, 0..) |slot, i| {
             for (matching_item_ids) |id| {
-                if (slot != null and id.id == slot.?.item_id) {
+                if (slot.count == 0 and id.id == slot.item_id) {
                     return .{ .slot_index = @intCast(i), .mul = id.mul };
                 }
             }
@@ -301,17 +298,10 @@ pub const Inventory = struct {
     //pub fn findItemMatching(self: *Self)void{ }
 
     pub fn init(alloc: std.mem.Allocator) Inventory {
-        return .{ .slots = std.ArrayList(?mc.Slot).init(alloc), .alloc = alloc };
+        return .{ .slots = std.ArrayList(mc.Slot).init(alloc), .alloc = alloc };
     }
 
     pub fn deinit(self: *@This()) void {
-        for (self.slots.items) |*slot| {
-            if (slot.*) |so| {
-                if (so.nbt_buffer) |buf| {
-                    self.alloc.free(buf);
-                }
-            }
-        }
         self.slots.deinit();
     }
 };
