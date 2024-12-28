@@ -6,7 +6,7 @@ const V3f = vector.V3f;
 const Bot = @import("bot.zig").Bot;
 const Reg = @import("data_reg.zig");
 const nbt_zig = @import("nbt.zig");
-pub const MAX_BOTS = 32;
+const config = @import("config");
 
 pub fn RingBuf(comptime n: usize, comptime T: type) type {
     return struct {
@@ -27,7 +27,7 @@ pub fn RingBuf(comptime n: usize, comptime T: type) type {
 }
 
 pub const Entity = struct {
-    const OwnersT = std.bit_set.IntegerBitSet(MAX_BOTS);
+    const OwnersT = std.bit_set.IntegerBitSet(config.MAX_BOTS);
     owners: OwnersT,
     kind: Proto.EntityEnum,
     uuid: u128,
