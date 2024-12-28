@@ -449,7 +449,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
             //}
             bot1.dimension_id = ws.dimension;
-            unreachable;
+            //unreachable;
 
             //const j = try d.dimensionCodec.entry.toJsonValue(arena_alloc);
             //const wr = std.io.getStdOut().writer();
@@ -2924,7 +2924,7 @@ pub fn main() !void {
 
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
-        const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id);
+        const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id, &world);
         event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
         try world.addBot(mb);

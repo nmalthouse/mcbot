@@ -1733,8 +1733,8 @@ pub const TagRegistry = struct {
     }
 
     pub fn hasTag(self: *Self, block_id: usize, tag_type: []const u8, tag: []const u8) bool {
-        const tags = self.tags.getPtr(tag_type) orelse unreachable;
-        for ((tags.getPtr(tag) orelse unreachable).items) |it| {
+        const tags = self.tags.getPtr(tag_type) orelse return false;
+        for ((tags.getPtr(tag) orelse return false).items) |it| {
             if (it == block_id) {
                 return true;
             }

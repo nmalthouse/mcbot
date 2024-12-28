@@ -5,8 +5,10 @@ const eql = std.mem.eql;
 const Proto = @import("protocol.zig");
 const annotateManualParse = mc.annotateManualParse;
 const mc = @import("listener.zig");
+const mcTypes = @import("mcContext.zig");
+const McWorld = mcTypes.McWorld;
 
-pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16, version_id: i32) !Bot {
+pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]const u8, ip: []const u8, port: u16, version_id: i32, world: *McWorld) !Bot {
     const log = std.log.scoped(.parsing);
     var bot1 = try Bot.init(alloc, bot_name, script_name);
     errdefer bot1.deinit();
@@ -56,34 +58,44 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                     const d = try Proto.Config_Clientbound.packets.Type_packet_registry_data.parse(&parse);
                     log.info("Reg data: {s}", .{d.id});
                     if (eql(u8, d.id, "minecraft:dimension_type")) {
-                        //world.modify_mutex.lock();
-                        //defer world.modify_mutex.unlock();
-                        for (d.entries) |entry| {
-                            //for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
-                            //    const name = dims.compound.get("name").?;
-                            //    const elem = dims.compound.get("element").?.compound;
-                            //    const new_dim = McWorld.DimInfo{
-                            //        .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
-                            //        //.height = elem.get("height").?.int,
-                            //        .min_y = elem.get("min_y").?.int,
-                            //        .bed_works = elem.get("bed_works").?.byte > 0,
-                            //        .id = dims.compound.get("id").?.int,
-                            //    };
-                            //    if (world.dimension_map.get(name.string) == null)
-                            //        try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
-                            //    if (world.dimensions.get(new_dim.id) == null)
-                            //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
-                            //}
-                            std.debug.print("{s}\n", .{entry.i_entries.key});
+                        world.modify_mutex.lock();
+                        defer world.modify_mutex.unlock();
+                        for (d.entries, 0..) |entry, i| {
                             if (entry.i_entries.value) |val| {
-                                std.debug.print("HAS\n", .{});
-                                _ = val;
-                                //const j = try val.toJsonValue(arena_alloc);
-                                //const wr = std.io.getStdOut().writer();
-                                //try std.json.stringify(j, .{ .whitespace = .indent_4 }, wr);
+                                const elem = val.compound;
+                                const new_dim = McWorld.DimInfo{
+                                    .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
+                                    .min_y = elem.get("min_y").?.int,
+                                    .bed_works = elem.get("bed_works").?.byte > 0,
+                                    .id = @intCast(i),
+                                    //.id = dims.compound.get("id").?.int,
+                                };
+                                const name = entry.i_entries.key;
+                                if (world.dimension_map.get(name) == null)
+                                    try world.dimension_map.put(try world.alloc.dupe(u8, name), new_dim);
+                                if (world.dimensions.get(new_dim.id) == null)
+                                    try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
+                                log.info("Adding dimension {s} id:{d}", .{ name, new_dim.id });
+
+                                //for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
+                                //    const name = dims.compound.get("name").?;
+                                //    const elem = dims.compound.get("element").?.compound;
+                                //    const new_dim = McWorld.DimInfo{
+                                //        .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
+                                //        //.height = elem.get("height").?.int,
+                                //        .min_y = elem.get("min_y").?.int,
+                                //        .bed_works = elem.get("bed_works").?.byte > 0,
+                                //        .id = dims.compound.get("id").?.int,
+                                //    };
+                                //    if (world.dimension_map.get(name.string) == null)
+                                //        try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
+                                //    if (world.dimensions.get(new_dim.id) == null)
+                                //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
+                                //}
                             }
                         }
-                    }
+                    } else {}
+                    std.debug.print("{s}\n", .{d.id});
                 },
                 .finish_configuration => {
                     log.info("Config finished", .{});

@@ -849,19 +849,22 @@ pub const ParseStructGen = struct {
                                     uf.tag_type,
                                     ERR_NAME,
                                 });
-                                try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                                //try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                                 try w.print("switch(switch_arg){{\n", .{});
                                 for (self.fields.items) |f| {
                                     try w.print(".{s} => {{\n", .{f.name});
                                     if (f.optional == .yes) {
                                         //    try w.print("}}", .{});
-                                        try w.print("ret.{s} = null;\n", .{f.name});
+                                        //try w.print("ret.{s} = null;\n", .{f.name});
+                                        try w.print("var r_{s}:{s} = null;\n", .{ f.name, try f.type.getIdentifier() });
+                                        try f.printParseFn(w, native_mapper, "r_");
+                                    } else {
+                                        try f.printParseFn(w, native_mapper, "const r_");
                                     }
-                                    try f.printParseFn(w, native_mapper, "ret.");
+                                    try w.print("return .{{ .{s} = r_{s} }};", .{ f.name, f.name });
                                     try w.print("}},", .{}); //switch case
                                 }
                                 try w.print("}}\n", .{}); //Switch body
-                                try w.print("return ret;\n", .{});
                                 try w.print("}}\n", .{}); //fn decl
                             },
                             //Boolean parse functions take a integer as argument
@@ -872,7 +875,6 @@ pub const ParseStructGen = struct {
                                     if (uf.category == .numeric) uf.tag_type else "u1", //no need to cast this unless bool
                                     ERR_NAME,
                                 });
-                                try w.print("{s} ret: @This() = undefined;\n", .{cvar});
                                 try w.print("switch(switch_arg){{\n", .{});
                                 var else_branch_present = false;
                                 for (self.fields.items) |f| {
@@ -884,16 +886,18 @@ pub const ParseStructGen = struct {
                                     }
                                     if (f.optional == .yes) {
                                         //    try w.print("}}", .{});
-                                        try w.print("ret.{s} = null;\n", .{f.name});
+                                        try w.print("var r_{s}:{s} = null;\n", .{ f.name, try f.type.getIdentifier() });
+                                        try f.printParseFn(w, native_mapper, "r_");
+                                    } else {
+                                        try f.printParseFn(w, native_mapper, "const r_");
                                     }
-                                    try f.printParseFn(w, native_mapper, "ret.");
+                                    try w.print("return .{{ .{s} = r_{s} }};", .{ f.name, f.name });
                                     try w.print("}},", .{}); //switch case
                                 }
                                 if (!else_branch_present and uf.category != .strict_bool) { //Prevent zig compile error, not all cases handled
                                     try w.print("else => return error.invalidSwitchValue,", .{});
                                 }
                                 try w.print("}}\n", .{}); //Switch body
-                                try w.print("return ret;\n", .{});
                                 try w.print("}}\n", .{}); //fn decl
                             },
                         }
