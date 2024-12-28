@@ -50,6 +50,39 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                         log.info("flag: {s}", .{f.i_features});
                     }
                 },
+                .tags => {
+                    annotateManualParse("1.21.3");
+                    if (!world.has_tag_table) {
+                        world.has_tag_table = true;
+
+                        //TODO Does this packet replace all the tags or does it append to an existing
+                        const num_tags = parse.varInt();
+
+                        var n: u32 = 0;
+                        while (n < num_tags) : (n += 1) {
+                            const identifier = try parse.string(null);
+                            { //TAG
+                                const n_tags = parse.varInt();
+                                var nj: u32 = 0;
+
+                                while (nj < n_tags) : (nj += 1) {
+                                    const ident = try parse.string(null);
+                                    const num_ids = parse.varInt();
+
+                                    var ids = std.ArrayList(u32).init(alloc);
+                                    defer ids.deinit();
+                                    try ids.resize(@as(usize, @intCast(num_ids)));
+                                    var ni: u32 = 0;
+                                    while (ni < num_ids) : (ni += 1)
+                                        ids.items[ni] = @as(u32, @intCast(parse.varInt()));
+                                    //std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
+                                    try world.tag_table.addTag(identifier, ident, ids.items);
+                                }
+                            }
+                        }
+                        log.info("Tags added {d} namespaces", .{num_tags});
+                    }
+                },
                 .ping => {
                     const d = try Proto.Config_Clientbound.packets.Type_packet_ping.parse(&parse);
                     try pctx.sendAuto(Proto.Config_Serverbound, .pong, .{ .id = d.id });
@@ -95,7 +128,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                             }
                         }
                     } else {}
-                    std.debug.print("{s}\n", .{d.id});
                 },
                 .finish_configuration => {
                     log.info("Config finished", .{});

@@ -73,6 +73,7 @@ test "autoparsefromenum" {
     _ = AutoParseFromEnum.getPacketType(Proto.Play_Clientbound, .block_action);
 }
 
+const LOG_ALL_SENT = false;
 const Serv = std.net.Stream.Writer;
 pub const PacketCtx = struct {
     const Play = Proto.Play_Serverbound;
@@ -98,6 +99,9 @@ pub const PacketCtx = struct {
         comptime value: proto_enum,
         to_send: AutoParseFromEnum.getPacketType(proto_enum, value),
     ) !void {
+        if (LOG_ALL_SENT) {
+            std.debug.print("{s}\n", .{@tagName(value)});
+        }
         try self.packet.clear();
         try self.packet.packetId(value);
         try to_send.send(&self.packet);
@@ -351,21 +355,6 @@ pub const Packet = struct {
     pub fn boolean(self: *Self, val: bool) !void {
         try self.buffer.writer().writeByte(if (val) 0x01 else 0x00);
     }
-
-    //pub fn slot(self: *Self, val: ?Slot) !void {
-    //    annotateManualParse("1.19.3");
-    //    const wr = self.buffer.writer();
-    //    try self.boolean(val != null);
-    //    if (val) |sl| {
-    //        try self.varInt(sl.item_id);
-    //        try self.ubyte(sl.count);
-    //        if (sl.nbt_buffer) |buf| {
-    //            _ = try wr.write(buf);
-    //        } else {
-    //            try self.ubyte(0);
-    //        }
-    //    }
-    //}
 
     pub fn packetId(self: *Self, val: anytype) !void {
         try self.varInt(@intFromEnum(val));

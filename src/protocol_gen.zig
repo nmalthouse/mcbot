@@ -151,7 +151,7 @@ pub fn main() !void {
         .{ "optionalNbt", em },
         //.{ "command_node", em },
         //.{ "packedChunkPos", em },
-        //.{ "tags", em },
+        .{ "Type_tags", "[]const Array_tags" },
         //.{ "chunkBlockEntity", em },
         .{ "entityMetadata", em },
         //All that follow are for 1.21
@@ -163,7 +163,7 @@ pub fn main() !void {
         //.{ "Particle", em },
         //.{ "vec3f", "mc.V3f" },
         //.{ "Type_PositionUpdateRelatives", "mc.PositionUpdateRelatives" },
-        .{ "Type_tags", em },
+        //.{ "Type_tags", em },
         //.{ "Type_IDSet", "void" },
         .{ "Type_string", "[]const u8" },
         .{ "Type_ByteArray", "[]const u8" },
@@ -575,6 +575,7 @@ pub const ParseStructGen = struct {
             int_t: []const u8,
             int_w: i64,
         };
+        signed: bool = false,
         fields: std.ArrayList(FieldT),
         parent_t: i64, //Parent must be a integer type,
     };
@@ -738,7 +739,7 @@ pub const ParseStructGen = struct {
 
                     if (dir == .recv or dir == .both) {
                         try w.print("pub fn parse(pctx:anytype){s}!@This(){{\n", .{ERR_NAME});
-                        try w.print("const val = try pctx.parse_u{d}();\n", .{b.parent_t});
+                        try w.print("const val = try pctx.parse_{s}{d}();\n", .{ if (b.signed) "i" else "u", b.parent_t });
                         try w.print("return @This(){{\n", .{});
                         var sig_w: i64 = 0;
                         var insig_w: i64 = b.parent_t;
@@ -1057,17 +1058,21 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     child.d = .{ .bitfield = .{
                         .fields = std.ArrayList(ParseStructGen.BitfieldT.FieldT).init(parent.alloc),
                         .parent_t = @intCast(total_size),
+                        .signed = false,
                     } };
+                    var is_signed = true;
                     for (fields) |f| {
                         const ob = getV(f, .object);
                         const field_size = getV(ob.get("size").?, .integer);
                         const signed = getV(ob.get("signed").?, .bool);
+                        is_signed = signed;
                         try child.d.bitfield.fields.append(.{
                             .name = getV(ob.get("name").?, .string),
                             .int_t = try printString("{c}{d}", .{ @as(u8, if (signed) 'i' else 'u'), field_size }),
                             .int_w = @intCast(field_size),
                         });
                     }
+                    child.d.bitfield.signed = is_signed;
                     //try newGenType(
                     //    .{ .string = try printString("u{d}", .{@as(usize, switch (total_size) {
                     //        32 => 32,

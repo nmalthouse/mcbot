@@ -255,8 +255,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         .multi_block_change => {
             annotateManualParse("1.21.3");
             const chunk_pos = parse.chunk_position();
-            const sup_light = parse.boolean();
-            _ = sup_light;
             const n_blocks = parse.varInt();
             var n: u32 = 0;
             while (n < n_blocks) : (n += 1) {
