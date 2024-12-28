@@ -327,6 +327,24 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub export fn command(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const p = self.vm.getArg(L, []const u8, 1);
+            self.beginHalt();
+            defer self.endHalt();
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
+            var actions = ActionListT.init(self.world.alloc);
+            var ar = std.ArrayList(u8).init(self.world.alloc);
+            ar.appendSlice(p) catch unreachable;
+            errc(actions.append(.{ .chat = .{ .str = ar, .is_command = true } })) orelse return 0;
+            const pos = self.bo.pos.?;
+            self.thread_data.setActions(actions, pos);
+
+            return 0;
+        }
+
         pub export fn say(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
