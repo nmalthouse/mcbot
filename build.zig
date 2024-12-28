@@ -47,7 +47,13 @@ pub fn build(b: *std.Build) void {
     const run_step = b.step("run", "Run the app");
     run_step.dependOn(&run_cmd.step);
 
-    dotracy(b, exe);
+    const options = b.addOptions();
+    options.addOption(bool, "verbose_logging", b.option(bool, "verbose", "log verbose") orelse false);
+    options.addOption(u32, "MAX_BOTS", b.option(u32, "max_bots", "maximum number of bots this build can support") orelse 32);
+    options.addOption(bool, "enable_draw", b.option(bool, "enable_draw", "compile with debug renderer option") orelse true);
+    exe.root_module.addOptions("config", options);
+
+    //dotracy(b, exe);
 }
 pub fn dotracy(b: *std.Build, exe: *std.Build.Step.Compile) void {
     const opts = b.addOptions();
