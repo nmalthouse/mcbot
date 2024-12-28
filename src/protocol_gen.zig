@@ -53,9 +53,27 @@ const com = @import("common.zig");
 //
 // Parsing plan
 // Categorize the "switch"
-// case A: all numerical (opt default)
-// case B: boolean with exactly two fields (NO DEFAULT)
-// case C: all strings mapping to enum (opt default)
+// case A: all numerical (default allowed), total fields > 1
+// case B: boolean, total fields > 1 else unsupported
+// case C: all strings mapping to enum (default forbidden)
+// case D: single numerical no default, subset of case 'A'
+//
+
+// Other info(1.21.3)
+// Data types that are recursive
+// EffectDetail is recursive, it contains an optional Field hiddenEffect: EffectDetail
+// How to resolve?
+// Solution 1:
+// This is a really. really. stupid packet, essentially a linked list sent over the network? Are you kidding? Why not an array
+// Easiest thing is to special case it. Omit the recursive field and omit an return a parsing error if the bool is ever true as it is unlikely to ever occur in vanilla games.
+// Given how problematic protocol.json can be, having .patch files for supported versions might be the way to go.
+//
+// Solution 2
+// promote all optional fields to ?pointers, relatively easy
+//
+// Solution 3
+// Detect dependency cycles and selectively convert to pointers, annoying
+//
 
 fn getV(v: std.json.Value, comptime tag: std.meta.Tag(std.json.Value)) @TypeOf(@field(v, @tagName(tag))) {
     return getVal(v, tag) orelse unreachable;
@@ -235,11 +253,11 @@ pub fn main() !void {
         while (p_it.next()) |ty| {
             switch (ty.value_ptr.*) {
                 .string => |s| {
-                    if (!std.mem.eql(u8, s, "native")) {
+                    if (!eql(u8, s, "native")) {
                         try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, s });
                     } else {
                         if (native_map.get(ty.key_ptr.*)) |has| {
-                            if (std.mem.eql(u8, has, omit)) {
+                            if (eql(u8, has, omit)) {
                                 continue;
                             }
                             try w.print("pub const Type_{s} = {s};\n", .{ ty.key_ptr.*, has });
@@ -249,7 +267,7 @@ pub fn main() !void {
                     }
                 },
                 .array => {
-                    newGenType(ty.value_ptr.*, &parent, ty.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
+                    newGenType(ty.value_ptr.*, &parent, ty.key_ptr.*, .{ .gen_fields = false, .optional = .no }) catch |err| {
                         if (parent.decls.items.len > 0) {
                             const last = parent.getLastDecl();
                             last.unsupported = true;
@@ -270,6 +288,7 @@ pub fn main() !void {
             .{ .none = {} },
             .recv,
             &native_map,
+            null,
         );
         //try w.print("}};\n", .{});
     }
@@ -321,8 +340,8 @@ pub fn emitPacketEnum(native_map: *const std.StringHashMap([]const u8), alloc: s
         var parent = ParseStructGen.init(alloc);
         var p_it = type_it.iterator();
         while (p_it.next()) |p| {
-            if (std.mem.eql(u8, "packet", p.key_ptr.*)) continue;
-            newGenType(p.value_ptr.*, &parent, p.key_ptr.*, .{ .gen_fields = false, .optional = false }) catch |err| {
+            if (eql(u8, "packet", p.key_ptr.*)) continue;
+            newGenType(p.value_ptr.*, &parent, p.key_ptr.*, .{ .gen_fields = false, .optional = .no }) catch |err| {
                 if (parent.decls.items.len > 0) {
                     const last = parent.getLastDecl();
                     last.unsupported = true;
@@ -336,8 +355,9 @@ pub fn emitPacketEnum(native_map: *const std.StringHashMap([]const u8), alloc: s
         try parent.emit(
             writer,
             .{ .none = {} },
-            if (std.mem.eql(u8, "toClient", direction)) .recv else .send,
+            if (eql(u8, "toClient", direction)) .recv else .send,
             native_map,
+            null,
         );
         try writer.print("}};\n", .{});
     }
@@ -461,9 +481,15 @@ pub const ParseStructGen = struct {
     };
 
     pub const Field = struct {
+        const OptionalT = enum {
+            no,
+            yes,
+            yes_ptr,
+        };
         name: []const u8,
         type: PType,
-        optional: bool = false,
+        optional: OptionalT = .no,
+        switch_value: ?i64,
         dont_emit_default: bool = false,
         counter_arg_name: ?[]const u8 = null, //If set, parse funtions will have this as an additional arg, should be f_myCounterArg
         switch_arg_name: ?[]const u8 = null, //Same as counter but for switching
@@ -472,20 +498,27 @@ pub const ParseStructGen = struct {
         pub fn printParseFn(f: *const Field, w: anytype, native_mapper: *const std.StringHashMap([]const u8), ret_str: []const u8) !void {
             const switch_args = if (f.switch_arg_name) |sn| try printString(",ret.{s}", .{sn}) else "";
             const extra_args = if (f.counter_arg_name) |cn| try printString(",@intCast(ret.{s})", .{cn}) else "";
-            if (f.optional)
+            if (f.optional == .yes)
                 try w.print("if(try pctx.parse_bool()){{\n", .{});
-            switch (f.type) {
-                .primitive => |p| {
-                    if (native_mapper.get(p) != null) {
-                        try w.print("{s}{s} = try pctx.parse_{s}();\n", .{ ret_str, f.name, p });
-                    } else {
-                        try w.print("{s}{s} = try Type_{s}.parse(pctx);\n", .{ ret_str, f.name, p });
-                    }
-                },
-                //.primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
-                .compound => |co| try w.print("{s}{s} = try {s}.parse(pctx {s} {s});\n", .{ ret_str, f.name, co.name, extra_args, switch_args }),
+            if (f.optional == .yes_ptr) {
+                //UGLY HACK for this ugly packet
+                try w.print("const stupid = try pctx.alloc.create({s});\n", .{try f.type.getIdentifier()});
+                try w.print("stupid.* = try Type_EffectDetail.parse(pctx);\n", .{});
+                try w.print("ret.hiddenEffect = stupid;", .{});
+            } else {
+                switch (f.type) {
+                    .primitive => |p| {
+                        if (native_mapper.get(p) != null) {
+                            try w.print("{s}{s} = try pctx.parse_{s}();\n", .{ ret_str, f.name, p });
+                        } else {
+                            try w.print("{s}{s} = try Type_{s}.parse(pctx);\n", .{ ret_str, f.name, p });
+                        }
+                    },
+                    //.primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
+                    .compound => |co| try w.print("{s}{s} = try {s}.parse(pctx {s} {s});\n", .{ ret_str, f.name, co.name, extra_args, switch_args }),
+                }
             }
-            if (f.optional)
+            if (f.optional == .yes)
                 try w.print("}}", .{});
         }
     };
@@ -500,7 +533,18 @@ pub const ParseStructGen = struct {
 
     pub const UnionT = struct { //These are "switches"
         psg: ParseStructGen,
-        tag_type: []const u8,
+        info: EmitUnionInfo = .{},
+    };
+    pub const UnionCategory = enum {
+        strict_bool,
+        numeric,
+        enumeration,
+    };
+
+    pub const EmitUnionInfo = struct {
+        category: UnionCategory = .enumeration,
+        tag_type: []const u8 = "",
+        has_default: bool = false,
     };
 
     pub const BitfieldT = struct {
@@ -575,7 +619,7 @@ pub const ParseStructGen = struct {
         return new_decl;
     }
 
-    pub fn emit(self: *const Self, w: anytype, emit_kind: EmitKind, dir: EmitDir, native_mapper: *const std.StringHashMap([]const u8)) !void {
+    pub fn emit(self: *const Self, w: anytype, emit_kind: EmitKind, dir: EmitDir, native_mapper: *const std.StringHashMap([]const u8), union_info: ?EmitUnionInfo) !void {
         for (self.decls.items) |d| {
             if (d.unsupported) {
                 try w.print("pub const {s} = error.cannotBeAutoGenerated;\n", .{d.name});
@@ -667,25 +711,30 @@ pub const ParseStructGen = struct {
                 },
                 ._array => |a| {
                     try w.print("pub const {s} = struct{{\n", .{d.name});
-                    try a.s.emit(w, a.emit_kind, dir, native_mapper);
+                    try a.s.emit(w, a.emit_kind, dir, native_mapper, null);
                     try w.print("}};\n\n", .{});
                 },
                 ._union => |u| {
-                    try w.print("pub const {s} = union(enum){{\n", .{d.name});
-                    try w.print("//{s}\n", .{u.tag_type});
-                    try u.psg.emit(w, .{ .none = {} }, dir, native_mapper);
+                    try w.print("pub const {s} = union({s}){{\n", .{
+                        d.name,
+                        if (u.info.category == .enumeration) u.info.tag_type else "enum",
+                    });
+                    try w.print("//{s}\n", .{u.info.tag_type});
+                    try u.psg.emit(w, .{ .none = {} }, dir, native_mapper, u.info);
                     try w.print("}};\n\n", .{});
                 },
                 ._struct => |s| {
                     try w.print("pub const {s} = struct{{\n", .{d.name});
-                    try s.emit(w, .{ .none = {} }, dir, native_mapper);
+                    try s.emit(w, .{ .none = {} }, dir, native_mapper, null);
                     try w.print("}};\n\n", .{});
                 },
             }
         }
         for (self.fields.items) |f| {
-            if (f.optional and !f.dont_emit_default) {
+            if (f.optional == .yes and !f.dont_emit_default) {
                 try w.print("{s}: ?{s} = null,\n", .{ f.name, try f.type.getIdentifier() });
+            } else if (f.optional == .yes_ptr and !f.dont_emit_default) {
+                try w.print("{s}: ?*{s} = null,\n", .{ f.name, try f.type.getIdentifier() });
             } else {
                 try w.print("{s}: {s},\n", .{ f.name, try f.type.getIdentifier() });
             }
@@ -721,39 +770,61 @@ pub const ParseStructGen = struct {
                     .none => {
                         const pctx_var: []const u8 = if (self.fields.items.len > 0) "pctx" else "_";
                         const cvar: []const u8 = if (self.fields.items.len > 0) "var" else "const";
-                        if (self.parse_as_union) {
-                            try w.print("\npub fn parse({s}:anytype, switch_arg: {s})!@This() {{\n", .{
-                                pctx_var,
-                                if (self.parse_as_union_is_num) "i32" else self.parse_as_union_type,
-                            });
-                            try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                        if (union_info) |uf| {
+                            switch (uf.category) {
+                                //Enumeration parse fn's take a enum value as argument
+                                .enumeration => {
+                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s})!@This(){{\n", .{
+                                        pctx_var,
+                                        uf.tag_type,
+                                    });
+                                    try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                                    try w.print("switch(switch_arg){{\n", .{});
+                                    for (self.fields.items) |f| {
+                                        try w.print(".{s} => {{\n", .{f.name});
+                                        if (f.optional == .yes) {
+                                            //    try w.print("}}", .{});
+                                            try w.print("ret.{s} = null;\n", .{f.name});
+                                        }
+                                        try f.printParseFn(w, native_mapper, "ret.");
+                                        try w.print("}},", .{}); //switch case
+                                    }
+                                    try w.print("}}\n", .{}); //Switch body
+                                    try w.print("}}\n", .{}); //fn decl
+                                },
+                                //Boolean parse functions take a integer as argument
+                                //Numeric parse functions take an integer as argument
+                                .strict_bool, .numeric => {
+                                    try w.print("pub fn parse({s}:anytype, switch_arg: {s})!@This(){{\n", .{
+                                        pctx_var,
+                                        uf.tag_type, //no need to cast this int
+                                    });
+                                    try w.print("{s} ret: @This() = undefined;\n", .{cvar});
+                                    try w.print("switch(switch_arg){{\n", .{});
+                                    var else_branch_present = false;
+                                    for (self.fields.items) |f| {
+                                        if (f.switch_value) |sv| {
+                                            try w.print("{d} => {{\n", .{sv});
+                                        } else {
+                                            else_branch_present = true;
+                                            try w.print("else => {{\n", .{});
+                                        }
+                                        if (f.optional == .yes) {
+                                            //    try w.print("}}", .{});
+                                            try w.print("ret.{s} = null;\n", .{f.name});
+                                        }
+                                        try f.printParseFn(w, native_mapper, "ret.");
+                                        try w.print("}},", .{}); //switch case
+                                    }
+                                    if (!else_branch_present) { //Prevent zig compile error, not all cases handled
+                                        try w.print("else => return error.invalidSwitchValue,", .{});
+                                    }
+                                    try w.print("}}\n", .{}); //Switch body
+                                    try w.print("}}\n", .{}); //fn decl
+                                },
+                            }
                             //try w.print("switch(@as({s}, @enumFromInt(switch_arg))){{\n", .{self.parse_as_union_type});
                             //const int_str = "switch(@as(@typeInfo({s}).Union.tag_type.?, @enumFromInt(switch_arg))){{\n";
-                            const int_str = "switch(@as({s}, @enumFromInt(switch_arg))){{\n";
-                            const enum_str = "switch(switch_arg){\n";
-                            if (self.parse_as_union_is_num) {
-                                try w.print(int_str, .{self.parse_as_union_type});
-                            } else {
-                                try w.print("{s}", .{enum_str});
-                            }
-                            for (self.fields.items) |f| {
-                                try w.print(".{s} => {{ \n", .{f.name});
-                                try f.printParseFn(w, native_mapper, "ret.");
-                                //if (f.optional)
-                                //    try w.print("if(try pctx.parse_bool()){{\n", .{});
-                                //switch (f.type) {
-                                //    .primitive => |p| try w.print("ret.{s} = try pctx.parse_{s}();\n", .{ f.name, p }),
-                                //    .compound => |co| try w.print("ret.{s} = try {s}.parse(pctx);\n", .{ f.name, co.name }),
-                                //}
-                                if (f.optional) {
-                                    //    try w.print("}}", .{});
-                                    try w.print("ret.{s} = null\n;", .{f.name});
-                                }
-                                try w.print("}},", .{});
-                            }
-
-                            try w.print("}}\nreturn ret;\n", .{});
-                            try w.print("}}\n", .{});
                         } else {
                             try w.print("\npub fn parse({s}:anytype)!@This() {{\n", .{pctx_var});
                             try w.print("{s} ret: @This() = undefined;\n", .{cvar});
@@ -771,11 +842,11 @@ pub const ParseStructGen = struct {
                 var discard_psend = true;
                 for (self.fields.items) |f| {
                     discard_psend = false;
-                    if (f.optional) {
+                    if (f.optional == .yes) {
                         try w.print("try pk.send_bool(self.{s} != null);\n", .{f.name});
                         try w.print("if(self.{s} != null){{\n", .{f.name});
                     }
-                    const unwrapped_optional: []const u8 = if (f.optional) try printString("{s}.?", .{f.name}) else f.name;
+                    const unwrapped_optional: []const u8 = if (f.optional == .yes) try printString("{s}.?", .{f.name}) else f.name;
                     switch (f.type) {
                         //TODO determine if the array we are sending is a primitive and then just use write()
                         .primitive => |p| try w.print("try pk.send_{s}(self.{s});\n", .{ p, unwrapped_optional }),
@@ -791,7 +862,7 @@ pub const ParseStructGen = struct {
                             }
                         },
                     }
-                    if (f.optional)
+                    if (f.optional == .yes)
                         try w.print("}}\n", .{});
                 }
                 if (discard_psend)
@@ -808,7 +879,8 @@ pub const ParseStructGen = struct {
 var state_anon_level: usize = 0;
 pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8, flags: struct {
     gen_fields: bool = false,
-    optional: bool = false,
+    optional: ParseStructGen.Field.OptionalT = .no,
+    switch_value: ?i64 = null,
 }) !void {
     const ns_prefix = "Type_";
     //const ns_prefix = "";
@@ -914,7 +986,12 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //);
                     //std.debug.print("TOTAL BITFIELD SIZE {d}\n", .{total_size});
                     if (flags.gen_fields)
-                        try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
+                        try parent.fields.append(.{
+                            .switch_value = flags.switch_value,
+                            .name = fname,
+                            .optional = flags.optional,
+                            .type = .{ .compound = child },
+                        });
                 },
                 .mapper => {
                     const fields = getV(a.items[1], .object);
@@ -934,6 +1011,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     }
                     if (flags.gen_fields)
                         try parent.fields.append(.{
+                            .switch_value = flags.switch_value,
                             .name = fname,
                             .optional = flags.optional,
                             .type = .{ .compound = child },
@@ -967,29 +1045,29 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         const ident_mangle = ident;
                         //const ident_mangle = try printString("f_{s}", .{ident});
                         const field_type = ob.get("type").?;
-                        try newGenType(field_type, &child.d._struct, ident_mangle, .{ .gen_fields = true, .optional = false });
+                        try newGenType(field_type, &child.d._struct, ident_mangle, .{ .gen_fields = true, .optional = .no });
                     }
                     if (flags.gen_fields)
-                        try parent.fields.append(.{ .name = fname, .optional = flags.optional, .type = .{ .compound = child } });
+                        try parent.fields.append(.{
+                            .switch_value = flags.switch_value,
+                            .name = fname,
+                            .optional = flags.optional,
+                            .type = .{ .compound = child },
+                        });
                 },
                 .@"switch" => {
-                    //A switch is a union
-                    //Has fields:
-                    //compareTo
-                    //type
                     const sw_def = getV(a.items[1], .object);
                     const Tname = try printString("{s}{s}", .{ ns_prefix, fname });
-                    //const tag_type_name = try getLastMangled(sw_def.get("compareTo",.?))
                     const tag_type_name = sw_def.get("compareTo").?.string;
-                    //const tag_type_name = try printString("f_{s}", .{sw_def.get("compareTo").?.string});
                     var found = false;
                     //TODO these (1.21.3) packets have the switch's tag variable somewhere other than the direct parent and use a path notation: ../mystupid/path
+                    //Probably wontfix
                     //packet_player_info
                     //packet_declare_commands
                     //packet_advancements
                     var index: usize = 0;
                     for (parent.fields.items, 0..) |f, i| { //Search through parent's fields for matching tag
-                        if (std.mem.eql(u8, f.name, tag_type_name)) {
+                        if (eql(u8, f.name, tag_type_name)) {
                             index = i;
                             found = true;
                             break;
@@ -1001,16 +1079,14 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         return error.notSupported;
                     }
 
-                    //Switch on either enum or bare number
-                    //switches using numbers will need names for union fields
-
                     const child = try parent.newDecl(Tname);
+                    const tag_type = try parent.fields.items[index].type.getIdentifier();
                     child.d = .{ ._union = .{
                         .psg = ParseStructGen.init(parent.alloc),
-                        .tag_type = try parent.fields.items[index].type.getIdentifier(),
                     } };
                     child.d._union.psg.parse_as_union = true;
                     child.d._union.psg.parse_as_union_type = Tname;
+                    child.d._union.info.tag_type = tag_type;
                     //If its a number
                     //we parse an varint
                     //we pass a varint to the thing and need to convert it into a tag
@@ -1018,29 +1094,81 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     //DO THE IS NUM THINGE
                     const fields = sw_def.get("fields").?.object;
                     var f_it = fields.iterator();
-                    var is_num = true;
+                    var all_numeric = true;
                     while (f_it.next()) |f| {
                         const int_val = std.fmt.parseInt(i64, f.key_ptr.*, 10) catch {
                             //Not an int so we can continue
-                            try newGenType(f.value_ptr.*, &child.d._union.psg, f.key_ptr.*, .{ .gen_fields = true, .optional = false });
-                            is_num = false;
+                            try newGenType(f.value_ptr.*, &child.d._union.psg, f.key_ptr.*, .{ .gen_fields = true, .optional = .no });
+                            all_numeric = false;
                             continue;
                         };
-                        try newGenType(f.value_ptr.*, &child.d._union.psg, try printString("{s}_v_{d}", .{ fname, int_val }), .{ .gen_fields = true, .optional = false });
+                        try newGenType(f.value_ptr.*, &child.d._union.psg, try printString("{s}_v_{d}", .{ fname, int_val }), .{ .gen_fields = true, .optional = .no, .switch_value = int_val });
                     }
-                    child.d._union.psg.parse_as_union_is_num = is_num;
+                    child.d._union.psg.parse_as_union_is_num = all_numeric;
+                    const is_bool = blk: {
+                        if (eql(u8, "Type_bool", tag_type)) {
+                            if (child.d._union.psg.fields.items.len < 2) {
+                                std.debug.print("Will not parse switch on bool with less than two values {s}\n", .{fname});
+                                return error.notSupported;
+                            }
+                            break :blk true;
+                        }
+                        break :blk false;
+                    };
 
                     //make the default branch the else branch
                     if (sw_def.get("default")) |default| {
-                        try newGenType(default, &child.d._union.psg, "default", .{ .gen_fields = true, .optional = false });
+                        child.d._union.info.has_default = true;
+                        if (!is_bool and !all_numeric) {
+                            std.debug.print("Switch with default is not supported on enumeration switches {s}\n", .{fname});
+                            return error.notSupported;
+                        }
+                        try newGenType(default, &child.d._union.psg, "default", .{ .gen_fields = true, .optional = .no });
                     }
+
+                    //If the compareTo is a boolean we need to indicate as such to convert the bool to an integer
+                    //This is needed so zig won't complain about default vals in union Decl
                     for (child.d._union.psg.fields.items) |*f| {
                         f.dont_emit_default = true;
+                        if (is_bool) {
+                            if (eql(u8, f.name, "true")) {
+                                f.switch_value = 1;
+                            } else if (eql(u8, f.name, "false")) {
+                                f.switch_value = 0;
+                            } else if (eql(u8, f.name, "default")) {
+                                //Do nothing for default, the null switch value indicates else branch of switch
+                            } else {
+                                std.debug.print("Bool with invalid field: {s}\n", .{f.name});
+                                return error.notSupported;
+                            }
+                        }
                     }
-                    //const fields = getV(a.items[1], .array).items;
-                    //First memory represent, then worry about logic to retrieve switch(value)
+                    if (child.d._union.psg.fields.items.len == 0) {
+                        std.debug.print("Switch with zero fields not supported {s}\n", .{fname});
+                        return error.notSupported;
+                    }
+
+                    if (all_numeric and child.d._union.psg.fields.items.len == 1) { //Special case for those stupid id or x
+                        try child.d._union.psg.fields.append(.{
+                            .switch_value = null, // make this the default branch
+                            .name = "none",
+                            .optional = .no,
+                            .type = .{ .primitive = "void" },
+                        });
+                    }
+
+                    //TODO ensure bool passed into parse fn is cast to an integer
+                    child.d._union.info.category = blk: {
+                        if (all_numeric)
+                            break :blk .numeric;
+                        if (is_bool)
+                            break :blk .strict_bool;
+                        break :blk .enumeration;
+                    };
+
                     if (flags.gen_fields)
                         try parent.fields.append(.{
+                            .switch_value = flags.switch_value,
                             .name = fname,
                             .optional = flags.optional,
                             .type = .{ .compound = child },
@@ -1059,7 +1187,7 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                                     var found = false;
                                     var index: usize = 0;
                                     for (parent.fields.items, 0..) |f, i| { //Search through parent's fields for matching tag
-                                        if (std.mem.eql(u8, f.name, count_name)) {
+                                        if (eql(u8, f.name, count_name)) {
                                             index = i;
                                             found = true;
                                             break;
@@ -1091,9 +1219,10 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                     const Tname = try printString("Array_{s}", .{fname});
                     const child = try parent.newDecl(Tname);
                     child.d = .{ ._array = .{ .s = ParseStructGen.init(parent.alloc), .emit_kind = ekind } };
-                    try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), .{ .gen_fields = true, .optional = false });
+                    try newGenType(child_type, &child.d._array.s, try printString("i_{s}", .{fname}), .{ .gen_fields = true, .optional = .no });
                     if (flags.gen_fields)
                         try parent.fields.append(.{
+                            .switch_value = flags.switch_value,
                             .name = fname,
                             .optional = flags.optional,
                             .type = .{ .compound = child },
@@ -1101,13 +1230,20 @@ pub fn newGenType(v: std.json.Value, parent: *ParseStructGen, fname: []const u8,
                         });
                 },
                 .option => {
-                    try newGenType(a.items[1], parent, fname, .{ .gen_fields = true, .optional = true });
+                    //This ugly special case is used to deal with EffectDetail's recursive definition.
+                    //If more packets do this uglyness we will need to traverse to determine if a field cyclic
+                    if (a.items[1] == .string and eql(u8, a.items[1].string, "EffectDetail")) {
+                        try newGenType(a.items[1], parent, fname, .{ .gen_fields = true, .optional = .yes_ptr });
+                    } else {
+                        try newGenType(a.items[1], parent, fname, .{ .gen_fields = true, .optional = .yes });
+                    }
                 },
             }
         },
         .string => |str| { //A string is a literal type
             if (flags.gen_fields) {
                 try parent.fields.append(.{
+                    .switch_value = flags.switch_value,
                     .name = fname,
                     .optional = flags.optional,
                     .type = .{ .primitive = str },
