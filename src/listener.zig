@@ -831,6 +831,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return nbt_data;
         }
 
+        //Todo pretty sure this is wrong
         pub fn parse_anonOptionalNbt(self: *Self) ParseError!?nbt_zig.Entry {
             const nbt_data = nbt_zig.parseAsCompoundEntry(self.alloc, self.reader, true) catch return null;
             return nbt_data;

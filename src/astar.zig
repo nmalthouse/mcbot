@@ -121,7 +121,7 @@ pub const AStarContext = struct {
         block_break: BreakBlock,
         wait_ms: u32,
         hold_item_name: Reg.ItemId,
-        hold_item: struct { slot_index: u16 },
+        hold_item: struct { slot_index: u16, hotbar_index: u16 = 0 },
         place_block: struct {
             select_item_tag: ?[]const u8 = null, //TODO currently this is not an allocated string
             pos: V3i,

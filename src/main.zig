@@ -6,7 +6,6 @@ const mcBlockAtlas = @import("mc_block_atlas.zig");
 const botJoin = @import("botJoin.zig").botJoin;
 
 const mc = @import("listener.zig");
-const id_list = @import("list.zig");
 const eql = std.mem.eql;
 
 const packet_analyze = @import("analyze_packet_json.zig");
@@ -33,6 +32,7 @@ const mcTypes = @import("mcContext.zig");
 const McWorld = mcTypes.McWorld;
 const Entity = mcTypes.Entity;
 const Lua = graph.Lua;
+const parseSwitch = @import("parseSwitch.zig").parseSwitch;
 
 pub const PacketCache = struct {};
 
@@ -103,519 +103,6 @@ pub const PacketParse = struct {
         self.num_read = 0;
     }
 };
-pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
-    const CB = Proto.Play_Clientbound.packets;
-    const log = std.log.scoped(.parsing);
-    const inv_log = std.log.scoped(.inventory);
-    var arena_allocs = std.heap.ArenaAllocator.init(alloc);
-    defer arena_allocs.deinit();
-    const arena_alloc = arena_allocs.allocator();
-    bot1.modify_mutex.lock();
-    defer bot1.modify_mutex.unlock();
-
-    var fbs_ = blk: {
-        var fbs = mc.fbsT{ .buffer = packet_buf, .pos = 0 };
-        _ = mc.readVarInt(fbs.reader()); //Discard the packet length
-        if (bot1.compression_threshold > -1) {
-            const comp_len = mc.readVarInt(fbs.reader());
-            if (comp_len == 0)
-                break :blk fbs;
-
-            var zlib_stream = std.compress.zlib.decompressor(fbs.reader());
-            const ubuf = try zlib_stream.reader().readAllAlloc(arena_alloc, std.math.maxInt(usize));
-            break :blk mc.fbsT{ .buffer = ubuf, .pos = 0 };
-        } else {
-            break :blk fbs;
-        }
-    };
-
-    var parse = mc.parseT.init(fbs_.reader(), arena_alloc);
-
-    //const plen = parse.varInt();
-    //_ = plen;
-    const pid = parse.varInt();
-
-    const P = AutoParse.P;
-    const PT = AutoParse.parseType;
-
-    const server_stream = std.net.Stream{ .handle = bot1.fd };
-
-    var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bot1.compression_threshold), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
-    //defer pctx.packet.deinit();
-
-    if (bot1.connection_state != .play)
-        return error.invalidConnectionState;
-    const Ap = mc.AutoParseFromEnum.parseFromEnum;
-    const Penum = Proto.Play_Clientbound;
-    const penum = @as(Proto.Play_Clientbound, @enumFromInt(pid));
-    switch (penum) {
-        //WORLD specific packets
-        .custom_payload => {
-            const d = try Ap(Penum, .custom_payload, &parse);
-            log.info("{s}: {s}", .{ @tagName(penum), d.channel });
-
-            try pctx.pluginMessage("tony:brand");
-            try pctx.clientInfo("en_US", 6, 1);
-        },
-        .difficulty => {
-            const d = try CB.Type_packet_difficulty.parse(&parse);
-            log.info("Set difficulty: {d}, Locked: {any}", .{ d.difficulty, d.difficultyLocked });
-        },
-        .abilities => {
-            const d = try CB.Type_packet_abilities.parse(&parse);
-            log.info("Player Abilities packet fly_speed: {d}, walk_speed: {d}", .{ d.flyingSpeed, d.walkingSpeed });
-        },
-        //.named_entity_spawn => {
-        //    const data = try CB.Type_packet_named_entity_spawn.parse(&parse);
-        //    try world.putEntity(bot1, data, data.playerUUID, Proto.EntityEnum.player);
-        //},
-        .spawn_entity => {
-            const data = try CB.Type_packet_spawn_entity.parse(&parse);
-            const t: Proto.EntityEnum = @enumFromInt(data.type);
-            log.info("Spawn entity {x} {s} at {d:.2}, {d:.2}, {d:.2}", .{ data.objectUUID, @tagName(t), data.x, data.y, data.z });
-            try world.putEntity(bot1, data, data.objectUUID, t);
-        },
-        .entity_destroy => {
-            const d = try CB.Type_packet_entity_destroy.parse(&parse);
-            for (d.entityIds) |e| {
-                world.removeEntity(bot1.index_id, e.i_entityIds);
-            }
-        },
-        .entity_look => {
-            const data = try CB.Type_packet_entity_look.parse(&parse);
-            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
-                e.pitch = data.pitch;
-                e.yaw = data.yaw;
-                world.entities_mutex.unlock();
-            }
-        },
-        .entity_move_look => {
-            const data = try CB.Type_packet_entity_move_look.parse(&parse);
-            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
-                e.pos = vector.deltaPosToV3f(e.pos, vector.shortV3i.new(data.dX, data.dY, data.dZ));
-                e.pitch = data.pitch;
-                e.yaw = data.yaw;
-                world.entities_mutex.unlock();
-            }
-        },
-        .remove_entity_effect => {
-            const d = try Ap(Penum, .remove_entity_effect, &parse);
-            const eff: Proto.EffectEnum = @enumFromInt(d.effectId);
-            if (d.entityId == bot1.e_id) {
-                bot1.removeEffect(eff);
-            }
-        },
-        .entity_effect => {
-            const d = try Ap(Penum, .entity_effect, &parse);
-            const eff: Proto.EffectEnum = @enumFromInt(d.effectId);
-            if (d.entityId == bot1.e_id) {
-                try bot1.addEffect(eff, d.duration, d.amplifier);
-            }
-        },
-        .update_time => {
-            const d = try Ap(Penum, .update_time, &parse);
-            world.modify_mutex.lock();
-            defer world.modify_mutex.unlock();
-            world.time = d.time;
-        },
-        .rel_entity_move => {
-            const d = try Ap(Penum, .rel_entity_move, &parse);
-            if (world.modifyEntityLocal(bot1.index_id, d.entityId)) |e| {
-                e.pos = vector.deltaPosToV3f(e.pos, shortV3i.new(d.dX, d.dY, d.dZ));
-                world.entities_mutex.unlock();
-            }
-        },
-        .tile_entity_data => {
-            annotateManualParse("1.21.3");
-            const pos = parse.position();
-            const btype = parse.varInt();
-            _ = btype;
-            const tr = nbt_zig.TrackingReader(@TypeOf(parse.reader));
-            var tracker = tr.init(arena_alloc, parse.reader);
-            defer tracker.deinit();
-
-            const nbt_data = nbt_zig.parse(arena_alloc, tracker.reader(), .{ .is_networked_root = true }) catch null;
-            if (nbt_data) |nbt| {
-                try world.putBlockEntity(bot1.dimension_id, pos, nbt.entry, arena_alloc);
-            }
-        },
-        .entity_teleport => {
-            const data = try CB.Type_packet_entity_teleport.parse(&parse);
-            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
-                e.pos = V3f.new(data.x, data.y, data.z);
-                e.pitch = data.pitch;
-                e.yaw = data.yaw;
-                world.entities_mutex.unlock();
-            }
-        },
-        .entity_metadata => {
-            const e_id = parse.varInt();
-            _ = e_id;
-        },
-        .multi_block_change => {
-            annotateManualParse("1.21.3");
-            const chunk_pos = parse.chunk_position();
-            const n_blocks = parse.varInt();
-            var n: u32 = 0;
-            while (n < n_blocks) : (n += 1) {
-                const bd = parse.varLong();
-                const bid = @as(u16, @intCast(bd >> 12));
-                const lx = @as(i32, @intCast((bd >> 8) & 15));
-                const lz = @as(i32, @intCast((bd >> 4) & 15));
-                const ly = @as(i32, @intCast(bd & 15));
-                try world.chunkdata(bot1.dimension_id).setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
-            }
-        },
-        .block_change => {
-            const d = try Ap(Penum, .block_change, &parse);
-            const pos = V3i.new(@intCast(d.location.x), @intCast(d.location.y), @intCast(d.location.z));
-            try world.chunkdata(bot1.dimension_id).setBlock(pos, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
-        },
-        .map_chunk => {
-            annotateManualParse("1.21.3");
-            const cx = parse.int(i32);
-            const cy = parse.int(i32);
-            if (!try world.chunkdata(bot1.dimension_id).tryOwn(cx, cy, bot1.uuid)) {
-                //TODO keep track of owners better
-                return;
-            }
-            const dim = world.dimensions.getPtr(bot1.dimension_id).?; //CHECK ERR
-
-            const nbt_data = try nbt_zig.parseAsCompoundEntry(arena_alloc, parse.reader, true);
-            _ = nbt_data;
-            const data_size = parse.varInt();
-            var raw_chunk = std.ArrayList(u8).init(alloc);
-            defer raw_chunk.deinit();
-            try raw_chunk.resize(@as(usize, @intCast(data_size)));
-            try parse.reader.readNoEof(raw_chunk.items);
-
-            var chunk = try mc.Chunk.init(alloc, dim.info.section_count);
-            try chunk.owners.put(bot1.uuid, {});
-            var chunk_i: u32 = 0;
-            var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = raw_chunk.items, .pos = 0 };
-            const cr = chunk_fbs.reader();
-            while (chunk_i < dim.info.section_count) : (chunk_i += 1) {
-                const block_count = try cr.readInt(i16, .big);
-                const chunk_section = &chunk.sections.items[chunk_i];
-
-                { //BLOCK STATES palated container
-                    const bp_entry = try cr.readInt(u8, .big);
-                    if (bp_entry > 15) {
-                        std.debug.print("IMPOSSIBLE BPE {d} [{d},{d}, {d}]\n", .{ bp_entry, cx, @as(i64, @intCast(chunk_i * 16)) - 64, cy });
-                        std.debug.print("Info block_count {d}\n", .{block_count});
-                        chunk.deinit();
-                        return;
-                    }
-                    {
-                        chunk_section.bits_per_entry = bp_entry;
-                        chunk_section.palatte_t = if (bp_entry > 8) .direct else .map;
-                        switch (bp_entry) {
-                            0 => try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mc.readVarInt(cr)))),
-                            4...8 => {
-                                const num_pal_entry = mc.readVarInt(cr);
-
-                                var i: u32 = 0;
-                                while (i < num_pal_entry) : (i += 1) {
-                                    const mapping = mc.readVarInt(cr);
-                                    if (mapping > std.math.maxInt(mc.BLOCK_ID_INT)) {
-                                        std.debug.print("CORRUPT BLOCK\n", .{});
-                                        chunk.deinit();
-                                        return;
-                                    } else {
-                                        try chunk_section.mapping.append(@as(mc.BLOCK_ID_INT, @intCast(mapping)));
-                                    }
-                                }
-                            },
-                            else => {
-                                //std.debug.print("Can't handle this many bpe {d}\n", .{bp_entry});
-                                //chunk.deinit();
-                                //return;
-                            }, // Direct indexing
-                        }
-
-                        const num_longs = mc.readVarInt(cr);
-                        var j: u32 = 0;
-
-                        while (j < num_longs) : (j += 1) {
-                            const d = try cr.readInt(u64, .big);
-                            try chunk_section.data.append(d);
-                        }
-                    }
-                }
-                { //BIOME palated container
-                    const bp_entry = try cr.readInt(u8, .big);
-                    {
-                        if (bp_entry == 0) {
-                            const id = mc.readVarInt(cr);
-                            _ = id;
-                        } else {
-                            const num_pal_entry = mc.readVarInt(cr);
-                            var i: u32 = 0;
-                            while (i < num_pal_entry) : (i += 1) {
-                                const mapping = mc.readVarInt(cr);
-                                _ = mapping;
-                                //try chunk_section.mapping.append(@intCast(mc.BLOCK_ID_INT, mapping));
-                            }
-                        }
-
-                        const num_longs = @as(u32, @intCast(mc.readVarInt(cr)));
-                        try cr.skipBytes(num_longs * @sizeOf(u64), .{});
-                    }
-                }
-
-                //Find all the crafting benches
-                {
-                    //other things to find
-                    //Beds
-                    //furnace
-                    //
-                    //Also check if they are accesable
-                    const crafting_bench = world.reg.getBlockFromNameI("crafting_table").?;
-                    var skip = false;
-                    if (chunk_section.palatte_t == .map) {
-                        var none = true;
-                        for (chunk_section.mapping.items) |map| {
-                            if (map >= crafting_bench.minStateId and map <= crafting_bench.maxStateId) {
-                                none = false;
-                                break;
-                            }
-                        }
-                        if (none)
-                            skip = true;
-                    }
-                    if (!skip) {
-                        var i: u32 = 0;
-                        while (i < 16 * 16 * 16) : (i += 1) {
-                            const block = chunk_section.getBlockFromIndex(i);
-                            const bid = world.reg.getBlockIdFromState(block.block);
-                            if (bid == crafting_bench.id) {
-                                const coord = V3i.new(cx * 16 + block.pos.x, @as(i32, @intCast(chunk_i)) * 16 + block.pos.y + dim.info.min_y, cy * 16 + block.pos.z);
-                                try world.dimPtr(dim.info.id).poi.putNew(coord);
-                            }
-                        }
-                    }
-                }
-            }
-
-            try world.chunkdata(bot1.dimension_id).insertChunkColumn(cx, cy, chunk);
-
-            const num_block_ent = parse.varInt();
-            var ent_i: u32 = 0;
-            while (ent_i < num_block_ent) : (ent_i += 1) {
-                const be = parse.blockEntity();
-                const coord = V3i.new(cx * 16 + be.rel_x, be.abs_y, cy * 16 + be.rel_z);
-                try world.putBlockEntity(bot1.dimension_id, coord, be.nbt, arena_alloc);
-            }
-        },
-        //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
-        .unload_chunk => {
-            const d = try Ap(Penum, .unload_chunk, &parse);
-            try world.chunkdata(bot1.dimension_id).removeChunkColumn(d.chunkX, d.chunkZ, bot1.uuid);
-        },
-        //BOT specific packets
-        .keep_alive => {
-            const data = try Proto.Play_Clientbound.packets.Type_packet_keep_alive.parse(&parse);
-            try pctx.sendAuto(Proto.Play_Serverbound, .keep_alive, .{ .keepAliveId = data.keepAliveId });
-        },
-        .respawn => {
-            //TODO how to notify bot thread we have changed dimension?
-            const d = (try Ap(Penum, .respawn, &parse)).worldState;
-            log.warn("Respawn sent, changing dimension: {d}, {s}", .{ d.dimension, d.name });
-            bot1.dimension_id = d.dimension;
-        },
-        .login => {
-            const d = try CB.Type_packet_login.parse(&parse);
-            const ws = d.worldState;
-            bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
-            bot1.init_status.has_login = true;
-            std.debug.print("{s} id:{d}\n", .{ ws.name, ws.dimension });
-            world.modify_mutex.lock();
-            defer world.modify_mutex.unlock();
-            //for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
-            //    const name = dims.compound.get("name").?;
-            //    const elem = dims.compound.get("element").?.compound;
-            //    const new_dim = McWorld.DimInfo{
-            //        .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
-            //        //.height = elem.get("height").?.int,
-            //        .min_y = elem.get("min_y").?.int,
-            //        .bed_works = elem.get("bed_works").?.byte > 0,
-            //        .id = dims.compound.get("id").?.int,
-            //    };
-            //    if (world.dimension_map.get(name.string) == null)
-            //        try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
-            //    if (world.dimensions.get(new_dim.id) == null)
-            //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
-            //}
-            bot1.dimension_id = ws.dimension;
-            //unreachable;
-
-            //const j = try d.dimensionCodec.entry.toJsonValue(arena_alloc);
-            //const wr = std.io.getStdOut().writer();
-            //try std.json.stringify(j, .{ .whitespace = .indent_4 }, wr);
-        },
-        .death_combat_event => {
-            const d = try CB.Type_packet_death_combat_event.parse(&parse);
-            log.warn("Combat death, id: {d}, msg: {s}", .{ d.playerId, d.message });
-            try pctx.clientCommand(0);
-        },
-        .kick_disconnect => {
-            const d = try CB.Type_packet_kick_disconnect.parse(&parse);
-            log.warn("Disconnected. Reason:  {s}", .{d.reason});
-        },
-        .held_item_slot => {
-            const d = try CB.Type_packet_held_item_slot.parse(&parse);
-            bot1.selected_slot = @intCast(d.slot);
-            try pctx.setHeldItem(bot1.selected_slot);
-        },
-        .set_slot => {
-            const d = try Ap(Penum, .set_slot, &parse);
-            inv_log.info("set_slot: win_id: data: {any}", .{d});
-            if (d.windowId == -1 and d.slot == -1) {
-                bot1.held_item = mc.Slot.fromProto(d.item);
-            } else if (d.windowId == 0) {
-                bot1.container_state = d.stateId;
-                try bot1.inventory.setSlot(@intCast(d.slot), mc.Slot.fromProto(d.item));
-            } else if (bot1.interacted_inventory.win_id != null and d.windowId == bot1.interacted_inventory.win_id.?) {
-                bot1.container_state = d.stateId;
-                try bot1.interacted_inventory.setSlot(@intCast(d.slot), mc.Slot.fromProto(d.item));
-
-                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
-                if (d.slot >= player_inv_start)
-                    try bot1.inventory.setSlot(@intCast(d.slot - player_inv_start + 9), mc.Slot.fromProto(d.item));
-            }
-        },
-        .open_window => {
-            const d = try Ap(Penum, .open_window, &parse);
-            bot1.interacted_inventory.win_type = @as(u32, @intCast(d.inventoryType));
-            inv_log.info("open_win: win_id: {d}, win_type: {d}, title: {s}", .{ d.windowId, d.inventoryType, d.windowTitle });
-        },
-        .window_items => {
-            inv_log.info("set content packet", .{});
-            bot1.init_status.has_inv = true;
-            const d = try Ap(Penum, .window_items, &parse);
-            if (d.windowId == 0) {
-                for (d.items, 0..) |it, i| {
-                    bot1.container_state = d.stateId;
-                    try bot1.inventory.setSlot(@intCast(i), mc.Slot.fromProto(it.i_items));
-                }
-            } else {
-                try bot1.interacted_inventory.setSize(@intCast(d.items.len));
-                bot1.interacted_inventory.win_id = @intCast(d.windowId);
-                bot1.container_state = d.stateId;
-                const player_inv_start: i16 = @intCast(bot1.interacted_inventory.slots.items.len - 36);
-                for (d.items, 0..) |it, i| {
-                    try bot1.interacted_inventory.setSlot(@intCast(i), mc.Slot.fromProto(it.i_items));
-                    const ii: i16 = @intCast(i);
-                    if (i >= player_inv_start)
-                        try bot1.inventory.setSlot(@intCast(ii - player_inv_start + 9), mc.Slot.fromProto(it.i_items));
-                }
-            }
-        },
-        .position => {
-            const FieldMask = enum(u8) {
-                X = 0x01,
-                Y = 0x02,
-                Z = 0x04,
-                Y_ROT = 0x08,
-                x_ROT = 0x10,
-            };
-            const data = try Proto.Play_Clientbound.packets.Type_packet_position.parse(&parse);
-            const Coord_fmt = "[{d:.2}, {d:.2}, {d:.2}]";
-
-            log.warn("Sync Pos: new: " ++ Coord_fmt ++ " tel_id: {d}", .{ data.x, data.y, data.z, data.teleportId });
-            if (bot1.pos) |p|
-                log.warn("\told: " ++ Coord_fmt ++ " diff: " ++ Coord_fmt, .{
-                    p.x,          p.y,          p.z,
-                    p.x - data.x, p.y - data.y, p.z - data.z,
-                });
-            bot1.pos = V3f.new(data.x, data.y, data.z);
-            _ = FieldMask;
-
-            try pctx.confirmTeleport(data.teleportId);
-
-            if (bot1.handshake_complete == false) {
-                bot1.handshake_complete = true;
-                try pctx.completeLogin();
-            }
-        },
-        .acknowledge_player_digging => {
-
-            //TODO use this to advance to next break_block item
-        },
-        .update_health => {
-            const d = try Ap(Penum, .update_health, &parse);
-            bot1.health = d.health;
-            bot1.food = @as(u8, @intCast(d.food));
-            bot1.food_saturation = d.foodSaturation;
-        },
-        .tags => {
-            annotateManualParse("1.21.3");
-            if (!world.has_tag_table) {
-                world.has_tag_table = true;
-
-                //TODO Does this packet replace all the tags or does it append to an existing
-                const num_tags = parse.varInt();
-
-                var n: u32 = 0;
-                while (n < num_tags) : (n += 1) {
-                    const identifier = try parse.string(null);
-                    { //TAG
-                        const n_tags = parse.varInt();
-                        var nj: u32 = 0;
-
-                        while (nj < n_tags) : (nj += 1) {
-                            const ident = try parse.string(null);
-                            const num_ids = parse.varInt();
-
-                            var ids = std.ArrayList(u32).init(alloc);
-                            defer ids.deinit();
-                            try ids.resize(@as(usize, @intCast(num_ids)));
-                            var ni: u32 = 0;
-                            while (ni < num_ids) : (ni += 1)
-                                ids.items[ni] = @as(u32, @intCast(parse.varInt()));
-                            //std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
-                            try world.tag_table.addTag(identifier, ident, ids.items);
-                        }
-                    }
-                }
-                log.info("Tags added {d} namespaces", .{num_tags});
-            }
-        },
-        .player_chat => {
-            annotateManualParse("1.21.3");
-            const header = parse.auto(PT(&.{
-                P(.uuid, "sender_uuid"),
-                P(.varInt, "index"),
-                P(.boolean, "is_sig_present"),
-            }));
-            if (header.is_sig_present) {
-                log.err("A player chat has encryption, not supported, exiting", .{});
-                return error.notImplemented;
-            }
-            const body = parse.auto(PT(&.{
-                P(.string, "message"),
-                P(.long, "timestamp"),
-                P(.long, "salt"),
-            }));
-
-            if (std.mem.indexOfScalar(i64, &world.packet_cache.chat_time_stamps.buf, body.timestamp) != null)
-                return;
-            world.packet_cache.chat_time_stamps.insert(body.timestamp);
-            var message_it = std.mem.tokenizeScalar(u8, body.message, ' ');
-            if (std.ascii.eqlIgnoreCase(message_it.next() orelse return, bot1.name)) {
-                //try pctx.sendChatFmt("Hello: {d}", .{header.sender_uuid});
-                const a = message_it.next() orelse return;
-                if (eql(u8, a, "say")) {
-                    try pctx.sendChat("CRASS");
-                }
-            }
-        },
-        else => {},
-        //else => {
-        //    //std.debug.print("Packet {s}\n", .{@tagName(penum)});
-        //},
-    }
-}
 
 pub const BuildLayer = struct {
     //bitmap: []const Reg.BlockId,
@@ -1122,8 +609,11 @@ pub const LuaApi = struct {
             const found = self.pathctx.pathfind(did, pos, wp.pos.toF(), .{}) catch unreachable;
             if (found) |*actions|
                 self.thread_data.setActions(actions.*, pos);
-            if (found == null)
+
+            if (found == null) {
+                log.warn("Can't path to waypoint: {any}", .{wp.pos});
                 return 0;
+            }
 
             Lua.pushV(L, wp);
             return 1;
@@ -1433,7 +923,7 @@ pub const LuaApi = struct {
             }
 
             std.debug.print("CANT CRAFT\n", .{});
-            Lua.pushV(L, "can't craft");
+            Lua.pushV(L, "can't craft with materials");
             return 1;
         }
 
@@ -1677,6 +1167,22 @@ pub const LuaApi = struct {
             Lua.pushV(L, false);
             return 1;
         }
+
+        pub export fn holdSlot(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const ind = self.vm.getArg(L, i32, 1);
+            self.beginHalt();
+            defer self.endHalt();
+
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.pos.?;
+            defer self.bo.modify_mutex.unlock();
+            var actions = ActionListT.init(self.world.alloc);
+            errc(actions.append(.{ .hold_item = .{ .slot_index = 0, .hotbar_index = @intCast(ind) } })) orelse return 0;
+            self.thread_data.setActions(actions, pos);
+            return 0;
+        }
     };
 };
 pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScriptThreadData, world: *McWorld, filename: []const u8) !void {
@@ -1897,8 +1403,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .hold_item => |si| {
-                                try bp.setHeldItem(0);
-                                try bp.clickContainer(0, bo.container_state, si.slot_index, 0, 2, &.{}, .{});
+                                try bp.setHeldItem(@intCast(si.hotbar_index));
+                                try bp.clickContainer(0, bo.container_state, si.slot_index, @intCast(si.hotbar_index), 2, &.{}, .{});
                                 th_d.nextAction(0, bo.pos.?);
                             },
                             .craft => |cr| {
@@ -1908,6 +1414,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     }
                                     const count = &th_d.craft_item_counter.?;
                                     if (count.* == 64) {
+                                        //FIXME the recipe ids are no longer valid, they are send in recipe_book_add
                                         try bp.doRecipeBook(wid, cr.product_id, true);
                                         count.* = 0;
                                     } else {
@@ -2022,6 +1529,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         try bp.setHeldItem(0);
                                         try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, .{});
                                     } else {
+                                        log.warn("Can't find tool for block {s}", .{block.name});
                                         th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
                                             .best_tool = false,
                                             .haste_level = bo.getEffect(.Haste),
@@ -2871,6 +2379,8 @@ pub fn main() !void {
     var arg_it = try std.process.argsWithAllocator(alloc);
     defer arg_it.deinit();
 
+    const log = std.log.scoped(.main);
+
     const Arg = graph.ArgGen.Arg;
     const args = try graph.ArgGen.parseArgs(&.{
         Arg("draw", .flag, "Draw debug graphics"),
@@ -3042,7 +2552,10 @@ pub fn main() !void {
                         var buf: [1]u8 = .{0xff};
                         const n = try std.posix.read(eve.data.fd, &buf);
                         if (n == 0) {
-                            unreachable;
+                            log.err("Read zero bytes, exting", .{});
+                            run = false;
+                            update_bots_exit_mutex.unlock();
+                            return;
                         }
                         //break :local;
 
@@ -3075,8 +2588,12 @@ pub fn main() !void {
                             const nr = try std.posix.read(eve.data.fd, pp.buf.items[start .. start + num_left_to_read]);
 
                             pp.num_read += @as(u32, @intCast(nr));
-                            if (nr == 0) //TODO properly support partial reads
-                                unreachable;
+                            if (nr == 0) {
+                                log.err("Read zero bytes, exting", .{});
+                                run = false;
+                                update_bots_exit_mutex.unlock();
+                                return;
+                            }
 
                             if (nr == num_left_to_read) {
                                 try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pp.buf.items, &world);
@@ -3092,8 +2609,12 @@ pub fn main() !void {
                             const nr = try std.posix.read(eve.data.fd, pbuf[start .. start + num_left_to_read]);
                             pp.num_read += @as(u32, @intCast(nr));
 
-                            if (nr == 0) //TODO properly support partial reads
-                                unreachable;
+                            if (nr == 0) {
+                                log.err("Read zero bytes, exting", .{});
+                                run = false;
+                                update_bots_exit_mutex.unlock();
+                                return;
+                            } //TODO properly support partial reads
 
                             if (nr == num_left_to_read) {
                                 try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pbuf[0 .. pp.data_len.? + pp.len_len.?], &world);

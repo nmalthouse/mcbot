@@ -6,7 +6,6 @@ const V3f = vector.V3f;
 const Bot = @import("bot.zig").Bot;
 const Reg = @import("data_reg.zig");
 const nbt_zig = @import("nbt.zig");
-const IdList = @import("list.zig");
 pub const MAX_BOTS = 32;
 
 pub fn RingBuf(comptime n: usize, comptime T: type) type {
@@ -323,44 +322,75 @@ pub const McWorld = struct {
         const dim = self.dimensions.getPtr(dim_id) orelse return;
         const id = dim.chunk_data.getBlock(coord) orelse return;
         const b = self.reg.getBlockFromState(id);
+
+        //const j = try nbt.toJsonValue(aa);
+        //const wr = std.io.getStdOut().writer();
+        //try std.json.stringify(j, .{ .whitespace = .indent_4 }, wr);
+        //New sign nbt in 1.21.3
+        //back_text{
+        //  has_glowing_text, 0
+        //  color, "black"
+        //  messages [""]4
+        //
+        //}
+        //front_text{} same as above
+        //is_waxed: 0
         if (self.tag_table.hasTag(b.id, "minecraft:block", "minecraft:signs")) {
             var has_text = false;
             if (nbt == .compound) {
-                if (nbt.compound.get("Text1")) |e| {
-                    if (e == .string) {
-                        has_text = true;
-                        const j = try std.json.parseFromSlice(struct { text: []const u8 }, aa, e.string, .{});
-                        if (j.value.text.len == 0) return;
-                        if (b.getState(id, .facing)) |facing| {
-                            const fac = facing.sub.facing;
-                            const dvec = facing.sub.facing.reverse().toVec();
-                            const behind = coord.add(dvec);
-                            if (dim.chunk_data.getBlock(behind)) |bid| {
-                                const bi = self.reg.getBlockFromState(bid);
-                                if (std.mem.eql(u8, "chest", bi.name)) {
-                                    const name = try std.mem.concat(aa, u8, &.{ j.value.text, "_chest" });
-                                    try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
-                                } else if (std.mem.eql(u8, "dropper", bi.name)) {
-                                    const name = try std.mem.concat(aa, u8, &.{ j.value.text, "_dropper" });
-                                    try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
-                                } else if (std.mem.eql(u8, "crafting_table", bi.name)) {
-                                    const name = try std.mem.concat(aa, u8, &.{ j.value.text, "_craft" });
-                                    try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
-                                }
+                const fields = [_][]const u8{ "front_text", "back_text" };
+                for (fields) |f| {
+                    if (nbt.compound.get(f)) |bt| {
+                        if (bt == .compound) {
+                            const e = bt.compound.get("messages").?.list.entries.items[0];
+                            has_text = true;
+                            if (e.string.len <= 2) return;
+                            const jv = std.json.parseFromSlice(std.json.Value, aa, e.string, .{}) catch {
+                                log.err("Json crashed while parsing sign text", .{});
+                                return;
+                            };
+                            switch (jv.value) {
+                                else => {
+                                    log.warn("invalid sign text", .{});
+                                    return;
+                                },
+                                .object => {
+                                    log.warn("Omitting sign with json", .{});
+                                    return;
+                                },
+                                .string => |s| {
+                                    const t = s;
+                                    if (b.getState(id, .facing)) |facing| {
+                                        const fac = facing.sub.facing;
+                                        const dvec = facing.sub.facing.reverse().toVec();
+                                        const behind = coord.add(dvec);
+                                        if (dim.chunk_data.getBlock(behind)) |bid| {
+                                            const bi = self.reg.getBlockFromState(bid);
+                                            if (std.mem.eql(u8, "chest", bi.name)) {
+                                                const name = try std.mem.concat(aa, u8, &.{ t, "_chest" });
+                                                try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
+                                            } else if (std.mem.eql(u8, "dropper", bi.name)) {
+                                                const name = try std.mem.concat(aa, u8, &.{ t, "_dropper" });
+                                                try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
+                                            } else if (std.mem.eql(u8, "crafting_table", bi.name)) {
+                                                const name = try std.mem.concat(aa, u8, &.{ t, "_craft" });
+                                                try self.putSignWaypoint(dim_id, name, .{ .pos = behind, .facing = fac });
+                                            }
+                                        }
+                                        try self.putSignWaypoint(dim_id, t, .{ .pos = coord, .facing = fac });
+                                    } else {
+                                        try self.putSignWaypoint(dim_id, t, .{ .pos = coord, .facing = .north });
+                                    }
+                                },
                             }
-                            try self.putSignWaypoint(dim_id, j.value.text, .{ .pos = coord, .facing = fac });
-                        } else {
-                            try self.putSignWaypoint(dim_id, j.value.text, .{ .pos = coord, .facing = .north });
                         }
                     }
                 }
-                if (!has_text)
-                    std.debug.print("SIGN WITHOUT TEXT!! {any}\n", .{coord});
             }
+            if (!has_text)
+                log.warn("sign without text {any}", .{coord});
         } else {
-            if (std.mem.eql(u8, "chest", b.name)) {
-                //be.nbt.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
-            }
+            if (std.mem.eql(u8, "chest", b.name)) {}
         }
     }
 };

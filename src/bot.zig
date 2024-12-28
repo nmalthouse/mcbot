@@ -6,6 +6,7 @@ const astar = @import("astar.zig");
 const RegD = @import("data_reg.zig");
 const Proto = @import("protocol.zig");
 const Reg = RegD.DataReg;
+const log = std.log.scoped(.bot);
 
 pub fn quadFGreater(a: f64, b: f64, C: f64) ?f64 {
     const disc = std.math.pow(f64, b, 2) - (4 * a * C);
@@ -285,10 +286,13 @@ pub const Inventory = struct {
     }
 
     pub fn findToolForMaterial(self: *Self, reg: *const Reg, material: []const u8) ?struct { slot_index: u16, mul: f32 } {
-        const matching_item_ids = reg.getMaterial(material) orelse return null;
+        const matching_item_ids = reg.getMaterial(material) orelse {
+            log.err("invalid material {s}", .{material});
+            return null;
+        };
         for (self.slots.items, 0..) |slot, i| {
             for (matching_item_ids) |id| {
-                if (slot.count == 0 and id.id == slot.item_id) {
+                if (slot.count > 0 and id.id == slot.item_id) {
                     return .{ .slot_index = @intCast(i), .mul = id.mul };
                 }
             }
