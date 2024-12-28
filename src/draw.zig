@@ -612,14 +612,20 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                         gctx.rectTex(rect, tr, item_atlas.texture);
                     } else {
                         const item = world.reg.getItem(slot.item_id);
-                        gctx.text(rect.pos(), item.name, &font, 14, 0xff);
+                        if (world.reg.getBlockFromNameI(item.name)) |block| {
+                            if (mc_atlas.getTextureRecO(block.id)) |tr| {
+                                gctx.rectTex(rect, tr, mc_atlas.texture);
+                            }
+                        } else {
+                            gctx.text(rect.pos(), item.name, &font, 12, 0xff);
+                        }
                     }
                     gctx.textFmt(rect.pos().add(.{ .x = 0, .y = rect.h / 2 }), "{d}", .{slot.count}, &font, 15, 0xff);
                 }
             }
 
             if (bot1.interacted_inventory.win_id != null) {
-                drawInventory(&gctx, &item_atlas, world.reg, &font, area.addV(area.w + 20, 0), &bot1.interacted_inventory);
+                drawInventory(&gctx, &mc_atlas, &item_atlas, world.reg, &font, area.addV(area.w + 20, 0), &bot1.interacted_inventory);
             }
             const statsr = graph.Rec(0, area.y + area.h, 400, 300);
             gctx.rect(statsr, 0xffffffff);
@@ -662,6 +668,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 }
 fn drawInventory(
     gctx: *graph.ImmediateDrawingContext,
+    block_atlas: *const mcBlockAtlas.McAtlas,
     item_atlas: *const mcBlockAtlas.McAtlas,
     reg: *const Reg.DataReg,
     font: *graph.Font,
@@ -686,7 +693,13 @@ fn drawInventory(
                 gctx.rectTex(rr, tr, item_atlas.texture);
             } else {
                 const item = reg.getItem(slot.item_id);
-                gctx.text(rr.pos(), item.name, font, 12, 0xff);
+                if (reg.getBlockFromNameI(item.name)) |block| {
+                    if (block_atlas.getTextureRecO(block.id)) |tr| {
+                        gctx.rectTex(rr, tr, block_atlas.texture);
+                    }
+                } else {
+                    gctx.text(rr.pos(), item.name, font, 12, 0xff);
+                }
             }
             gctx.textFmt(rr.pos().add(.{ .x = 0, .y = rr.h / 2 }), "{d}", .{slot.count}, font, 20, 0xff);
         }
