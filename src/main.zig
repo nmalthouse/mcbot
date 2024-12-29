@@ -89,6 +89,8 @@ pub const BuildLayer = struct {
 
 threadlocal var lss: ?*LuaApi = null;
 pub const LuaApi = struct {
+    const ErrorMsg = bot.BotScriptThreadData.ErrorMsg;
+
     const sToE = std.meta.stringToEnum;
     const log = std.log.scoped(.lua);
     const Self = @This();
@@ -140,7 +142,7 @@ pub const LuaApi = struct {
         }
 
         //This lock may take a while as updateBots evaluates the actionList
-        self.thread_data.lock(.script_thread);
+        self.thread_data.lockOrOwned(.script_thread);
         if (self.thread_data.u_status == .terminate_thread) {
             std.debug.print("Stopping botScript thread\n", .{});
             self.thread_data.unlock(.script_thread);
@@ -148,9 +150,23 @@ pub const LuaApi = struct {
             return;
         }
     }
-    pub fn endHalt(self: *Self) void {
+    pub fn endHalt(self: *Self) ?ErrorMsg {
         const has_actions = self.thread_data.action_index != null;
+        if (has_actions)
+            self.thread_data.has_seen_actions = false;
         self.thread_data.unlock(.script_thread);
+
+        while (has_actions) {
+            //Spin until updateBots claims new actions
+            const ns_per_tick = std.time.ns_per_s / 20;
+            const spin_interval_ns = (ns_per_tick + std.time.ns_per_s / 211) / 4;
+            std.time.sleep(spin_interval_ns);
+
+            self.thread_data.lockOrOwned(.script_thread);
+            defer self.thread_data.unlock(.script_thread);
+            if (self.thread_data.has_seen_actions)
+                break;
+        }
 
         //TODO
         //wait for update bots to obtain mutex
@@ -158,12 +174,27 @@ pub const LuaApi = struct {
         //unlock
         //report error to lua script
 
-        if (has_actions)
-            std.time.sleep(std.time.ns_per_s / 10); //Wait 2 ticks, ugly
-        return;
-        //
-        //std.time.sleep(std.time.ns_per_s / 100);
-        //The update thread runs at 20 tps so we sleep to allow it to run
+        //Wait for updateThread to finish actions or report error
+        self.thread_data.lockOrOwned(.script_thread);
+        const error_status = self.thread_data.error_;
+        self.thread_data.error_ = null;
+        self.thread_data.unlock(.script_thread); //No actions but we still need to unlock incase script needs to be reloaded
+
+        //Return an error
+        return error_status;
+        //return;
+    }
+
+    pub fn endHaltReturnErr(self: *Self, L: Lua.Ls, err: ErrorMsg) noreturn {
+        _ = self.endHalt();
+        returnError(L, err);
+        unreachable;
+    }
+
+    pub fn returnError(L: Lua.Ls, err: ErrorMsg) noreturn {
+        Lua.pushV(L, err);
+        _ = Lua.c.lua_error(L); //Never returns but returns an int, hmm
+        unreachable;
     }
 
     //Assumes appropriate mutexs are owned by calling thread
@@ -184,7 +215,7 @@ pub const LuaApi = struct {
     pub fn interactChest(self: *Self, coord: V3i, to_move: [][]const u8) c_int {
         //TODO we don't know if requested actions are possible until much later. How do we notify user if the chest is full or has none of the requested items?
         self.beginHalt();
-        defer self.endHalt();
+        defer _ = self.endHalt();
         self.bo.modify_mutex.lock();
         defer self.bo.modify_mutex.unlock();
         const pos = self.bo.getPos();
@@ -306,18 +337,10 @@ pub const LuaApi = struct {
         //all stack operations are tracked
         //at compile time we can detect when an error has been made regarding stack discipline
 
-        pub export fn makeSlice(L: Lua.Ls) c_int {
+        pub export fn giveError(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 2);
-            const p = self.vm.getArg(L, []const u8, 1);
-            const param = self.vm.getArg(L, [][]const u8, 2);
-
-            std.debug.print("{s} \n", .{p});
-            for (param) |pp| {
-                std.debug.print("{s} \n", .{pp});
-            }
-            //Lua.pushV(L, p.toVec());
-            return 0;
+            _ = self;
+            returnError(L, .{ .code = "invalidThing", .msg = "Expects a different kind of thingy" });
         }
 
         pub export fn command(L: Lua.Ls) c_int {
@@ -325,7 +348,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const p = self.vm.getArg(L, []const u8, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             var actions = ActionListT.init(self.world.alloc);
@@ -343,7 +366,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const p = self.vm.getArg(L, []const u8, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             var actions = ActionListT.init(self.world.alloc);
@@ -363,7 +386,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const p = self.vm.getArg(L, BuildLayer, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
@@ -495,7 +518,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const p = self.vm.getArg(L, V3f, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
@@ -527,7 +550,7 @@ pub const LuaApi = struct {
             }
 
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             return 0;
         }
 
@@ -566,8 +589,7 @@ pub const LuaApi = struct {
                     return 1;
                 }
             }
-            std.debug.print("BLCK NOT FOUNd\n", .{});
-            return 0;
+            returnError(L, .{ .code = "unknownBlock", .msg = "" });
         }
 
         pub const DOC_sleepms: []const u8 = "Args: [int: time in ms], sleep lua script, scripts onYield is still called during sleep";
@@ -580,13 +602,13 @@ pub const LuaApi = struct {
                 var remaining = n_ms;
                 while (remaining > max_time_ms) : (remaining -= max_time_ms) {
                     self.beginHalt();
-                    defer self.endHalt();
+                    defer _ = self.endHalt();
                     std.time.sleep(max_time_ms * std.time.ns_per_ms);
                 }
             }
             const stime = n_ms % max_time_ms;
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             std.time.sleep(stime);
             return 0;
         }
@@ -597,27 +619,31 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const str = self.vm.getArg(L, []const u8, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
-            self.bo.modify_mutex.lock();
-            const pos = self.bo.getPos();
-            self.pathctx.reset(self.bo.dimension_id) catch unreachable;
-            const did = self.bo.dimension_id;
-            self.bo.modify_mutex.unlock();
-            const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
-                log.warn("Can't find waypoint: {s}", .{str});
-                return 0;
+            _ = B: {
+                self.bo.modify_mutex.lock();
+                const pos = self.bo.getPos();
+                self.pathctx.reset(self.bo.dimension_id) catch |E| break :B E;
+                const did = self.bo.dimension_id;
+                self.bo.modify_mutex.unlock();
+                const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
+                    log.warn("Can't find waypoint: {s}", .{str});
+                    returnError(L, .{ .code = "notFound", .msg = "" });
+                };
+                const found = self.pathctx.pathfind(did, pos, wp.pos.toF(), .{}) catch |E| break :B E;
+                if (found) |*actions|
+                    self.thread_data.setActions(actions.*, pos);
+
+                if (found == null) {
+                    log.warn("Can't path to waypoint: {any}", .{wp.pos});
+                    returnError(L, .{ .code = "noPath", .msg = "" });
+                }
+                Lua.pushV(L, wp);
+            } catch {
+                returnError(L, .{ .code = "zigError", .msg = "" });
             };
-            const found = self.pathctx.pathfind(did, pos, wp.pos.toF(), .{}) catch unreachable;
-            if (found) |*actions|
-                self.thread_data.setActions(actions.*, pos);
 
-            if (found == null) {
-                log.warn("Can't path to waypoint: {any}", .{wp.pos});
-                return 0;
-            }
-
-            Lua.pushV(L, wp);
             return 1;
         }
 
@@ -627,7 +653,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const max_dist = self.vm.getArg(L, f64, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
@@ -660,7 +686,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const str = self.vm.getArg(L, []const u8, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
             const did = self.bo.dimension_id;
@@ -691,7 +717,7 @@ pub const LuaApi = struct {
             const face = self.vm.getArg(L, ?Reg.Direction, 3);
             _ = face;
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
@@ -713,7 +739,7 @@ pub const LuaApi = struct {
         pub export fn gotoNearestCrafting(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
@@ -727,7 +753,7 @@ pub const LuaApi = struct {
                     return 1;
                 }
             }
-            return 0;
+            returnError(L, .{ .code = "noNearbyCraftingTable", .msg = "" });
         }
 
         pub export fn breakBlock(L: Lua.Ls) c_int {
@@ -735,7 +761,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const bpos = self.vm.getArg(L, V3f, 1).toIFloor();
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
@@ -752,7 +778,7 @@ pub const LuaApi = struct {
             const p = self.vm.getArg(L, V3f, 1);
             const opt_dist = self.vm.getArg(L, ?f32, 2);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             const did = self.bo.dimension_id;
             errc(self.pathctx.reset(did)) orelse return 0;
@@ -765,14 +791,14 @@ pub const LuaApi = struct {
                 return 1;
             }
 
-            return 0;
+            returnError(L, .{ .code = "noPath", .msg = "" });
         }
 
         pub export fn chopNearestTree(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             const did = self.bo.dimension_id;
             errc(self.pathctx.reset(did)) orelse return 0;
@@ -785,11 +811,8 @@ pub const LuaApi = struct {
                 self.thread_data.setActions(tree.list, pos);
                 Lua.pushV(L, tree.tree_name);
                 return 1;
-            } else {
-                Lua.pushV(L, false);
-                return 1;
             }
-
+            //Not finding a tree is not an error condition
             Lua.pushV(L, false);
             return 1;
         }
@@ -798,7 +821,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             const name = self.vm.getArg(L, []const u8, 1);
             const id = self.world.reg.getBlockFromName(name);
             Lua.pushV(L, id);
@@ -809,7 +832,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             const name = self.vm.getArg(L, []const u8, 1);
             const id = self.world.reg.getBlockFromNameI(name);
@@ -824,7 +847,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 3);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             const landmark = self.vm.getArg(L, []const u8, 1);
             const block_name = self.vm.getArg(L, []const u8, 2);
             const max_dist = self.vm.getArg(L, f32, 3);
@@ -856,7 +879,7 @@ pub const LuaApi = struct {
             const item_name = self.vm.getArg(L, []const u8, 2);
             const item_count = self.vm.getArg(L, i32, 3);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             const pos = self.bo.getPos();
@@ -1000,7 +1023,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
 
@@ -1013,7 +1036,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
 
@@ -1042,7 +1065,7 @@ pub const LuaApi = struct {
             const interactedO = self.vm.getArg(L, ?bool, 2);
             const interacted = interactedO != null and interactedO.?;
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             var it = std.mem.tokenizeScalar(u8, query, ' ');
@@ -1137,11 +1160,12 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
             var count: usize = 0;
-            for (self.bo.inventory.slots.items) |sl| {
+            //Start at index 8 of inventory, skipping the armor slots and crafting bench
+            for (self.bo.inventory.slots.items[8..]) |sl| {
                 if (sl.count == 0)
                     count += 1;
             }
@@ -1154,7 +1178,7 @@ pub const LuaApi = struct {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 0);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
@@ -1176,7 +1200,7 @@ pub const LuaApi = struct {
             Lua.c.lua_settop(L, 1);
             const ind = self.vm.getArg(L, i32, 1);
             self.beginHalt();
-            defer self.endHalt();
+            defer _ = self.endHalt();
 
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
@@ -1261,7 +1285,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
         if (b.value_ptr.script_filename) |sn| {
             const btd = try alloc.create(bot.BotScriptThreadData);
             btd.* = bot.BotScriptThreadData.init(alloc, b.value_ptr);
-            btd.lock(.bot_thread);
+            btd.lockOrOwned(.bot_thread);
             try bot_threads_data.append(btd);
             try bot_threads.append(try std.Thread.spawn(.{}, luaBotScript, .{
                 b.value_ptr,
@@ -1286,7 +1310,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
         if (exit_mutex.tryLock()) {
             std.debug.print("Stopping updateBots thread\n", .{});
             for (bot_threads_data.items) |th_d| {
-                th_d.lock(.bot_thread);
+                th_d.lockOrOwned(.bot_thread);
                 defer th_d.unlock(.bot_thread);
                 th_d.u_status = .terminate_thread;
             }
@@ -1297,7 +1321,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                 if (world.bots.get(id)) |b| {
                     for (bot_threads_data.items, 0..) |th_d, i| {
                         if (th_d.bot.fd == b.fd) {
-                            th_d.lock(.bot_thread);
+                            th_d.lockOrOwned(.bot_thread);
                             th_d.u_status = .terminate_thread;
                             th_d.unlock(.bot_thread);
                             bot_threads.items[i].join();
@@ -1323,7 +1347,8 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
             th_d.bot.modify_mutex.lock();
             th_d.bot.update(dt, 1);
             th_d.bot.modify_mutex.unlock();
-            if (th_d.trylock(.bot_thread)) {
+            if (th_d.trylockOrOwned(.bot_thread)) {
+                th_d.has_seen_actions = true;
                 const bo = th_d.bot;
                 var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bo.compression_threshold), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
                 bo.modify_mutex.lock();
@@ -1353,8 +1378,10 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0));
                                 while (true) {
                                     const move_vec = th_d.move_state.update(adt) catch |err| {
-                                        //The move reported an error so clear the actions and report
                                         log.err("move_state.update failed, canceling move {!}", .{err});
+                                        try th_d.clearActions();
+                                        th_d.setError(.{ .code = "invalidMove", .msg = "Error occured during move_state.update" });
+                                        th_d.unlock(.bot_thread);
                                         //TODO on teleport, also cancel move
                                         break;
                                     };
@@ -1540,10 +1567,14 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         try bp.setHeldItem(0);
                                         try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, .{});
                                     } else {
-                                        log.warn("Can't find tool for block {s}", .{block.name});
+                                        annotateManualParse("1.21.3"); //Not really but it break in future
+                                        if (eql(u8, block.name, "snow") or eql(u8, block.name, "snow_block")) {
+                                            log.err("adequate_tool_level assumption is wrong for snow!", .{});
+                                        }
                                         th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
                                             .best_tool = false,
                                             .haste_level = bo.getEffect(.Haste),
+                                            //This check is only wrong for snow blocks, every other block can be broken by hand. So if you mine those blocks without a tool the server might complain. As of 1.21.3
                                             .adequate_tool_level = !std.mem.eql(u8, block.material, "mineable/pickaxe"),
                                         }))) / 20.0;
                                     }

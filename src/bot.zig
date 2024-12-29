@@ -316,11 +316,17 @@ pub const Inventory = struct {
 
 pub const BotScriptThreadData = struct {
     const Self = @This();
+    pub const ErrorMsg = struct {
+        code: []const u8,
+        msg: []const u8,
+    };
     const Owner = enum { bot_thread, script_thread, none };
     //this is written by updateBotsThread and read by scriptThread
     u_status: enum { actions_empty, actions_error, terminate_thread },
     mutex: std.Thread.Mutex,
+    has_seen_actions: bool = false,
     owner: Owner,
+    error_: ?ErrorMsg = null, //not allocated
 
     ///These actions are evaluated in reverse
     actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
@@ -341,7 +347,7 @@ pub const BotScriptThreadData = struct {
         };
     }
 
-    pub fn lock(self: *Self, new_owner: Owner) void {
+    pub fn lockOrOwned(self: *Self, new_owner: Owner) void {
         if (self.owner == new_owner)
             return;
 
@@ -349,13 +355,18 @@ pub const BotScriptThreadData = struct {
         self.owner = new_owner;
     }
 
-    pub fn trylock(self: *Self, new_owner: Owner) bool {
+    pub fn trylockOrOwned(self: *Self, new_owner: Owner) bool {
         if (self.owner == new_owner)
             return true;
         const can_lock = self.mutex.tryLock();
         if (can_lock)
             self.owner = new_owner;
         return can_lock;
+    }
+
+    //Assumes mutex is owned, strings in err are never freed so allocate as such
+    pub fn setError(self: *Self, err: ErrorMsg) void {
+        self.error_ = err;
     }
 
     pub fn unlock(self: *Self, owner: Owner) void {
