@@ -52,18 +52,25 @@ pub const MovementState = struct {
         grounded: bool = true,
     };
 
+    pub const MoveError = error{
+        quadf,
+        missingReturn,
+        ladderHasLateralMovement,
+        moveTypeBlocked,
+    };
+
     init_pos: V3f,
     final_pos: V3f,
     time: f64,
 
     move_type: astar.AStarContext.Node.Ntype,
 
-    pub fn update(self: *Self, dt: f64) MoveResult {
+    pub fn update(self: *Self, dt: f64) MoveError!MoveResult {
         const speed = 4.37;
         const iv = self.final_pos.subtract(self.init_pos);
         const mvec = V3f.new(iv.x, 0, iv.z);
         switch (self.move_type) {
-            .blocked => unreachable,
+            .blocked => return error.moveTypeBlocked,
             .freemove => {
                 const max_t = iv.magnitude() / speed;
 
@@ -97,10 +104,9 @@ pub const MovementState = struct {
                 };
             },
             .jump => {
-                //if (mvec.magnitude() != 1) unreachable; //Only allow jumps in cardinal directions for now
                 //Once we have reached dy = +1 we don't worry about colliding with the block we are jumping on.
-                const at_y1_time = quadFL(gravity / 2, jumpV, -1) orelse unreachable;
-                const jump_end_time = quadFR(gravity / 2, jumpV, -1) orelse unreachable;
+                const at_y1_time = quadFL(gravity / 2, jumpV, -1) orelse return error.quadf;
+                const jump_end_time = quadFR(gravity / 2, jumpV, -1) orelse return error.quadf;
                 const lt_y1_v = (0.5 - (PlayerBounds / 2)) / at_y1_time;
                 const gt_y1_v = (0.5 + (PlayerBounds / 2)) / (jump_end_time - at_y1_time);
                 const at_y1_pos = self.init_pos.add(mvec.getUnitVec().smul(lt_y1_v * at_y1_time));
@@ -131,8 +137,7 @@ pub const MovementState = struct {
                 }
             },
             .fall => {
-                //if (mvec.magnitude() != 1) unreachable; //Only allow falls in cardinal directions for now
-                const fall_time = quadFR(gravity / 2, 0, @abs(iv.y)) orelse unreachable;
+                const fall_time = quadFR(gravity / 2, 0, @abs(iv.y)) orelse return error.quadf;
                 const fall_start = (0.5 + (PlayerBounds / 2)) / speed;
                 const max_t = fall_time + fall_start;
                 const fall_walk_v = (0.5 - (PlayerBounds / 2)) / fall_time;
@@ -164,9 +169,8 @@ pub const MovementState = struct {
                 }
             },
             .gap => {
-                //if (mvec.magnitude() != 1) unreachable; //Only allow jumps in cardinal directions for now
                 //Once we have reached dy = +1 we don't worry about colliding with the block we are jumping on.
-                const land_time = quadFR(gravity / 2, jumpV, 0) orelse unreachable;
+                const land_time = quadFR(gravity / 2, jumpV, 0) orelse return error.quadf;
                 const max_t = land_time;
                 const xz_speed = mvec.magnitude() / land_time;
 
@@ -188,7 +192,7 @@ pub const MovementState = struct {
             },
             .ladder => {
                 const climb_speed = 3;
-                if (mvec.magnitude() != 0) unreachable; //we can only climb up or down
+                if (mvec.magnitude() != 0) return error.ladderHasLateralMovement; //we can only climb up or down
                 const max_t = @abs(iv.y) / climb_speed;
                 if (max_t < self.time + dt) {
                     const r = (self.time + dt) - max_t;
@@ -207,7 +211,7 @@ pub const MovementState = struct {
                 };
             },
         }
-        unreachable;
+        return error.missingReturn;
     }
 
     pub fn init(initp: V3f, final: V3f, dt: f64, move_type: astar.AStarContext.Node.Ntype) Self {
@@ -361,7 +365,7 @@ pub const BotScriptThreadData = struct {
             return;
         }
         std.debug.print("attempt to unlock an unowned mutex\n", .{});
-        unreachable;
+        std.process.exit(1);
     }
 
     pub fn deinit(self: *Self) void {
@@ -389,12 +393,19 @@ pub const BotScriptThreadData = struct {
         }
     }
 
+    pub fn clearActions(self: *Self) !void {
+        self.action_index = null;
+        try self.actions.resize(0);
+    }
+
     pub fn setActions(self: *Self, new_list: std.ArrayList(astar.AStarContext.PlayerActionItem), pos: V3f) void {
         for (self.actions.items) |*acc|
             acc.deinit();
         self.actions.deinit();
         self.actions = new_list;
         self.action_index = new_list.items.len;
+        if (new_list.items.len == 0)
+            self.action_index = null;
         self.nextAction(0, pos);
     }
 

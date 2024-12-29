@@ -466,11 +466,9 @@ pub const Packet = struct {
     }
 
     pub fn writeToServer(self: *Self, server: std.net.Stream.Writer, mutex: *std.Thread.Mutex) !void {
-        //TODO if blocking becomes an issue for keep alives and the like, do a try lock and create a queue of packets to send
         mutex.lock();
         defer mutex.unlock();
         const comp_enable = (self.comp_thresh > -1);
-        //_ = try server.writeByte(0);
         var len = toVarInt(@as(i32, @intCast(self.buffer.items.len)) + @as(i32, if (comp_enable) 1 else 0));
         _ = try server.write(len.getSlice());
         if (comp_enable)
@@ -478,12 +476,6 @@ pub const Packet = struct {
 
         _ = try server.write(self.buffer.items[0..]);
     }
-
-    //pub fn getWritableBuffer(self: *Self) []const u8 {
-    //    var len = toVarInt(@intCast(i32, self.buffer.items.len - RESERVED_BYTE_COUNT));
-    //    std.mem.copy(u8, self.buffer.items[RESERVED_BYTE_COUNT - len.len ..], len.getSlice());
-    //    return self.buffer.items[RESERVED_BYTE_COUNT - len.len ..];
-    //}
 };
 
 pub const VarInt = struct {
@@ -665,15 +657,13 @@ pub const AutoParse = struct {
     }
 };
 
+///This structure makes no attempt to keep track of memory it allocates, as much of what is parsed is garbage
+///use an arena allocator and copy over values that you need
 pub fn packetParseCtx(comptime readerT: type) type {
     return struct {
         const Self = @This();
         const Reader = readerT;
 
-        //This structure makes no attempt to keep track of memory it allocates, as much of what is parsed is
-        //garbage
-        //use an arena allocator and copy over values that you need
-        //TODO internally use an arena
         pub fn init(reader: readerT, alloc: std.mem.Allocator) Self {
             return .{
                 .alloc = alloc,
@@ -688,7 +678,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
             if (fT == f64) {
                 return @as(f64, @bitCast(self.int(u64)));
             }
-            unreachable;
+            @compileError("Float type not supported");
         }
 
         pub fn chunk_position(self: *Self) vector.V3i {
@@ -831,7 +821,7 @@ pub fn packetParseCtx(comptime readerT: type) type {
             return nbt_data;
         }
 
-        //Todo pretty sure this is wrong
+        //TODO pretty sure this is wrong
         pub fn parse_anonOptionalNbt(self: *Self) ParseError!?nbt_zig.Entry {
             const nbt_data = nbt_zig.parseAsCompoundEntry(self.alloc, self.reader, true) catch return null;
             return nbt_data;
@@ -839,7 +829,6 @@ pub fn packetParseCtx(comptime readerT: type) type {
 
         pub fn parse_nbt(self: *Self) ParseError!nbt_zig.EntryWithName {
             const nbt = try nbt_zig.parse(self.alloc, self.reader);
-            //var nbt_data = try nbt_zig.parseAsCompoundEntry(self.alloc, self.reader);
             return nbt;
         }
 
@@ -847,81 +836,21 @@ pub fn packetParseCtx(comptime readerT: type) type {
             const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
             var tracker = tr.init(self.alloc, self.reader);
 
-            const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
+            const nbt = try nbt_zig.parse(self.alloc, tracker.reader());
             if (tracker.buffer.items.len > 1) {
                 return nbt;
-                //std.debug.print("NBT: {s}\n", .{nbt.name.?});
-                //nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
             }
             return null;
         }
 
-        //pub fn parse_slot(self: *Self) ParseError!?Slot {
-        //    return self.slot();
-        //}
-
         pub fn parse_SpawnInfo(self: *Self) ParseError!Proto.Play_Clientbound.packets.Type_SpawnInfo {
             return try Proto.Play_Clientbound.packets.Type_SpawnInfo.parse(self);
-        }
-
-        //pub fn parse_Slot(self: *Self) ParseError!Proto.Type_Slot {
-        //    annotateManualParse("1.21.3");
-        //    return try Proto.Type_Slot.parse(self);
-        //}
-
-        pub fn parse_MovementFlags(self: *Self) ParseError!MovementFlags {
-            _ = self;
-            annotateManualParse("1.21.3");
-            unreachable;
         }
 
         pub fn parse_ContainerID(self: *Self) ParseError!i32 {
             annotateManualParse("1.21.3");
             return self.varInt();
         }
-
-        pub fn parse_PositionUpdateRelatives(self: *Self) ParseError!PositionUpdateRelatives {
-            annotateManualParse("1.21.3");
-            _ = self;
-            unreachable;
-        }
-
-        //pub fn slot(self: *Self) Slot {
-        //    annotateManualParse("1.21.3");
-        //    const item_count = self.varInt();
-        //    if (item_count == 0) {
-        //        return .{ .item_id = 0, .count = 0 };
-        //    }
-        //    //const item_id = self.varInt();
-        //    //const num_add = self.varInt();
-        //    //const num_rm = self.varInt();
-        //    unreachable;
-        //}
-
-        //pub fn slot(self: *Self) ?Slot {
-        //    annotateManualParse("1.19.4");
-        //    if (self.boolean()) { //Is item present
-        //        var s = Slot{
-        //            .item_id = @as(u16, @intCast(self.varInt())),
-        //            .count = self.int(u8),
-        //            .nbt_buffer = null,
-        //        };
-
-        //        const tr = nbt_zig.TrackingReader(@TypeOf(self.reader));
-        //        var tracker = tr.init(self.alloc, self.reader);
-
-        //        const nbt = nbt_zig.parse(self.alloc, tracker.reader()) catch unreachable;
-        //        if (tracker.buffer.items.len > 1) {
-        //            s.nbt_buffer = tracker.buffer.items;
-        //            _ = nbt;
-        //            //std.debug.print("NBT: {s}\n", .{nbt.name.?});
-        //            //nbt.entry.format("", .{}, std.io.getStdErr().writer()) catch unreachable;
-        //        }
-
-        //        return s;
-        //    }
-        //    return null;
-        //}
 
         pub fn auto(self: *Self, comptime p_type: AutoParse.parseTypeReturnType) p_type.t {
             const r = self.reader;
@@ -1112,7 +1041,6 @@ test "toVarInt" {
     }
 }
 
-//TODO remove the id and len field and replace with a slice
 pub const PacketData = struct {
     const Self = @This();
 
@@ -1162,7 +1090,6 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
 }
 
 pub const Chunk = struct {
-    //sections: [NUM_CHUNK_SECTION]ChunkSection,
     sections: std.ArrayList(ChunkSection),
     owners: std.AutoHashMap(u128, void),
 
@@ -1447,7 +1374,6 @@ pub const ChunkSection = struct {
                 it.buffer_index += 1;
             }
 
-            //if (it.buffer_index >= it.buffer.len) return null;
             return id;
         }
 
@@ -1481,7 +1407,6 @@ pub const ChunkSection = struct {
                 const blocks_per_long = @divTrunc(64, self.bits_per_entry);
                 const data_index = @as(u32, @intCast(@divTrunc(block_index, blocks_per_long)));
                 const shift_index = @rem(block_index, blocks_per_long);
-                //const mapping = (self.data.items[data_index] >> @intCast(u6, (shift_index * self.bits_per_entry))) & self.getBitMask();
                 return BlockIndex{ .index = data_index, .offset = @as(usize, @intCast(shift_index)), .bit_count = @as(u6, @intCast(self.bits_per_entry)) };
             },
         }
@@ -1514,7 +1439,6 @@ pub const ChunkSection = struct {
         long.* = (long.* & ~mask) | shifted_id;
     }
 
-    //TODO Modify all relevent functions to support direct indexing for bits_per_entry > 8
     pub fn setBlock(self: *Self, rx: u32, ry: u32, rz: u32, id: BLOCK_ID_INT) !void {
         if (self.hasMapping(id) or self.palatte_t == .direct) { //No need to update just set relevent data
         } else {
@@ -1539,14 +1463,11 @@ pub const ChunkSection = struct {
                 var old_it = DataIterator{ .buffer = self.data.items, .bits_per_entry = self.bits_per_entry };
                 var old_dat = old_it.next();
                 while (old_dat != null) : (old_dat = old_it.next()) {
-                    //std.debug.print("{d} {d}: {d}\n", .{ i, new_i, new_shift_i });
                     const long = &new_data.items[new_i];
                     const mask = getBitMask(new_bpe) << @as(u6, @intCast(new_shift_i * new_bpe));
                     const shifted_id = old_dat.? << @as(u6, @intCast(new_shift_i * new_bpe));
                     long.* = (long.* & ~mask) | shifted_id;
 
-                    //TODO is this math correct
-                    //and Is dataIterator correctly iterating
                     new_shift_i += 1;
                     if (new_shift_i >= new_bpl) {
                         new_shift_i = 0;
@@ -1632,6 +1553,7 @@ pub const TagRegistry = struct {
         };
     }
 
+    //TODO does this work?
     /// Given a path to a minecraft datapacks folder, attempts to add any item tags. With the following restrictions:
     /// Tag files can only contain minecraft:item_name values, no tag references: "#minecraft:tag_name".
     /// The values must be in the "minecraft:" namespace.
@@ -1708,7 +1630,6 @@ pub const TagRegistry = struct {
         }
 
         const r2 = try r.value_ptr.getOrPut(tag_name);
-        //const r2 = try (self.tags.getPtr(tag_ident) orelse unreachable).getOrPut(tag_name);
         if (!r2.found_existing) {
             r2.value_ptr.* = std.ArrayList(u32).init(self.alloc);
 

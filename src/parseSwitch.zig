@@ -44,8 +44,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
     var parse = mc.parseT.init(fbs_.reader(), arena_alloc);
 
-    //const plen = parse.varInt();
-    //_ = plen;
     const pid = parse.varInt();
 
     const P = AutoParse.P;
@@ -54,7 +52,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
     const server_stream = std.net.Stream{ .handle = bot1.fd };
 
     var pctx = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bot1.compression_threshold), .server = server_stream.writer(), .mutex = &bot1.fd_mutex };
-    //defer pctx.packet.deinit();
 
     if (bot1.connection_state != .play)
         return error.invalidConnectionState;

@@ -139,6 +139,7 @@ pub const LuaApi = struct {
             self.in_yield = false;
         }
 
+        //This lock may take a while as updateBots evaluates the actionList
         self.thread_data.lock(.script_thread);
         if (self.thread_data.u_status == .terminate_thread) {
             std.debug.print("Stopping botScript thread\n", .{});
@@ -150,6 +151,13 @@ pub const LuaApi = struct {
     pub fn endHalt(self: *Self) void {
         const has_actions = self.thread_data.action_index != null;
         self.thread_data.unlock(.script_thread);
+
+        //TODO
+        //wait for update bots to obtain mutex
+        //wait for lock again, once obtained, see if updateBots has indicated error
+        //unlock
+        //report error to lua script
+
         if (has_actions)
             std.time.sleep(std.time.ns_per_s / 10); //Wait 2 ticks, ugly
         return;
@@ -1344,7 +1352,12 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 var moved = false;
                                 const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0));
                                 while (true) {
-                                    const move_vec = th_d.move_state.update(adt);
+                                    const move_vec = th_d.move_state.update(adt) catch |err| {
+                                        //The move reported an error so clear the actions and report
+                                        log.err("move_state.update failed, canceling move {!}", .{err});
+                                        //TODO on teleport, also cancel move
+                                        break;
+                                    };
                                     grounded = move_vec.grounded;
 
                                     bo.pos = move_vec.new_pos;
@@ -1367,6 +1380,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         }
                                     } else {
                                         //TODO signal error
+                                        //should report to the bot
                                         break;
                                     }
                                     //move_vec = //above switch statement
@@ -1840,8 +1854,6 @@ pub fn main() !void {
             var pbuf: [4096]u8 = undefined;
             var ppos: u32 = 0;
 
-            //TODO have early dropping of packets occur in this loop rather than in parseSwitch
-            //parse the relevent fields to determine if a packet can be dropped, then use reader.skipBytes
             local: while (true) {
                 switch (pp.state) {
                     .len => {
@@ -1853,11 +1865,9 @@ pub fn main() !void {
                             update_bots_exit_mutex.unlock();
                             return;
                         }
-                        //break :local;
 
                         pbuf[ppos] = buf[0];
                         ppos += 1;
-                        //pp.buf.append(buf[0]) catch |err| break :blk err;
                         if (buf[0] & 0x80 == 0) {
                             var fbs = std.io.FixedBufferStream([]u8){ .buffer = pbuf[0..ppos], .pos = 0 };
                             pp.data_len = @as(u32, @intCast(mc.readVarInt(fbs.reader())));
@@ -1893,10 +1903,6 @@ pub fn main() !void {
 
                             if (nr == num_left_to_read) {
                                 try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pp.buf.items, &world);
-                                //const node = alloc.create(QType.Node) catch |err| break :blk err;
-                                //node.* = .{ .prev = null, .next = null, .data = .{ .fd = eve.data.fd, .buf = pp.buf.toOwnedSlice() } };
-                                //q.put(node);
-                                //pp.buf = std.ArrayList(u8).init(alloc);
                                 try pp.buf.resize(0);
                                 try pp.reset();
                                 break :local;
@@ -1920,9 +1926,6 @@ pub fn main() !void {
                                 break :local;
                             }
                         }
-
-                        //break :local;
-
                     },
                 }
             }
