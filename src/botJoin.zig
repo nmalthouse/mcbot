@@ -37,9 +37,10 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                 .select_known_packs => {
                     const d = try Proto.Type_packet_common_select_known_packs.parse(&parse);
                     for (d.packs) |p| {
-                        std.debug.print("pack: {s}{s}\n", .{ p.i_packs.namespace, p.i_packs.id });
+                        log.info("server has pack: {s}:{s}\n", .{ p.i_packs.namespace, p.i_packs.id });
                     }
                     //We tell the server we don't know anything so we get dimension params etc
+                    //If the server doesn't send dimension information the program will crash
                     try pctx.sendManual(Proto.Config_Serverbound.select_known_packs, Proto.Type_packet_common_select_known_packs{ .packs = &.{} });
                 },
                 .custom_payload => {}, //Just ignore, shouldn't need response
@@ -75,7 +76,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                                     var ni: u32 = 0;
                                     while (ni < num_ids) : (ni += 1)
                                         ids.items[ni] = @as(u32, @intCast(parse.varInt()));
-                                    //std.debug.print("{s}: {s}: {any}\n", .{ identifier.items, ident.items, ids.items });
                                     try world.tag_table.addTag(identifier, ident, ids.items);
                                 }
                             }
@@ -101,7 +101,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                                     .min_y = elem.get("min_y").?.int,
                                     .bed_works = elem.get("bed_works").?.byte > 0,
                                     .id = @intCast(i),
-                                    //.id = dims.compound.get("id").?.int,
                                 };
                                 const name = entry.i_entries.key;
                                 if (world.dimension_map.get(name) == null)
@@ -109,22 +108,6 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                                 if (world.dimensions.get(new_dim.id) == null)
                                     try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
                                 log.info("Adding dimension {s} id:{d}", .{ name, new_dim.id });
-
-                                //for (d.dimensionCodec.entry.compound.get("minecraft:dimension_type").?.compound.get("value").?.list.entries.items) |dims| {
-                                //    const name = dims.compound.get("name").?;
-                                //    const elem = dims.compound.get("element").?.compound;
-                                //    const new_dim = McWorld.DimInfo{
-                                //        .section_count = @intCast(@divExact(elem.get("height").?.int, 16)),
-                                //        //.height = elem.get("height").?.int,
-                                //        .min_y = elem.get("min_y").?.int,
-                                //        .bed_works = elem.get("bed_works").?.byte > 0,
-                                //        .id = dims.compound.get("id").?.int,
-                                //    };
-                                //    if (world.dimension_map.get(name.string) == null)
-                                //        try world.dimension_map.put(try world.alloc.dupe(u8, name.string), new_dim);
-                                //    if (world.dimensions.get(new_dim.id) == null)
-                                //        try world.dimensions.put(new_dim.id, McWorld.Dimension.init(new_dim, alloc));
-                                //}
                             }
                         }
                     } else {}

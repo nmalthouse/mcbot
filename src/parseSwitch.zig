@@ -14,6 +14,7 @@ const shortV3i = vector.shortV3i;
 const V3i = vector.V3i;
 const V2i = vector.V2i;
 const nbt_zig = @import("nbt.zig");
+const config = @import("config");
 
 pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8, world: *McWorld) !void {
     const CB = Proto.Play_Clientbound.packets;
@@ -238,11 +239,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                     }
                                 }
                             },
-                            else => {
-                                //std.debug.print("Can't handle this many bpe {d}\n", .{bp_entry});
-                                //chunk.deinit();
-                                //return;
-                            }, // Direct indexing
+                            else => {}, // Direct indexing
                         }
 
                         const num_longs = mc.readVarInt(cr);
@@ -503,9 +500,9 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 }
             }
         },
-        else => {},
-        //else => {
-        //    //std.debug.print("Packet {s}\n", .{@tagName(penum)});
-        //},
+        else => {
+            if (config.log_skipped_packets)
+                log.info("unhandled packet {s}", .{@tagName(penum)});
+        },
     }
 }

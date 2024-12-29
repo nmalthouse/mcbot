@@ -62,23 +62,6 @@ pub fn myLogFn(
     nosuspend stderr.print(prefix ++ format ++ "\n", args) catch return;
 }
 
-pub fn parseCoordOpt(it: *std.mem.TokenIterator(u8, .scalar)) ?vector.V3f {
-    const ret = V3f{
-        .x = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
-        .y = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
-        .z = @as(f64, @floatFromInt(std.fmt.parseInt(i64, it.next() orelse return null, 0) catch return null)),
-    };
-    return ret;
-}
-
-pub fn parseCoord(it: *std.mem.TokenIterator(u8, .scalar)) !vector.V3f {
-    return .{
-        .x = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
-        .y = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
-        .z = @as(f64, @floatFromInt(try std.fmt.parseInt(i64, it.next() orelse "0", 0))),
-    };
-}
-
 pub const PacketParse = struct {
     state: enum { len, data } = .len,
     buf: std.ArrayList(u8),
@@ -196,7 +179,7 @@ pub const LuaApi = struct {
         defer self.endHalt();
         self.bo.modify_mutex.lock();
         defer self.bo.modify_mutex.unlock();
-        const pos = self.bo.pos.?;
+        const pos = self.bo.getPos();
         var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
         errc(actions.append(.{ .close_chest = {} })) orelse return 0;
         errc(actions.append(.{ .wait_ms = 10 })) orelse return 0;
@@ -280,6 +263,8 @@ pub const LuaApi = struct {
         self.thread_data.setActions(actions, pos);
         return 0;
     }
+    //TODO API
+    //interactInv should have per item control rather than stack
 
     /// Everything inside this Api struct is exported to lua using the given name
     pub const Api = struct {
@@ -339,7 +324,7 @@ pub const LuaApi = struct {
             var ar = std.ArrayList(u8).init(self.world.alloc);
             ar.appendSlice(p) catch unreachable;
             errc(actions.append(.{ .chat = .{ .str = ar, .is_command = true } })) orelse return 0;
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             self.thread_data.setActions(actions, pos);
 
             return 0;
@@ -357,7 +342,7 @@ pub const LuaApi = struct {
             var ar = std.ArrayList(u8).init(self.world.alloc);
             ar.appendSlice(p) catch unreachable;
             errc(actions.append(.{ .chat = .{ .str = ar, .is_command = false } })) orelse return 0;
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             self.thread_data.setActions(actions, pos);
 
             return 0;
@@ -372,7 +357,7 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
             //for each item in bitmap
             //calculate world position
@@ -505,7 +490,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             self.bo.modify_mutex.unlock();
 
             var actions = ActionListT.init(self.world.alloc);
@@ -607,7 +592,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             self.pathctx.reset(self.bo.dimension_id) catch unreachable;
             const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
@@ -637,7 +622,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
 
             var list = std.ArrayList(V3i).init(self.vm.fba.allocator());
@@ -669,7 +654,7 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
 
@@ -700,7 +685,7 @@ pub const LuaApi = struct {
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
             if (self.bo.inventory.findItem(self.world.reg, item_name)) |found| {
                 var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
@@ -723,7 +708,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
 
             if (self.world.dimPtr(self.bo.dimension_id).poi.findNearest(self.world, pos.toIFloor())) |nearest| {
@@ -746,7 +731,7 @@ pub const LuaApi = struct {
 
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             var actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(self.world.alloc);
             errc(actions.append(.{ .block_break_pos = .{ .pos = bpos } })) orelse return 0;
             self.thread_data.setActions(actions, pos);
@@ -763,7 +748,7 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             const did = self.bo.dimension_id;
             errc(self.pathctx.reset(did)) orelse return 0;
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             self.bo.modify_mutex.unlock();
             const found = errc(self.pathctx.pathfind(did, pos, p, .{ .min_distance = opt_dist })) orelse return 0;
             if (found) |*actions| {
@@ -783,7 +768,7 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             const did = self.bo.dimension_id;
             errc(self.pathctx.reset(did)) orelse return 0;
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             //block hardness
             //tool_multiplier
             self.bo.modify_mutex.unlock();
@@ -837,7 +822,7 @@ pub const LuaApi = struct {
             const max_dist = self.vm.getArg(L, f32, 3);
             const id = self.world.reg.getBlockFromName(block_name) orelse return 0;
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
             const wp = self.world.getNearestSignWaypoint(did, landmark, pos.toI()) orelse {
@@ -866,7 +851,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             if (self.world.reg.getItemFromName(item_name)) |item| {
                 if (self.world.reg.rec_map.get(item.id)) |recipe_list| {
                     for (recipe_list) |rec| {
@@ -978,7 +963,7 @@ pub const LuaApi = struct {
             const name = self.vm.getArg(L, []const u8, 1);
             const to_move = self.vm.getArg(L, [][]const u8, 2);
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             const did = self.bo.dimension_id;
             self.bo.modify_mutex.unlock();
             const wp = self.world.getNearestSignWaypoint(did, name, pos.toI()) orelse {
@@ -1011,7 +996,7 @@ pub const LuaApi = struct {
             self.bo.modify_mutex.lock();
             defer self.bo.modify_mutex.unlock();
 
-            Lua.pushV(L, self.bo.pos.?);
+            Lua.pushV(L, self.bo.getPos());
             return 1;
         }
 
@@ -1046,7 +1031,8 @@ pub const LuaApi = struct {
             self.vm.clearAlloc();
             Lua.c.lua_settop(L, 2);
             const query = self.vm.getArg(L, []const u8, 1);
-            const interacted = self.vm.getArg(L, ?bool, 2);
+            const interactedO = self.vm.getArg(L, ?bool, 2);
+            const interacted = interactedO != null and interactedO.?;
             self.beginHalt();
             defer self.endHalt();
             self.bo.modify_mutex.lock();
@@ -1098,8 +1084,8 @@ pub const LuaApi = struct {
                 else => {},
             }
             var item_count: usize = 0;
-            const inventory = if (interacted != null) &self.bo.interacted_inventory else &self.bo.inventory;
-            const upper_index = if (interacted != null) inventory.slots.items.len - 36 else inventory.slots.items.len;
+            const inventory = if (interacted) &self.bo.interacted_inventory else &self.bo.inventory;
+            const upper_index = if (interacted) inventory.slots.items.len - 36 else inventory.slots.items.len;
             for (inventory.slots.items[0..upper_index]) |sl| {
                 const slot = if (sl.count > 0) sl else continue;
 
@@ -1163,7 +1149,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
             if (self.bo.inventory.findItemFromList(self.world.reg.foods, "id")) |food_slot| {
                 var actions = ActionListT.init(self.world.alloc);
@@ -1185,7 +1171,7 @@ pub const LuaApi = struct {
             defer self.endHalt();
 
             self.bo.modify_mutex.lock();
-            const pos = self.bo.pos.?;
+            const pos = self.bo.getPos();
             defer self.bo.modify_mutex.unlock();
             var actions = ActionListT.init(self.world.alloc);
             errc(actions.append(.{ .hold_item = .{ .slot_index = 0, .hotbar_index = @intCast(ind) } })) orelse return 0;
@@ -1340,6 +1326,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                 if (skip_ticks > 0) {
                     skip_ticks -= 1;
                 } else {
+                    var bpos = bo.getPos();
                     if (th_d.action_index) |action| {
                         switch (th_d.actions.items[action]) {
                             .chat => |ch| {
@@ -1348,23 +1335,24 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 } else {
                                     try bp.sendChat(ch.str.items);
                                 }
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .movement => |move_| {
                                 const move = move_;
                                 const adt = dt;
                                 var grounded = true;
                                 var moved = false;
-                                const pw = mc.lookAtBlock(bo.pos.?, V3f.new(0, 0, 0));
+                                const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0));
                                 while (true) {
                                     const move_vec = th_d.move_state.update(adt);
                                     grounded = move_vec.grounded;
 
                                     bo.pos = move_vec.new_pos;
+                                    bpos = bo.getPos();
                                     moved = true;
 
                                     if (move_vec.move_complete) {
-                                        th_d.nextAction(move_vec.remaining_dt, bo.pos.?);
+                                        th_d.nextAction(move_vec.remaining_dt, bpos);
                                         if (th_d.action_index) |new_acc| {
                                             if (th_d.actions.items[new_acc] != .movement) {
                                                 break;
@@ -1384,7 +1372,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     //move_vec = //above switch statement
                                 }
                                 if (moved) {
-                                    try bp.setPlayerPositionRot(bo.pos.?, pw.yaw, pw.pitch, grounded);
+                                    try bp.setPlayerPositionRot(bpos, pw.yaw, pw.pitch, grounded);
                                 }
                             },
                             .eat => {
@@ -1396,25 +1384,25 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     th_d.timer.? += dt;
                                     if (th_d.timer.? >= EATING_TIME_S) {
                                         try bp.playerAction(.shoot_arrowEat, .{ .x = 0, .y = 0, .z = 0 });
-                                        th_d.nextAction(0, bo.pos.?);
+                                        th_d.nextAction(0, bpos);
                                     }
                                 }
                             },
                             .wait_ms => |wms| {
                                 skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .hold_item_name => |in| {
                                 try bp.setHeldItem(0);
                                 if (bo.inventory.findItemFromId(in)) |found| {
                                     try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
                                 }
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .hold_item => |si| {
                                 try bp.setHeldItem(@intCast(si.hotbar_index));
                                 try bp.clickContainer(0, bo.container_state, si.slot_index, @intCast(si.hotbar_index), 2, &.{}, .{});
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .craft => |cr| {
                                 if (bo.interacted_inventory.win_id) |wid| {
@@ -1433,12 +1421,12 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     }
                                     if (count.* == 0) {
                                         try bp.clickContainer(wid, bo.container_state, 0, 1, 1, &.{}, .{});
-                                        th_d.nextAction(0, bo.pos.?);
+                                        th_d.nextAction(0, bpos);
                                     } else {
                                         skip_ticks = 1; //Throttle the packets we are sending
                                     }
                                 } else {
-                                    th_d.nextAction(0, bo.pos.?);
+                                    th_d.nextAction(0, bpos);
                                 }
                             },
                             .inventory => |inv| {
@@ -1482,11 +1470,11 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         }
                                     }
                                 }
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .place_block => |pb| {
                                 //TODO support placing block with orientation, slabs, stairs etc.
-                                const pw = mc.lookAtBlock(bo.pos.?, pb.pos.toF());
+                                const pw = mc.lookAtBlock(bpos, pb.pos.toF());
                                 if (pb.select_item_tag) |tag| {
                                     if (world.tag_table.getIdList("minecraft:item", tag)) |taglist| {
                                         for (taglist) |t| {
@@ -1500,13 +1488,13 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                 }
                                 try bp.setPlayerRot(pw.yaw, pw.pitch, true);
                                 try bp.useItemOn(.main, pb.pos, .north, 0, 0, 0, false, 0);
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .open_chest => |ii| {
-                                const pw = mc.lookAtBlock(bo.pos.?, ii.pos.toF());
+                                const pw = mc.lookAtBlock(bpos, ii.pos.toF());
                                 try bp.setPlayerRot(pw.yaw, pw.pitch, true);
                                 try bp.useItemOn(.main, ii.pos, .bottom, 0, 0, 0, false, 0);
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .close_chest => {
                                 if (bo.interacted_inventory.win_id) |win| {
@@ -1515,18 +1503,18 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     log.warn("Close chest: no open inventory", .{});
                                 }
                                 //bo.interacted_inventory.win_id = null;
-                                th_d.nextAction(0, bo.pos.?);
+                                th_d.nextAction(0, bpos);
                             },
                             .block_break_pos => |p| {
                                 //TODO catch error
                                 if (th_d.timer == null) {
-                                    const pw = mc.lookAtBlock(bo.pos.?, p.pos.toF());
+                                    const pw = mc.lookAtBlock(bpos, p.pos.toF());
                                     th_d.timer = dt;
                                     const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
                                     const block = world.reg.getBlockFromState(sid);
                                     if (std.mem.eql(u8, "lava", block.name)) {
                                         th_d.timer = null;
-                                        th_d.nextAction(0, bo.pos.?);
+                                        th_d.nextAction(0, bpos);
                                     }
                                     if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
                                         const hardness = block.hardness.?;
@@ -1566,14 +1554,14 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                         }
                                         if (reset) {
                                             th_d.timer = null;
-                                            th_d.nextAction(0, bo.pos.?);
+                                            th_d.nextAction(0, bpos);
                                         }
                                     }
                                 }
                             },
                             .block_break => |bb| {
                                 if (th_d.timer == null) {
-                                    const pw = mc.lookAtBlock(bo.pos.?, bb.pos.toF());
+                                    const pw = mc.lookAtBlock(bpos, bb.pos.toF());
                                     try bp.setPlayerRot(pw.yaw, pw.pitch, true);
                                     try bp.playerAction(.start_digging, bb.pos);
                                     th_d.timer = dt;
@@ -1581,7 +1569,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     if (th_d.timer.? >= bb.break_time) {
                                         th_d.timer = null;
                                         try bp.playerAction(.finish_digging, bb.pos);
-                                        th_d.nextAction(0, bo.pos.?);
+                                        th_d.nextAction(0, bpos);
                                     }
                                     if (th_d.timer != null)
                                         th_d.timer.? += dt;
@@ -1593,19 +1581,19 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                         {
                             var dist_to_fall: f64 = -1;
                             //Check the bot is standing on something
-                            if (world.chunkdata(bo.dimension_id).getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
+                            if (world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
                                 var under: ?Reg.BlockId = under_o;
 
-                                if (under_o == 0 or @trunc(bo.pos.?.y) != 0) { //Bot is standing on air, make it fall
+                                if (under_o == 0 or @trunc(bpos.y) != 0) { //Bot is standing on air, make it fall
                                     while (under != null and under.? == 0) {
                                         dist_to_fall -= 1;
-                                        under = world.chunkdata(bo.dimension_id).getBlock(bo.pos.?.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
+                                        under = world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
                                     }
                                     var actions = LuaApi.ActionListT.init(world.alloc);
-                                    var pos = bo.pos.?;
+                                    var pos = bpos;
                                     pos.y = @trunc(pos.y) + dist_to_fall + 1;
                                     try actions.append(.{ .movement = .{ .kind = .freemove, .pos = pos } });
-                                    th_d.setActions(actions, bo.pos.?);
+                                    th_d.setActions(actions, bpos);
                                 }
                             }
                         }

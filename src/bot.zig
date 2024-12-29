@@ -470,6 +470,16 @@ pub const Bot = struct {
         };
     }
 
+    //Assumes lock is held
+    pub fn getPos(self: *const Self) V3f {
+        if (self.pos == null) {
+            log.err("Pos accessed before being set.", .{});
+            return .{ .x = 0, .y = 0, .z = 0 };
+        }
+        return self.pos.?;
+    }
+
+    //TODO Remove this duplicate
     pub fn nextAction(self: *Self, init_dt: f64) void {
         if (self.action_index == null)
             return;
