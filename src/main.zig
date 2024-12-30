@@ -606,29 +606,27 @@ pub const LuaApi = struct {
             defer self.bo.modify_mutex.unlock();
             if (self.world.chunkdata(self.bo.dimension_id).getBlock(p)) |id| {
                 const block = self.world.reg.getBlockFromState(id);
-                var buf: [6]Reg.Block.State = undefined;
-                if (block.getAllStates(id, &buf)) |states| {
-                    Lua.c.lua_newtable(L);
+                var buf: [6]Reg.Block.State.KV = undefined;
+                const states = self.world.reg.getBlockStates(id, &buf);
+                Lua.c.lua_newtable(L);
 
-                    Lua.pushV(L, @as([]const u8, "name"));
-                    Lua.pushV(L, block.name);
-                    Lua.c.lua_settable(L, -3);
+                Lua.pushV(L, @as([]const u8, "name"));
+                Lua.pushV(L, block.name);
+                Lua.c.lua_settable(L, -3);
 
-                    Lua.pushV(L, @as([]const u8, "state"));
-                    Lua.c.lua_newtable(L);
-                    for (states) |st| {
-                        const info = @typeInfo(Reg.Block.State.SubState);
-                        inline for (info.Union.fields, 0..) |f, fi| {
-                            if (fi == @intFromEnum(st.sub)) {
-                                Lua.pushV(L, f.name);
-                                Lua.pushV(L, @field(st.sub, f.name));
-                                Lua.c.lua_settable(L, -3);
-                            }
-                        }
+                Lua.pushV(L, @as([]const u8, "state"));
+                Lua.c.lua_newtable(L);
+                for (states) |st| {
+                    Lua.pushV(L, st.key);
+                    switch (st.val) {
+                        .int => |in| Lua.pushV(L, in),
+                        .boolean => |b| Lua.pushV(L, b),
+                        .enum_ => |e| Lua.pushV(L, e),
                     }
                     Lua.c.lua_settable(L, -3);
-                    return 1;
                 }
+                Lua.c.lua_settable(L, -3);
+                return 1;
             }
             returnError(L, .{ .code = "unknownBlock", .msg = "" });
         }

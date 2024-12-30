@@ -32,7 +32,7 @@ pub const ItemCatJson = struct {
 // [F] materials.json
 // [ ] protocol.json
 // [F] version.json
-// [P] blocks.json
+// [f] blocks.json
 
 pub const Recipe = struct {
     inShape: ?[][]?ItemId = null, //if set, shaped
@@ -178,89 +178,101 @@ pub const Entity = struct {
 };
 pub const EntitiesJson = []const Entity;
 
+//Used for parsing blocks.json, transferd into block later
+pub const JsonBlock = struct {
+    id: BlockId,
+    name: []const u8,
+    hardness: ?f32,
+    resistance: f32,
+    minStateId: StateId,
+    maxStateId: StateId,
+    stackSize: u8,
+    defaultState: StateId,
+    boundingBox: Block.BoundingBox,
+    material: []const u8,
+    diggable: bool,
+    transparent: bool,
+
+    states: []Block.State.JsonDummyState,
+};
+
 pub const Block = struct {
     pub const BoundingBox = enum(u8) {
         empty,
         block,
     };
-    pub const Material = enum(u8) {
-        default,
-        @"mineable/pickaxe",
-        @"mineable/shovel",
-        @"mineable/axe",
-        @"plant;mineable/axe",
-        plant,
-        UNKNOWN_MATERIAL,
-        @"leaves;mineable/hoe",
-        @"mineable/hoe",
-        cobweb,
-        wool,
-        @"gourd;mineable/axe",
-        @"vine_or_glow_lichen;plant;mineable/axe",
-    };
 
     pub const State = struct {
-        pub const SubState = union(enum) {
-            unimplemented: u8,
-            age: u8,
-            facing: Direction,
-            half: enum { top, bottom },
-            shape: enum { straight, inner_left, inner_right, outer_left, outer_right },
-            waterlogged: bool,
-        };
-        pub const SubStateTag = @typeInfo(SubState).Union.tag_type.?;
-
-        num_values: u8,
-        sub: SubState,
-
         pub const JsonDummyState = struct {
             name: []const u8,
             type: []const u8,
             num_values: u8,
             values: ?[]const []const u8 = null,
         };
+        pub const Context = struct {
+            pub fn eql(_: @This(), a: State, b: State) bool {
+                const ne = std.mem.eql(u8, a.name, b.name);
+                if (!ne)
+                    return false;
+                switch (a.type) {
+                    .int => {
+                        if (b.type == .int) {
+                            return (b.type.int.min == a.type.int.min and b.type.int.max == a.type.int.max);
+                        }
+                        return false;
+                    },
+                    .boolean => {
+                        return (b.type == .boolean);
+                    },
+                    .enum_ => {
+                        if (b.type != .enum_)
+                            return false;
+                        if (a.type.enum_.len != b.type.enum_.len)
+                            return false;
+                        for (a.type.enum_, 0..) |av, i| {
+                            if (!std.mem.eql(u8, av, b.type.enum_[i]))
+                                return false;
+                        }
 
-        pub fn jsonParse(alloc: std.mem.Allocator, source: anytype, options: std.json.ParseOptions) !@This() {
-            const eql = std.mem.eql;
-            const dummy = try std.json.innerParse(JsonDummyState, alloc, source, options);
-            const info = @typeInfo(SubState);
-            var ret: State = .{ .num_values = dummy.num_values, .sub = .{ .unimplemented = 0 } };
-            inline for (info.Union.fields) |f| {
-                if (eql(u8, f.name, dummy.name)) {
-                    const finfo = @typeInfo(f.type);
-                    ret.sub = @unionInit(SubState, f.name, switch (finfo) {
-                        .Int => 0,
-                        .Enum => @enumFromInt(0),
-                        .Void => {},
-                        .Bool => false,
-                        else => @compileError("not supported"),
-                    });
-                    return ret;
+                        return true;
+                    },
                 }
             }
-            return ret;
+            pub fn hash(_: @This(), key: State) u64 {
+                var hasher = std.hash.Wyhash.init(0);
+                std.hash.autoHashStrat(&hasher, key, .DeepRecursive);
+                return hasher.final();
+            }
+        };
+
+        pub const Value = union(enum) {
+            boolean: bool,
+            int: u8,
+            enum_: []const u8,
+        };
+
+        pub const KV = struct {
+            key: []const u8,
+            val: Value,
+        };
+
+        pub fn numValues(self: @This()) usize {
+            return switch (self.type) {
+                .boolean => 2,
+                .int => |i| i.max - i.min,
+                .enum_ => |e| e.len,
+            };
         }
 
-        pub fn initWithInt(num_values: u8, sub: SubStateTag, val: usize) @This() {
-            const info = @typeInfo(SubState);
-            inline for (info.Union.fields, 0..) |f, i| {
-                if (i == @intFromEnum(sub)) {
-                    const T = f.type;
-                    const finfo = @typeInfo(T);
-                    return .{
-                        .num_values = num_values,
-                        .sub = @unionInit(SubState, f.name, switch (finfo) {
-                            .Int => @intCast(val),
-                            .Enum => @enumFromInt(val),
-                            .Void => {},
-                            .Bool => val == 0, //bools are reversed in minecraft data
-                            else => @compileError("not supported"),
-                        }),
-                    };
-                }
-            }
-            unreachable;
-        }
+        name: []const u8,
+        type: union(enum) {
+            boolean: void,
+            int: struct {
+                min: u8,
+                max: u8,
+            },
+            enum_: []const []const u8,
+        },
     };
 
     id: BlockId,
@@ -273,11 +285,11 @@ pub const Block = struct {
     defaultState: StateId,
     boundingBox: BoundingBox,
     material: []const u8,
-    //material: ?Material,
     diggable: bool,
     transparent: bool,
 
-    states: []State,
+    //states: []State,
+    states: []usize, //Indices into reg,state_list
 
     //filterLight: u8, not relevent
     fn compareStateIds(ctx: u8, key: Block, actual: Block) std.math.Order {
@@ -293,37 +305,60 @@ pub const Block = struct {
         return lhs.id < rhs.id;
     }
 
-    pub fn getState(self: @This(), stateid: StateId, sub: Block.State.SubStateTag) ?State {
-
+    pub fn getState(self: @This(), state_list: []const State, stateid: StateId, state_tag: []const u8) ?State.Value {
         //Formula for n states [a,b,c,d,e]
         //
         // to find what state d is:
         // ( id /(a * b * c) ) % d
-
         var divisor: usize = 1;
         var i = self.states.len;
         while (i > 0) : (i -= 1) {
-            const state = self.states[i - 1];
-            defer divisor *= state.num_values;
-            if (state.sub == sub) {
-                const local_id = @divFloor(stateid - self.minStateId, divisor) % state.num_values;
-                return Block.State.initWithInt(state.num_values, sub, local_id);
+            const state = state_list[self.states[i - 1]];
+            const nv = state.numValues();
+            defer divisor *= nv;
+            if (std.mem.eql(u8, state.name, state_tag)) {
+                const local_id = @divFloor(stateid - self.minStateId, divisor) % nv;
+                return switch (state.type) {
+                    .boolean => .{ .boolean = local_id == 0 },
+                    .int => .{ .int = @intCast(local_id) },
+                    .enum_ => .{ .enum_ = state.type.enum_[local_id] },
+                };
             }
         }
-
         return null;
     }
 
-    pub fn getAllStates(self: *const @This(), stateid: StateId, buf: []State) ?[]State {
-        var count: usize = 0;
-        for (self.states) |state| {
-            defer count += 1;
-            if (count >= buf.len)
-                return buf[0..count];
-            buf[count] = self.getState(stateid, state.sub) orelse return null;
-        }
-        return buf[0..count];
-    }
+    //pub fn getState(self: @This(), stateid: StateId, sub: Block.State.SubStateTag) ?State {
+
+    //    //Formula for n states [a,b,c,d,e]
+    //    //
+    //    // to find what state d is:
+    //    // ( id /(a * b * c) ) % d
+
+    //    var divisor: usize = 1;
+    //    var i = self.states.len;
+    //    while (i > 0) : (i -= 1) {
+    //        const state = self.states[i - 1];
+    //        defer divisor *= state.num_values;
+    //        if (state.sub == sub) {
+    //            const local_id = @divFloor(stateid - self.minStateId, divisor) % state.num_values;
+    //            return Block.State.initWithInt(state.num_values, sub, local_id);
+    //        }
+    //    }
+
+    //    return null;
+    //}
+
+    //pub fn getAllStates(self: *const @This(), stateid: StateId, buf: []State) ?[]State {
+    //    var count: usize = 0;
+    //    for (self.states) |state| {
+    //        defer count += 1;
+    //        if (count >= buf.len)
+    //            return buf[0..count];
+    //        buf[count] = self.getState(stateid, state.sub) orelse return null;
+    //    }
+    //    return buf[0..count];
+    //}
 };
 pub const BlocksJson = []Block;
 
@@ -354,11 +389,15 @@ pub const DataReg = struct {
         }
     };
 
+    string_storage: std.StringHashMap(u32),
+    strings: std.ArrayList([]const u8),
+    statelist: std.ArrayList(Block.State),
+
     alloc: std.mem.Allocator,
     item_categories: ItemCategories,
     version_id: i32,
     block_name_map: std.StringHashMap(BlockId),
-    item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[]. name strings are stored in items[]
+    item_name_map: std.StringHashMap(u16), //Maps item names to indices into items[].
     items: []Item,
     foods: []Food,
     blocks: []Block,
@@ -381,6 +420,8 @@ pub const DataReg = struct {
 
         var version_info = try com.readJson(try ProtoGen.getDir(&version_map, "version"), "version.json", alloc, VersionJson);
         defer version_info.deinit();
+        var string_storage = std.StringHashMap(u32).init(alloc);
+        var strings = std.ArrayList([]const u8).init(alloc);
 
         const jitems = try com.readJson(try ProtoGen.getDir(&version_map, "items"), "items.json", alloc, ItemsJson);
         defer jitems.deinit();
@@ -388,15 +429,16 @@ pub const DataReg = struct {
         var items = try alloc.alloc(Item, jitems.value.len);
         for (jitems.value, 0..) |item, i| {
             items[i] = item;
-            items[i].name = try alloc.dupe(u8, item.name);
+            items[i].name = try dupeString(alloc, &string_storage, &strings, item.name);
         }
         std.sort.heap(Item, items, {}, Item.asc);
         for (items, 0..) |item, i| {
             try item_map.put(item.name, @intCast(i));
         }
 
+        const block = try com.readJson(try ProtoGen.getDir(&version_map, "blocks"), "blocks.json", alloc, []JsonBlock);
+
         const ent = try com.readJson(try ProtoGen.getDir(&version_map, "entities"), "entities.json", alloc, EntitiesJson);
-        const block = try com.readJson(try ProtoGen.getDir(&version_map, "blocks"), "blocks.json", alloc, BlocksJson);
         const mat = try com.readJson(try ProtoGen.getDir(&version_map, "materials"), "materials.json", alloc, MaterialsJson);
         defer mat.deinit();
 
@@ -413,13 +455,63 @@ pub const DataReg = struct {
         const blocks = try alloc.alloc(Block, block.value.len);
 
         var empty = std.ArrayList(BlockId).init(alloc);
+        const h = std.hash.Wyhash.hash;
+        var statetable = std.HashMap(Block.State, usize, Block.State.Context, std.hash_map.default_max_load_percentage).init(alloc);
+        var statelist = std.ArrayList(Block.State).init(alloc);
+        defer statetable.deinit();
         for (block.value, 0..) |b, i| {
             if (b.boundingBox == .empty)
                 try empty.append(b.id);
-            blocks[i] = b;
-            blocks[i].name = try alloc.dupe(u8, b.name);
-            blocks[i].material = try alloc.dupe(u8, b.material);
-            blocks[i].states = try alloc.dupe(Block.State, b.states);
+
+            const state_list = try alloc.alloc(usize, b.states.len);
+            for (b.states, 0..) |st, si| {
+                const trystate = Block.State{
+                    .name = st.name,
+                    .type = switch (h(0, st.type)) {
+                        h(0, "int") => .{ .int = .{ .min = try std.fmt.parseInt(u8, st.values.?[0], 10), .max = try std.fmt.parseInt(u8, st.values.?[st.num_values - 1], 10) } },
+                        h(0, "bool") => .{ .boolean = {} },
+                        h(0, "enum") => .{ .enum_ = st.values.? },
+                        else => unreachable,
+                    },
+                };
+                if (statetable.get(trystate)) |ost| {
+                    state_list[si] = ost;
+                } else {
+                    const duped_state = Block.State{
+                        .name = try dupeString(alloc, &string_storage, &strings, trystate.name),
+                        .type = switch (trystate.type) {
+                            .int => trystate.type,
+                            .boolean => trystate.type,
+                            .enum_ => |e| blk: {
+                                var list = try alloc.alloc([]const u8, e.len);
+                                for (e, 0..) |it, ssi|
+                                    list[ssi] = try dupeString(alloc, &string_storage, &strings, it);
+                                break :blk .{ .enum_ = list };
+                            },
+                        },
+                    };
+                    const index = statelist.items.len;
+                    try statelist.append(duped_state);
+                    try statetable.put(duped_state, index);
+                    state_list[si] = index;
+                }
+            }
+
+            blocks[i] = .{
+                .name = try dupeString(alloc, &string_storage, &strings, b.name),
+                .material = try dupeString(alloc, &string_storage, &strings, b.material),
+                .id = b.id,
+                .hardness = b.hardness,
+                .resistance = b.resistance,
+                .minStateId = b.minStateId,
+                .maxStateId = b.maxStateId,
+                .stackSize = b.stackSize,
+                .defaultState = b.defaultState,
+                .boundingBox = b.boundingBox,
+                .diggable = b.diggable,
+                .transparent = b.transparent,
+                .states = state_list,
+            };
         }
         std.sort.heap(BlockId, empty.items, {}, std.sort.asc(BlockId));
         std.sort.heap(Block, blocks, {}, Block.asc);
@@ -436,7 +528,6 @@ pub const DataReg = struct {
         for (foodj.value, 0..) |f, i| {
             foods[i] = f;
         }
-        //std.sort.heap(Entity, ent.value, {}, Entity.asc);
 
         const ret = Self{
             .rec_map = rec_map,
@@ -452,11 +543,26 @@ pub const DataReg = struct {
             .blocks = blocks,
             .materials = try Materials.initFromJson(alloc, mat.value),
             .empty_block_ids = empty,
+            .string_storage = string_storage,
+            .strings = strings,
+            .statelist = statelist,
 
             .ent_j = ent,
             .rec_j = rec,
         };
         return ret;
+    }
+
+    pub fn dupeString(alloc: std.mem.Allocator, map: *std.StringHashMap(u32), strings: *std.ArrayList([]const u8), string: []const u8) ![]const u8 {
+        if (map.getEntry(string)) |e| {
+            e.value_ptr.* += 1;
+            return e.key_ptr.*;
+        }
+
+        const str = try alloc.dupe(u8, string);
+        try strings.append(str);
+        try map.put(str, 0);
+        return str;
     }
 
     pub fn addUserItemCategories(self: *Self, dir: std.fs.Dir, path: []const u8) !void {
@@ -518,17 +624,22 @@ pub const DataReg = struct {
     }
 
     pub fn deinit(self: *Self) void {
+        for (self.statelist.items) |state| {
+            if (state.type == .enum_)
+                self.alloc.free(state.type.enum_);
+        }
+        self.statelist.deinit();
+        for (self.strings.items) |item| {
+            self.alloc.free(item);
+        }
+        self.string_storage.deinit();
+        self.strings.deinit();
         self.rec_map.deinit();
         self.item_categories.deinit();
         for (self.blocks) |b| {
-            self.alloc.free(b.name);
             self.alloc.free(b.states);
-            self.alloc.free(b.material);
         }
         self.alloc.free(self.blocks);
-        for (self.items) |item| {
-            self.alloc.free(item.name);
-        }
         self.alloc.free(self.items);
         self.item_name_map.deinit();
         self.block_name_map.deinit();
@@ -537,6 +648,25 @@ pub const DataReg = struct {
         self.ent_j.deinit();
         self.alloc.free(self.foods);
         self.rec_j.deinit();
+    }
+
+    pub fn getBlockState(self: *const Self, stateid: StateId, tag: []const u8) ?Block.State.Value {
+        const b = self.getBlockFromState(stateid);
+        return b.getState(self.statelist.items, stateid, tag);
+    }
+
+    pub fn getBlockStates(self: *const Self, stateid: StateId, buf: []Block.State.KV) []Block.State.KV {
+        const b = self.getBlockFromState(stateid);
+
+        var count: usize = 0;
+        for (b.states) |si| {
+            defer count += 1;
+            if (count >= buf.len)
+                return buf[0..count];
+            const st = self.statelist.items[si];
+            buf[count] = .{ .key = st.name, .val = b.getState(self.statelist.items, stateid, st.name) orelse .{ .enum_ = "" } };
+        }
+        return buf[0..count];
     }
 
     pub fn getBlockSlice(self: *const Self) []const Block {

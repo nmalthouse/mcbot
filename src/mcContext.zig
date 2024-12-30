@@ -360,9 +360,9 @@ pub const McWorld = struct {
                                 },
                                 .string => |s| {
                                     const t = s;
-                                    if (b.getState(id, .facing)) |facing| {
-                                        const fac = facing.sub.facing;
-                                        const dvec = facing.sub.facing.reverse().toVec();
+                                    if (self.reg.getBlockState(id, "facing")) |facing| {
+                                        const fac = std.meta.stringToEnum(Reg.Direction, facing.enum_) orelse return;
+                                        const dvec = fac.reverse().toVec();
                                         const behind = coord.add(dvec);
                                         if (dim.chunk_data.getBlock(behind)) |bid| {
                                             const bi = self.reg.getBlockFromState(bid);
