@@ -1592,7 +1592,7 @@ pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Th
                                     th_d.timer = dt;
                                     const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
                                     const block = world.reg.getBlockFromState(sid);
-                                    if (std.mem.eql(u8, "lava", block.name)) {
+                                    if (eql(u8, "lava", block.name) or eql(u8, "water", block.name)) {
                                         th_d.timer = null;
                                         th_d.nextAction(0, bpos);
                                     }

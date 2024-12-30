@@ -16,7 +16,7 @@ pub const ItemCatJson = struct {
 //Support Key F: full, P: partial
 // [ ] biomes.json
 // [ ] blockLoot.json
-// [ ] effects.json
+// [p] effects.json
 // [ ] language.json
 // [ ] enchantments.json
 // [ ] instruments.json
@@ -26,11 +26,11 @@ pub const ItemCatJson = struct {
 // [P] entities.json
 // [ ] blockCollisionShapes.json
 // [ ] entityLoot.json
-// [ ] recipes.json
+// [p] recipes.json
 // [P] foods.json
 // [F] items.json
 // [F] materials.json
-// [ ] protocol.json
+// [P] protocol.json
 // [F] version.json
 // [f] blocks.json
 
@@ -288,7 +288,6 @@ pub const Block = struct {
     diggable: bool,
     transparent: bool,
 
-    //states: []State,
     states: []usize, //Indices into reg,state_list
 
     //filterLight: u8, not relevent
@@ -327,38 +326,6 @@ pub const Block = struct {
         }
         return null;
     }
-
-    //pub fn getState(self: @This(), stateid: StateId, sub: Block.State.SubStateTag) ?State {
-
-    //    //Formula for n states [a,b,c,d,e]
-    //    //
-    //    // to find what state d is:
-    //    // ( id /(a * b * c) ) % d
-
-    //    var divisor: usize = 1;
-    //    var i = self.states.len;
-    //    while (i > 0) : (i -= 1) {
-    //        const state = self.states[i - 1];
-    //        defer divisor *= state.num_values;
-    //        if (state.sub == sub) {
-    //            const local_id = @divFloor(stateid - self.minStateId, divisor) % state.num_values;
-    //            return Block.State.initWithInt(state.num_values, sub, local_id);
-    //        }
-    //    }
-
-    //    return null;
-    //}
-
-    //pub fn getAllStates(self: *const @This(), stateid: StateId, buf: []State) ?[]State {
-    //    var count: usize = 0;
-    //    for (self.states) |state| {
-    //        defer count += 1;
-    //        if (count >= buf.len)
-    //            return buf[0..count];
-    //        buf[count] = self.getState(stateid, state.sub) orelse return null;
-    //    }
-    //    return buf[0..count];
-    //}
 };
 pub const BlocksJson = []Block;
 

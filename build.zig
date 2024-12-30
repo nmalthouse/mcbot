@@ -49,6 +49,7 @@ pub fn build(b: *std.Build) void {
 
     const options = b.addOptions();
     options.addOption(bool, "verbose_logging", b.option(bool, "verbose", "log verbose") orelse false);
+    options.addOption(bool, "log_skipped_packets", b.option(bool, "log_skipped_packets", "Any unhandled packets are printed, use with -Dverbose") orelse false);
     options.addOption(u32, "MAX_BOTS", b.option(u32, "max_bots", "maximum number of bots this build can support") orelse 32);
     options.addOption(bool, "enable_draw", b.option(bool, "enable_draw", "compile with debug renderer option") orelse true);
     exe.root_module.addOptions("config", options);
