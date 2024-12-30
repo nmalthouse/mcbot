@@ -89,6 +89,16 @@ pub const BuildLayer = struct {
 
 threadlocal var lss: ?*LuaApi = null;
 pub const LuaApi = struct {
+    const Doc = struct {
+        const Arg = struct {
+            type: []const u8,
+            name: []const u8,
+        };
+        desc: []const u8,
+        errors: []const ErrorMsg,
+        args: []const Arg,
+        returns: Arg = .{ .type = "void", .name = "" },
+    };
     const ErrorMsg = bot.BotScriptThreadData.ErrorMsg;
 
     const sToE = std.meta.stringToEnum;
@@ -106,6 +116,26 @@ pub const LuaApi = struct {
 
     alloc: std.mem.Allocator,
 
+    pub fn registerAllStruct(self: *Lua, comptime api_struct: type) void {
+        const info = @typeInfo(api_struct);
+        inline for (info.Struct.decls) |decl| {
+            const t = @TypeOf(@field(api_struct, decl.name));
+            const tinfo = @typeInfo(t);
+            const lua_name = decl.name;
+            switch (tinfo) {
+                .Fn => self.reg(lua_name, @field(api_struct, decl.name)),
+                //else => |crass| @compileError("Cannot export to lua: " ++ @tagName(crass)),
+                //@typeName(@TypeOf(@field(api_struct, decl.name)))),
+                .Pointer => |p| {
+                    if (p.size == .Slice and p.child == u8) {
+                        self.setGlobal(lua_name, @field(api_struct, decl.name));
+                    }
+                },
+                else => {}, //don't export
+            }
+        }
+    }
+
     fn stripErrorUnion(comptime T: type) type {
         const info = @typeInfo(T);
         if (info != .ErrorUnion) @compileError("stripErrorUnion expects an error union!");
@@ -120,7 +150,7 @@ pub const LuaApi = struct {
     }
 
     pub fn init(alloc: std.mem.Allocator, world: *McWorld, bo: *Bot, thread_data: *bot.BotScriptThreadData, vm: *Lua) Self {
-        vm.registerAllStruct(Api);
+        registerAllStruct(vm, Api);
         return .{
             .thread_data = thread_data,
             .vm = vm,
@@ -337,12 +367,23 @@ pub const LuaApi = struct {
         //all stack operations are tracked
         //at compile time we can detect when an error has been made regarding stack discipline
 
+        const invalidErr = ErrorMsg{ .code = "invalidThing", .msg = "Expects a different kind of thingy" };
+        pub const fn_giveError = Doc{
+            .desc = "nothing",
+            .errors = &.{invalidErr},
+            .args = &.{},
+        };
         pub export fn giveError(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             _ = self;
-            returnError(L, .{ .code = "invalidThing", .msg = "Expects a different kind of thingy" });
+            returnError(L, invalidErr);
         }
 
+        pub const fn_command = Doc{
+            .errors = &.{},
+            .desc = "Execute a Minecraft command",
+            .args = &.{.{ .type = "string", .name = "command" }},
+        };
         pub export fn command(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -1731,15 +1772,36 @@ pub fn main() !void {
 
     if (args.doc != null) {
         const info = @typeInfo(LuaApi.Api);
-        const seperator = "";
+        //const seperator = "";
         inline for (info.Struct.decls) |d| {
-            if (std.mem.startsWith(u8, d.name, "DOC_")) {
-                const f = @field(LuaApi.Api, d.name);
-                if (@typeInfo(@TypeOf(f)) == .Pointer) {
-                    std.debug.print("{s}: {s}\n", .{ d.name["DOC_".len..], f });
-                    std.debug.print("{s}\n", .{seperator});
-                }
+            const fi = @field(LuaApi.Api, d.name);
+            switch (@typeInfo(@TypeOf(fi))) {
+                .Struct => {
+                    if (@TypeOf(fi) == LuaApi.Doc) {
+                        const dd = @field(LuaApi.Api, d.name);
+                        std.debug.print("{s}:\n", .{d.name});
+                        std.debug.print("Description: {s}:\n", .{dd.desc});
+                        std.debug.print("Arguments:\n", .{});
+                        for (dd.args) |er| {
+                            std.debug.print("\t{s}:{s}\n", .{ er.name, er.type });
+                        }
+                        std.debug.print("returns: {s}:{s}\n", .{ dd.returns.name, dd.returns.type });
+                        std.debug.print("Errors: \n", .{});
+                        for (dd.errors) |er| {
+                            std.debug.print("\t{s}, {s}\n", .{ er.code, er.msg });
+                        }
+                    }
+                },
+                else => {},
             }
+
+            //if (std.mem.startsWith(u8, d.name, "DOC_")) {
+            //    const f = @field(LuaApi.Api, d.name);
+            //    if (@typeInfo(@TypeOf(f)) == .Pointer) {
+            //        std.debug.print("{s}: {s}\n", .{ d.name["DOC_".len..], f });
+            //        std.debug.print("{s}\n", .{seperator});
+            //    }
+            //}
         }
         return;
     }
