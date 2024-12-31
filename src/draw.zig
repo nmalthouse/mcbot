@@ -67,6 +67,7 @@ pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot,
         //test for visibility
         //TODO for now this just spins
         if (ctx.should_exit_mutex.tryLock()) {
+            ctx.should_exit_mutex.unlock();
             return;
         }
         //const max_chunk_build_time = std.time.ns_per_s / 8;
@@ -76,7 +77,7 @@ pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot,
         var num_removed: usize = 0;
         bot1.modify_mutex.lock();
         const dim = bot1.dimension_id;
-        const pos = bot1.pos;
+        //const pos = bot1.pos;
         bot1.modify_mutex.unlock();
         const cdata = world.chunkdata(dim);
         {
@@ -96,8 +97,8 @@ pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot,
                 if (cdata.x.get(item.x)) |xx| {
                     if (xx.get(item.y)) |chunk| {
                         for (chunk.sections.items, 0..) |sec, sec_i| {
-                            if (@divTrunc(@as(i32, @intFromFloat(pos.?.y)) - cdata.y_offset, 16) - @as(i32, @intCast(sec_i)) > 3)
-                                continue; //Only render chunks close to player, for quick render when debug
+                            //if (@divTrunc(@as(i32, @intFromFloat(pos.?.y)) - cdata.y_offset, 16) - @as(i32, @intCast(sec_i)) > 3)
+                            //continue; //Only render chunks close to player, for quick render when debug
                             //if (!display_caves and sec_i < 7) continue;
                             if (sec.bits_per_entry == 0) continue;
                             //var s_it = mc.ChunkSection.DataIterator{ .buffer = sec.data.items, .bits_per_entry = sec.bits_per_entry };
@@ -343,6 +344,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
         rebuild_ctx.ready_mutex.lock();
         rebuild_ctx.ready.deinit();
     }
+    const ts = 30;
 
     //graph.c.glPolygonMode(graph.c.GL_FRONT_AND_BACK, graph.c.GL_LINE);
     while (!win.should_exit) {
@@ -475,7 +477,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                             );
                             if (win.keyHigh(.LSHIFT)) {
                                 const center = win.screen_dimensions.toF().smul(0.5);
-                                gctx.textFmt(center, "{d}", .{block}, &font, 14, 0xffffffff);
+                                gctx.textFmt(center, "{d}", .{block}, &font, ts, 0xffffffff);
                             }
 
                             if (win.mouse.left == .rising) {
@@ -601,9 +603,10 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
             world.entities_mutex.lock();
             defer world.entities_mutex.unlock();
             const area = graph.Rec(0, 0, @divTrunc(win.screen_dimensions.x, 3), @divTrunc(win.screen_dimensions.x, 3));
-            const sx = area.w / @as(f32, @floatFromInt(invtex.w));
-            const sy = area.h / @as(f32, @floatFromInt(invtex.h));
-            gctx.rectTex(area, invtex.rect(), invtex);
+            const invtexrec = graph.Rec(0, 0, 176, 166);
+            const sx = area.w / invtexrec.w;
+            const sy = area.h / invtexrec.h;
+            gctx.rectTex(area, invtexrec, invtex);
             for (bot1.inventory.slots.items, 0..) |slot, i| {
                 const rr = inv_map.value.default[i];
                 const rect = graph.Rec(area.x + rr[0] * sx, area.y + rr[1] * sy, 16 * sx, 16 * sy);
@@ -620,7 +623,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                             gctx.text(rect.pos(), item.name, &font, 12, 0xff);
                         }
                     }
-                    gctx.textFmt(rect.pos().add(.{ .x = 0, .y = rect.h / 2 }), "{d}", .{slot.count}, &font, 15, 0xff);
+                    gctx.textFmt(rect.pos().add(.{ .x = 0, .y = rect.h / 2 }), "{d}", .{slot.count}, &font, ts, 0xff);
                 }
             }
 
@@ -641,7 +644,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
                     world.entities.count(),
                 },
                 &font,
-                15,
+                ts,
                 0xff,
             );
         }
@@ -649,7 +652,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
         { //binding info draw
             const num_lines = KeyMap.bindlist.len;
-            const fs = 12;
+            const fs = ts;
             const px_per_line = font.ptToPixel(12);
             const h = num_lines * px_per_line;
             const area = graph.Rec(0, @as(f32, @floatFromInt(win.screen_dimensions.y)) - h, 500, h);

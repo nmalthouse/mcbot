@@ -455,6 +455,11 @@ pub const Bot = struct {
     e_id: u32,
     dimension_id: i32 = 0,
 
+    chunk_batch_info: struct {
+        start_time: i64 = 0,
+        end_time: i64 = 0,
+    } = .{},
+
     /// This field is used as an index into bot bitsets. See Entity.owners
     index_id: u32 = 0,
 

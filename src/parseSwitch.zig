@@ -181,6 +181,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const pos = V3i.new(@intCast(d.location.x), @intCast(d.location.y), @intCast(d.location.z));
             try world.chunkdata(bot1.dimension_id).setBlock(pos, @as(mc.BLOCK_ID_INT, @intCast(d.type)));
         },
+        .chunk_batch_start => {
+            //MARK TIME WE RECIEVE
+            bot1.chunk_batch_info.start_time = std.time.milliTimestamp();
+        },
+        .chunk_batch_finished => {
+            const d = try Ap(Penum, .chunk_batch_finished, &parse);
+            bot1.chunk_batch_info.end_time = std.time.milliTimestamp();
+            const ms_per_chunk: f32 = @as(f32, @floatFromInt(bot1.chunk_batch_info.end_time - bot1.chunk_batch_info.start_time)) / @as(f32, @floatFromInt(d.batchSize));
+            const cpt = 25 / ms_per_chunk;
+            try pctx.sendAuto(Proto.Play_Serverbound, .chunk_batch_received, .{ .chunksPerTick = cpt });
+        },
         .map_chunk => {
             annotateManualParse("1.21.3");
             const cx = parse.int(i32);
@@ -335,10 +346,11 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const ws = d.worldState;
             bot1.view_dist = @as(u8, @intCast(d.simulationDistance));
             bot1.init_status.has_login = true;
-            std.debug.print("{s} id:{d}\n", .{ ws.name, ws.dimension });
+            std.debug.print("{s} id:{d}, view_dist: {d}\n", .{ ws.name, ws.dimension, d.viewDistance });
             world.modify_mutex.lock();
             defer world.modify_mutex.unlock();
             bot1.dimension_id = ws.dimension;
+            try pctx.clientInfo("en_US", @intCast(d.viewDistance), 1);
         },
         .death_combat_event => {
             const d = try CB.Type_packet_death_combat_event.parse(&parse);

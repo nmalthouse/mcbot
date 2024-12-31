@@ -159,6 +159,17 @@ pub fn botJoin(alloc: std.mem.Allocator, bot_name: []const u8, script_name: ?[]c
                     try pctx.sendAuto(Proto.Login_Serverbound, .login_acknowledged, .{});
                     bot1.uuid = d.uuid;
                     bot1.connection_state = .config;
+                    try pctx.sendAuto(Proto.Config_Serverbound, .settings, .{
+                        .chatColors = true,
+                        .locale = "en_US",
+                        .viewDistance = 12,
+                        .chatFlags = 0,
+                        .skinParts = 0,
+                        .mainHand = 0,
+                        .enableTextFiltering = false,
+                        .enableServerListing = true,
+                        .particles = 0,
+                    });
                 },
                 .login_plugin_request => {
                     const data = try Proto.Login_Clientbound.packets.Type_packet_login_plugin_request.parse(&parse);

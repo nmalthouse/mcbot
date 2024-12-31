@@ -127,9 +127,10 @@ pub const LuaApi = struct {
                 //else => |crass| @compileError("Cannot export to lua: " ++ @tagName(crass)),
                 //@typeName(@TypeOf(@field(api_struct, decl.name)))),
                 .Pointer => |p| {
-                    if (p.size == .Slice and p.child == u8) {
-                        self.setGlobal(lua_name, @field(api_struct, decl.name));
-                    }
+                    _ = p;
+                    //if (p.size == .Slice and p.child == u8) {
+                    //    self.setGlobal(lua_name, @field(api_struct, decl.name));
+                    //}
                 },
                 else => {}, //don't export
             }
@@ -180,6 +181,8 @@ pub const LuaApi = struct {
             return;
         }
     }
+    //TODO endHalt should take an optional list of ActionItems
+    //move the switch from updateBots into endHalt so all items are evaluated within endHalt
     pub fn endHalt(self: *Self) ?ErrorMsg {
         const has_actions = self.thread_data.action_index != null;
         if (has_actions)
@@ -368,22 +371,22 @@ pub const LuaApi = struct {
         //at compile time we can detect when an error has been made regarding stack discipline
 
         const invalidErr = ErrorMsg{ .code = "invalidThing", .msg = "Expects a different kind of thingy" };
-        pub const fn_giveError = Doc{
-            .desc = "nothing",
-            .errors = &.{invalidErr},
-            .args = &.{},
-        };
+        //pub const fn_giveError = Doc{
+        //    .desc = "nothing",
+        //    .errors = &.{invalidErr},
+        //    .args = &.{},
+        //};
         pub export fn giveError(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             _ = self;
             returnError(L, invalidErr);
         }
 
-        pub const fn_command = Doc{
-            .errors = &.{},
-            .desc = "Execute a Minecraft command",
-            .args = &.{.{ .type = "string", .name = "command" }},
-        };
+        //pub const fn_command = Doc{
+        //    .errors = &.{},
+        //    .desc = "Execute a Minecraft command",
+        //    .args = &.{.{ .type = "string", .name = "command" }},
+        //};
         pub export fn command(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -653,6 +656,7 @@ pub const LuaApi = struct {
         }
 
         pub const DOC_gotoLandmark: []const u8 = "Args: [string: landmark name] returns (vec3) landmark coord. Make the bot pathfind to the landmark";
+        pub const errWpNotFound = ErrorMsg{ .code = "notFound", .msg = "" };
         pub export fn gotoLandmark(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -668,7 +672,7 @@ pub const LuaApi = struct {
                 self.bo.modify_mutex.unlock();
                 const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
                     log.warn("Can't find waypoint: {s}", .{str});
-                    returnError(L, .{ .code = "notFound", .msg = "" });
+                    returnError(L, errWpNotFound);
                 };
                 const found = self.pathctx.pathfind(did, pos, wp.pos.toF(), .{}) catch |E| break :B E;
                 if (found) |*actions|
@@ -733,7 +737,7 @@ pub const LuaApi = struct {
 
             const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
                 log.warn("Can't find waypoint: {s}", .{str});
-                return 0;
+                returnError(L, errWpNotFound);
             };
 
             Lua.pushV(L, wp);
@@ -1276,9 +1280,11 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, thread_data: *bot.BotScr
     }
 }
 
-//TODO the bots scripts depend on the world being loaded for gotoWaypoint etc.
-//currently we just sleep for some time, a better way would be to wait spawning the threads until some condition.
-//Maybe having n chunks loaded or certain waypoints added
+//TODO why does this need to be in a seperate thread,
+//just launch directly from the main thread
+//
+//main does parsing ->
+//  bots are lua
 pub fn updateBots(alloc: std.mem.Allocator, world: *McWorld, exit_mutex: *std.Thread.Mutex) !void {
     const log = std.log.scoped(.update);
     var arena_allocs = std.heap.ArenaAllocator.init(alloc);
@@ -1831,6 +1837,7 @@ pub fn main() !void {
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
+    //TODO I want to be able to add and remove bots whenever not just at program init
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
         const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id, &world);
@@ -1947,7 +1954,7 @@ pub fn main() !void {
 
             local: while (true) {
                 switch (pp.state) {
-                    .len => {
+                    .len => { //Read bytes one at a time until we have a full varInt
                         var buf: [1]u8 = .{0xff};
                         const n = try std.posix.read(eve.data.fd, &buf);
                         if (n == 0) {
