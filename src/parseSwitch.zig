@@ -282,6 +282,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
 
                 //Find all the crafting benches
                 {
+                    const bed_ids = world.tag_table.getIdList("minecraft:block", "minecraft:beds");
                     //other things to find
                     //Beds
                     //furnace
@@ -291,7 +292,16 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     var skip = false;
                     if (chunk_section.palatte_t == .map) {
                         var none = true;
-                        for (chunk_section.mapping.items) |map| {
+                        outer: for (chunk_section.mapping.items) |map| {
+                            if (bed_ids) |bid| {
+                                for (bid) |bi| {
+                                    const bb = world.reg.getBlock(@intCast(bi));
+                                    if (map >= bb.minStateId and map <= bb.maxStateId) {
+                                        none = false;
+                                        break :outer;
+                                    }
+                                }
+                            }
                             if (map >= crafting_bench.minStateId and map <= crafting_bench.maxStateId) {
                                 none = false;
                                 break;
@@ -308,6 +318,12 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                             if (bid == crafting_bench.id) {
                                 const coord = V3i.new(cx * 16 + block.pos.x, @as(i32, @intCast(chunk_i)) * 16 + block.pos.y + dim.info.min_y, cy * 16 + block.pos.z);
                                 try world.dimPtr(dim.info.id).poi.putNew(coord);
+                            } else if (bed_ids) |bids| {
+                                for (bids) |id| {
+                                    if (id == bid) {
+                                        //TODO add the bed
+                                    }
+                                }
                             }
                         }
                     }

@@ -1313,7 +1313,6 @@ pub const ChunkMap = struct {
     }
 
     pub fn insertChunkColumn(self: *Self, cx: i32, cz: i32, chunk: Chunk) !void {
-        std.debug.print("putting chunk {d} {d}\n", .{ cx, cz });
         self.rw_lock.lock();
         defer self.rw_lock.unlock();
 
