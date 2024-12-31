@@ -93,11 +93,12 @@ pub const LuaApi = struct {
         const Arg = struct {
             type: []const u8,
             name: []const u8,
+            desc: []const u8,
         };
         desc: []const u8,
         errors: []const ErrorMsg,
         args: []const Arg,
-        returns: Arg = .{ .type = "void", .name = "" },
+        returns: Arg = .{ .type = "void", .name = "", .desc = "" },
     };
     const ErrorMsg = bot.BotScriptThreadData.ErrorMsg;
 
@@ -371,22 +372,22 @@ pub const LuaApi = struct {
         //at compile time we can detect when an error has been made regarding stack discipline
 
         const invalidErr = ErrorMsg{ .code = "invalidThing", .msg = "Expects a different kind of thingy" };
-        //pub const fn_giveError = Doc{
-        //    .desc = "nothing",
-        //    .errors = &.{invalidErr},
-        //    .args = &.{},
-        //};
+        pub const fn_giveError = Doc{
+            .desc = "nothing",
+            .errors = &.{invalidErr},
+            .args = &.{},
+        };
         pub export fn giveError(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             _ = self;
             returnError(L, invalidErr);
         }
 
-        //pub const fn_command = Doc{
-        //    .errors = &.{},
-        //    .desc = "Execute a Minecraft command",
-        //    .args = &.{.{ .type = "string", .name = "command" }},
-        //};
+        pub const fn_command = Doc{
+            .errors = &.{},
+            .desc = "Execute a Minecraft command",
+            .args = &.{.{ .type = "string", .name = "command", .desc = "minecraft command to execute" }},
+        };
         pub export fn command(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -405,6 +406,11 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub const fn_say = Doc{
+            .errors = &.{},
+            .desc = "send a chat",
+            .args = &.{.{ .type = "string", .name = "message", .desc = "" }},
+        };
         pub export fn say(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             Lua.c.lua_settop(L, 1);
@@ -423,6 +429,11 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        pub const fn_applySlice = Doc{
+            .errors = &.{},
+            .desc = "Build a 2d slice in the world",
+            .args = &.{.{ .type = "BuildLayer", .name = "slice", .desc = "see main.BuildLayer" }},
+        };
         pub export fn applySlice(L: Lua.Ls) c_int {
             //TODO handling blocks with orientation
             const self = lss orelse return 0;
@@ -537,7 +548,12 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        pub const DOC_getMcTime: []const u8 = "returns minecraft world time";
+        pub const fn_getMcTime = Doc{
+            .errors = &.{},
+            .desc = "returns an integer representing minecraft world time",
+            .returns = .{ .type = "int", .name = "time", .desc = "" },
+            .args = &.{},
+        };
         pub export fn getMcTime(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.world.modify_mutex.lock();
@@ -598,7 +614,12 @@ pub const LuaApi = struct {
             return 0;
         }
 
-        pub const DOC_blockInfo: []const u8 = "Args:[vec3:block_coord], returns name and state info for a block in world";
+        pub const fn_blockInfo = Doc{
+            .errors = &.{},
+            .desc = "get block state and name information",
+            .returns = .{ .type = "table{name:str, state: table}", .name = "blockinfo", .desc = "" },
+            .args = &.{.{ .type = "Vec3", .name = "block_coord", .desc = "" }},
+        };
         pub export fn blockInfo(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             const vm = self.vm;
