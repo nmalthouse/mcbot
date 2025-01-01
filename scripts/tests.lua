@@ -1,5 +1,6 @@
 function loop()
     sleepms(1000)
+    command("give @a apple 100")
     if gotoLandmark("test_landmark") ~= nil then
         interactChest("trash_chest", {"deposit all any"})
         local count = itemCount("any")

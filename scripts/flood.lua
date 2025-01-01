@@ -2,6 +2,7 @@ local chests = { -- all the landmarks this bot will use
     food = "food",
     depot = "farm_depot", -- All the chests are within reach of depot landmark
     yield = "farmed",
+    farm = "floodtest",
 }
 
 --Map crop's block names to their stats
@@ -33,8 +34,8 @@ function loop()
     --else
     --    say("can't find ".. chests.seed)
     --end
-    if gotoLandmark("floodtest") then
-        local t = getFieldFlood("floodtest", "farmland",3 )
+    if gotoLandmark(chests.farm) then
+        local t = getFieldFlood(chests.farm, "farmland",3 )
         local crop_list = {}
         for _,f in ipairs(t) do
             local b = blockInfo(f)
@@ -92,13 +93,13 @@ function depositHarvest()
     if gotoLandmark(chests.depot) then 
         --interactChest(chests.yield .. "_chest", {"withdraw 1 category food"})
         for k,v in pairs(crops) do
-            if itemCount("item ".. v.crop ) > 64 then
+            if itemCount("item ".. v.crop ,false) > 0 then
                 interactChest(chests.yield .. "_chest", {"deposit all item " .. v.crop})
             end
-            if itemCount("item " .. v.item) > 64 then
+            if itemCount("item " .. v.item,false) > 0 then
                 interactChest(chests.yield .. "_chest", {"deposit all item " .. v.item})
             end
-            if itemCount("item ".. v.item) < 10 then
+            if itemCount("item ".. v.item,false) < 10 then
                 interactChest(chests.yield .. "_chest", {"withdraw 1 item " .. v.item})
             end
 
@@ -113,7 +114,7 @@ end
 function onYield()
     handleSleep()
     handleHunger(chests.food)
-    if countFreeSlots() < 10 then
+    if countFreeSlots() < 3 then 
         local pos = getPosition()
         depositHarvest()
         gotoCoord(pos, 0)

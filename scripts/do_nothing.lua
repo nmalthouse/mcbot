@@ -1,4 +1,4 @@
 function loop()
-    sleepms(1000)
+    --sleepms(1000)
 end
 

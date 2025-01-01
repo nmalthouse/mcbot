@@ -80,7 +80,7 @@ Vec3:new() --For some reason I have to call this otherwise zig -> lua can't see 
 
 function handleHunger(chest_name)
     local ch = chest_name or "food"
-    local food_amount = itemCount("category food")
+    local food_amount = itemCount("category food", false)
     if food_amount < 10 then
         say("getting food only have ".. food_amount)
         local pos = getPosition()
@@ -88,9 +88,15 @@ function handleHunger(chest_name)
             say("can't find food")
             return
         end
+        local it_count = 0
         while food_amount < 10 do
             interactChest(ch .. "_chest", {"withdraw 1 category food"})
-            food_amount = itemCount("category food")
+            food_amount = itemCount("category food", false)
+            it_count = it_count + 1
+            if it_count > 3 then
+                say("no food in chest")
+                break
+            end
         end
         gotoCoord(pos)
     end
@@ -101,13 +107,13 @@ function handleHunger(chest_name)
 end
 
 function inventoryEnsureAtLeast(chest, item, count) 
-    if itemCount("item " .. item) > count then
+    if itemCount("item " .. item,false) > count then
         interactChest(chest .. "_chest", {"deposit all item " .. item})
         --Put everything in the chest
 
     end
     local it_count = 0
-    while itemCount("item " .. item) < count do
+    while itemCount("item " .. item,false) < count do
         interactChest(chest .."_chest", {"withdraw 1 item " .. item})
         it_count = it_count + 1
         if it_count > 30 then--quick and dirty way until interactChest can notify failure

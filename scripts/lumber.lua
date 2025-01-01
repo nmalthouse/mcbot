@@ -2,7 +2,7 @@ local chopped_list = {}
 local tree_types = {
     "birch",
     "spruce",
-    "oak",
+    --"oak",
 }
 
 function leaf_quell()
@@ -21,7 +21,7 @@ function chop_loop()
     end
 
     for _,v in ipairs(tree_types) do
-        if itemCount("item " .. v .. "_sapling") < 10 then
+        if itemCount("item " .. v .. "_sapling") < 1 then
             if gotoLandmark("junk") then
                 interactChest("junk_chest", {"withdraw 1 item " .. v .. "_sapling"})
             else
@@ -41,12 +41,14 @@ function chop_loop()
     end
     leaf_quell()
 
-    if itemCount("tag minecraft:logs") > 64  then
+    if itemCount("tag minecraft:logs") > 20  then
         gotoLandmark("wood_drop")
         interactChest("wood_drop_chest", {"deposit all tag minecraft:logs"})
     end
 
-    if countFreeSlots() < 19 then
+    local free_s = countFreeSlots()
+    print(free_s)
+    if free_s < 3 then
         gotoLandmark("junk")
         interactChest("junk_chest", {"deposit all any", "withdraw 2 tag minecraft:axes", "withdraw all category food"})
         for _v in ipairs(tree_types) do
@@ -74,7 +76,7 @@ end
 
 function onYield()
     handleSleep()
-    handleHunger("$food")
+    --handleHunger("$food")
 end
 
 function handleSleep()
