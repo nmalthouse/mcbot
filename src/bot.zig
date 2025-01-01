@@ -323,6 +323,7 @@ pub const BotScriptThreadData = struct {
     pub const ThreadStatus = enum {
         waiting_for_ready,
         terminated_waiting_for_restart,
+        terminated,
         crashed,
         running,
     };

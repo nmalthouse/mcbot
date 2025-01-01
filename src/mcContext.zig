@@ -217,6 +217,16 @@ pub const McWorld = struct {
         try self.bots.put(bb.fd, bb);
     }
 
+    pub fn findBotFromName(self: *Self, name: []const u8) ?*Bot {
+        var b_it = self.bots.valueIterator();
+        while (b_it.next()) |b| {
+            if (std.ascii.eqlIgnoreCase(b.name, name)) {
+                return b;
+            }
+        }
+        return null;
+    }
+
     pub fn putSignWaypoint(self: *Self, dim: i32, sign_name: []const u8, waypoint: Waypoint) !void {
         const d = self.dimensions.getPtr(dim).?;
         d.sign_waypoints_mutex.lock();

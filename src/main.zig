@@ -153,6 +153,8 @@ pub const LuaApi = struct {
 
     pub fn checkExit(self: *Self) void {
         if (self.thread_data.exit_mutex.tryLock()) {
+            self.thread_data.setStatus(.terminated);
+            self.thread_data.exit_mutex.unlock();
             _ = Lua.c.luaL_error(self.vm.state, "TERMINATING LUA SCRIPT");
         }
         if (self.thread_data.reload_mutex.tryLock()) {
@@ -1218,6 +1220,8 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, world: *McWorld, filenam
 
     while (true) {
         if (bo.th_d.exit_mutex.tryLock()) {
+            bo.th_d.setStatus(.terminated);
+            bo.th_d.exit_mutex.unlock();
             return;
         }
         if (bo.th_d.reload_mutex.tryLock()) {
@@ -1230,7 +1234,8 @@ pub fn luaBotScript(bo: *Bot, alloc: std.mem.Allocator, world: *McWorld, filenam
             }
         };
     }
-    bo.th_d.setStatus(.crashed);
+    if (bo.th_d.getStatus() == .running)
+        bo.th_d.setStatus(.crashed);
 }
 
 pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.Allocator, world: *McWorld) !void {
@@ -1637,6 +1642,8 @@ pub fn basicPathfindThread(
 
 pub const ConsoleCommands = enum {
     query,
+    remove,
+    add,
     exit,
     reload,
     draw,
@@ -1717,21 +1724,17 @@ pub fn main() !void {
     var world = McWorld.init(alloc, &dr);
     defer world.deinit();
 
-    var event_structs = std.ArrayList(std.os.linux.epoll_event).init(alloc);
-    defer event_structs.deinit();
-    try event_structs.resize(bot_names.len);
+    var event_structs: [config.MAX_BOTS]std.os.linux.epoll_event = undefined;
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
     //TODO I want to be able to add and remove bots whenever not just at program init
-    var bot_threads = std.ArrayList(BotThread).init(alloc);
-    defer bot_threads.deinit();
-    try bot_threads.resize(bot_names.len);
+    var bot_threads: [config.MAX_BOTS]?BotThread = [_]?BotThread{null} ** config.MAX_BOTS;
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
         const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id, &world);
-        event_structs.items[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
-        try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs.items[i]);
+        event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
+        try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
         try world.addBot(mb, @intCast(i));
         if (bot_fd == 0)
             bot_fd = mb.fd;
@@ -1739,14 +1742,16 @@ pub fn main() !void {
         const b = world.bots.getPtr(mb.fd).?;
         b.th_d.exit_mutex.lock();
         b.th_d.reload_mutex.lock();
-        bot_threads.items[i] = .{ .handle = undefined, .ptr = b };
+        bot_threads[i] = .{ .handle = undefined, .ptr = b };
     }
 
     defer {
-        for (bot_threads.items) |*th| {
-            th.ptr.th_d.exit_mutex.unlock();
-            if (th.ptr.th_d.getStatus() == .running) {
-                th.handle.join();
+        for (bot_threads) |tho| {
+            if (tho) |*th| {
+                if (th.ptr.th_d.getStatus() == .running) {
+                    th.ptr.th_d.exit_mutex.unlock();
+                    th.handle.join();
+                }
             }
         }
     }
@@ -1768,9 +1773,18 @@ pub fn main() !void {
         _ = arena_allocs.reset(.retain_capacity);
         {
             //Loop through threads and check status
-            for (bot_threads.items) |*bt| {
+            for (0..bot_threads.len) |i| {
+                const bt = &(bot_threads[i] orelse continue);
+
                 const st = bt.ptr.th_d.getStatus();
                 switch (st) {
+                    .terminated => {
+                        const stream = std.net.Stream{ .handle = bot_threads[i].?.ptr.fd };
+                        //Remove fd from epoll and kill the connection
+                        try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_DEL, stream.handle, &event_structs[i]);
+                        stream.close();
+                        bot_threads[i] = null;
+                    },
                     .terminated_waiting_for_restart, .waiting_for_ready => {
                         if (bt.ptr.isReady()) {
                             if (st == .terminated_waiting_for_restart)
@@ -1812,28 +1826,48 @@ pub fn main() !void {
                         .exit => {
                             run = false;
                         },
+                        .add => {
+                            //const bname = itt.next() orelse continue;
+                            //const script_name = itt.next() orelse continue;
+                            //for(bot_threads, 0..)|b,i|{
+                            //    if(b == null){
+                            //        bot_threads[i] = .{
+                            //        }
+                            //        break;
+                            //    }
+                            //}
+                        },
+                        .remove => {
+                            //TODO look up how to remove from existing epoll
+                            //TODO remove the bot from world
+                            const bname = itt.next() orelse continue;
+                            if (world.findBotFromName(bname)) |b| {
+                                std.debug.print("Removing bot: {s}\n", .{b.name});
+                                switch (b.th_d.getStatus()) {
+                                    .waiting_for_ready, .terminated_waiting_for_restart, .crashed => {
+                                        b.th_d.setStatus(.terminated);
+                                    },
+                                    .running => {
+                                        b.th_d.exit_mutex.unlock();
+                                    },
+                                    .terminated => {},
+                                }
+                            }
+                        },
                         .reload => {
                             const bname = itt.next() orelse continue;
-                            var b_it = world.bots.valueIterator();
-                            while (b_it.next()) |b| {
-                                //If the bot is crashed, just set status to watiing_for_ready
-                                if (std.ascii.eqlIgnoreCase(b.name, bname)) {
-                                    std.debug.print("Reloading bot: {s}\n", .{b.name});
-                                    switch (b.th_d.getStatus()) {
-                                        .crashed => {
-                                            b.th_d.setStatus(.waiting_for_ready);
-                                        },
-                                        .running => {
-                                            b.th_d.reload_mutex.unlock();
-                                        },
-                                        .terminated_waiting_for_restart, .waiting_for_ready => {},
-                                    }
-
-                                    //world.bot_reload_mutex.lock();
-                                    //defer world.bot_reload_mutex.unlock();
-                                    //world.reload_bot_id = b.fd;
-                                    break;
+                            if (world.findBotFromName(bname)) |b| {
+                                std.debug.print("Reloading bot: {s}\n", .{b.name});
+                                switch (b.th_d.getStatus()) {
+                                    .crashed => {
+                                        b.th_d.setStatus(.waiting_for_ready);
+                                    },
+                                    .running => {
+                                        b.th_d.reload_mutex.unlock();
+                                    },
+                                    .terminated, .terminated_waiting_for_restart, .waiting_for_ready => {},
                                 }
+                                break;
                             }
                         },
                         .draw => {
