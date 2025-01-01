@@ -289,6 +289,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                     //
                     //Also check if they are accesable
                     const crafting_bench = world.reg.getBlockFromNameI("crafting_table").?;
+                    const nether_portal = world.reg.getBlockFromNameI("nether_portal").?;
+                    //const obsidian = world.reg.getBlockFromNameI("obsidian").?;
                     var skip = false;
                     if (chunk_section.palatte_t == .map) {
                         var none = true;
@@ -303,6 +305,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                 }
                             }
                             if (map >= crafting_bench.minStateId and map <= crafting_bench.maxStateId) {
+                                none = false;
+                                break;
+                            }
+                            if (map >= nether_portal.minStateId and map <= nether_portal.maxStateId) {
                                 none = false;
                                 break;
                             }
@@ -324,6 +330,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                                         //TODO add the bed
                                     }
                                 }
+                            } else if (bid == nether_portal.id) {
+                                //check if the block under is obsidion
                             }
                         }
                     }

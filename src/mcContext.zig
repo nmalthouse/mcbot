@@ -211,9 +211,9 @@ pub const McWorld = struct {
         self.tag_table.deinit();
     }
 
-    pub fn addBot(self: *Self, bot: Bot) !void {
+    pub fn addBot(self: *Self, bot: Bot, index_id: u32) !void {
         var bb = bot;
-        bb.index_id = self.bots.count() + 1;
+        bb.index_id = index_id;
         try self.bots.put(bb.fd, bb);
     }
 

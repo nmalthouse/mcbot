@@ -320,63 +320,52 @@ pub const BotScriptThreadData = struct {
         code: []const u8,
         msg: []const u8,
     };
-    const Owner = enum { bot_thread, script_thread, none };
+    pub const ThreadStatus = enum {
+        waiting_for_ready,
+        terminated_waiting_for_restart,
+        crashed,
+        running,
+    };
+    //TODO put a mutex for status
     //this is written by updateBotsThread and read by scriptThread
-    u_status: enum { actions_empty, actions_error, terminate_thread },
-    mutex: std.Thread.Mutex,
-    has_seen_actions: bool = false,
-    owner: Owner,
     error_: ?ErrorMsg = null, //not allocated
+    status: ThreadStatus = .waiting_for_ready,
+    status_mutex: std.Thread.Mutex,
 
     ///These actions are evaluated in reverse
     actions: std.ArrayList(astar.AStarContext.PlayerActionItem),
-    bot: *Bot,
     action_index: ?usize = null,
     move_state: MovementState = undefined,
     timer: ?f64 = null,
     break_timer_max: f64 = 0,
     craft_item_counter: ?usize = null, //used to throttle inventory interaction
+    //
+    exit_mutex: std.Thread.Mutex, // If the script thread can lock this it should exit.
+    reload_mutex: std.Thread.Mutex, // If the script thread should lock this it should exit and set status to terminated_w
 
-    pub fn init(alloc: std.mem.Allocator, bot_ptr: *Bot) Self {
+    pub fn init(alloc: std.mem.Allocator) Self {
         return .{
-            .u_status = .actions_empty,
-            .bot = bot_ptr,
-            .mutex = .{},
+            .exit_mutex = .{},
+            .status_mutex = .{},
+            .reload_mutex = .{},
             .actions = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
-            .owner = .none,
         };
     }
 
-    pub fn lockOrOwned(self: *Self, new_owner: Owner) void {
-        if (self.owner == new_owner)
-            return;
-
-        self.mutex.lock();
-        self.owner = new_owner;
+    pub fn getStatus(self: *Self) ThreadStatus {
+        self.status_mutex.lock();
+        defer self.status_mutex.unlock();
+        return self.status;
     }
-
-    pub fn trylockOrOwned(self: *Self, new_owner: Owner) bool {
-        if (self.owner == new_owner)
-            return true;
-        const can_lock = self.mutex.tryLock();
-        if (can_lock)
-            self.owner = new_owner;
-        return can_lock;
+    pub fn setStatus(self: *Self, new_status: ThreadStatus) void {
+        self.status_mutex.lock();
+        self.status = new_status;
+        self.status_mutex.unlock();
     }
 
     //Assumes mutex is owned, strings in err are never freed so allocate as such
     pub fn setError(self: *Self, err: ErrorMsg) void {
         self.error_ = err;
-    }
-
-    pub fn unlock(self: *Self, owner: Owner) void {
-        if (self.owner == owner) {
-            self.owner = .none;
-            self.mutex.unlock();
-            return;
-        }
-        std.debug.print("attempt to unlock an unowned mutex\n", .{});
-        std.process.exit(1);
     }
 
     pub fn deinit(self: *Self) void {
@@ -482,6 +471,8 @@ pub const Bot = struct {
 
     alloc: std.mem.Allocator,
 
+    th_d: BotScriptThreadData,
+
     pub fn init(alloc: std.mem.Allocator, name_: []const u8, script_name: ?[]const u8) !Bot {
         var inv = Inventory.init(alloc);
         try inv.setSize(46);
@@ -492,6 +483,7 @@ pub const Bot = struct {
             .script_filename = if (script_name) |sn| try alloc.dupe(u8, sn) else null,
             .name = name_,
             .e_id = 0,
+            .th_d = BotScriptThreadData.init(alloc),
             .action_list = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
             .interacted_inventory = Inventory.init(alloc),
         };
@@ -561,6 +553,7 @@ pub const Bot = struct {
             item.deinit();
         }
         self.action_list.deinit();
+        self.th_d.deinit();
         self.effects.deinit();
         self.interacted_inventory.deinit();
         self.inventory.deinit();

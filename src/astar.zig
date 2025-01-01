@@ -295,8 +295,7 @@ pub const AStarContext = struct {
     //calling a lua predicate for every node is probably too slow
     //IF combined with a early filtering system in zig then a nice lua predicate is possible.
     //IF zig detects dirt with 2+wood on top call the predicate to determine if its a tree
-    pub fn findTree(self: *Self, start: V3f, dim_id: i32) !?struct {
-        list: std.ArrayList(PlayerActionItem),
+    pub fn findTree(self: *Self, start: V3f, dim_id: i32, actions: *std.ArrayList(PlayerActionItem)) !?struct {
         // String does not need to be freed
         tree_name: []const u8,
     } {
@@ -350,7 +349,6 @@ pub const AStarContext = struct {
                     };
 
                     var parent: ?*AStarContext.Node = current_n;
-                    var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
                     //First add the tree backwards
                     n_logs -= 1;
                     const total_logs = n_logs;
@@ -407,7 +405,7 @@ pub const AStarContext = struct {
                         } });
                     }
                     //return pv.add(V3i.new(avec.x, 0, avec.y));
-                    return .{ .list = actions, .tree_name = tree_name };
+                    return .{ .tree_name = tree_name };
                 }
             }
 
@@ -426,12 +424,13 @@ pub const AStarContext = struct {
         dimension_id: i32,
         start: V3f,
         goal: V3f,
+        actions: *std.ArrayList(PlayerActionItem),
         params: struct {
             min_distance: ?f32 = null, //if set, a node within this distance from goal is a match
         },
-    ) !?std.ArrayList(PlayerActionItem) {
+    ) !bool {
         if (self.world.chunkdata(self.dim_id).isLoaded(goal.toI()) == false) {
-            return null;
+            return false;
         }
 
         try self.reset(dimension_id);
@@ -449,7 +448,6 @@ pub const AStarContext = struct {
         //TODO make iteration limit change depending on the distance between position and goal
         while (i < ITERATION_LIMIT) : (i += 1) {
             const current_n = self.popLowestFOpen() orelse break;
-            var actions = std.ArrayList(PlayerActionItem).init(self.alloc);
             const is_goal = current_n.x == gpx and current_n.z == gpz and current_n.y == gpy;
             const is_near = blk: {
                 if (params.min_distance) |md| {
@@ -476,14 +474,14 @@ pub const AStarContext = struct {
                         )),
                     } });
                 }
-                return actions;
+                return true;
             }
 
             try self.addAdjLadderNodes(current_n, goal.toI(), null);
             try self.addAdjNodes(current_n, goal, null);
         }
         std.debug.print("ITERATION LIMIT EXCEEDED\n", .{});
-        return null;
+        return false;
     }
 
     pub fn addAdjLadderNodes(self: *Self, node: *Node, goal: V3i, override_h: ?u32) !void {
