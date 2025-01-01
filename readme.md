@@ -10,7 +10,7 @@ Linux only because of epoll() usage, can easily be changed
         # sdl2
         # freetype
         # 
-        # Setup a 1.19.4 Minecraft server and ensure the following is set in server.properties:
+        # Setup a 1.21.3 Minecraft server and ensure the following is set in server.properties:
         # online-mode=false
 
         git clone https://github.com/nmalthouse/mcbot.git
