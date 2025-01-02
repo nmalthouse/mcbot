@@ -21,6 +21,23 @@ function contains(table, item)
     end
     return nil
 end
+
+function depositHarvest()
+    if gotoLandmark(chests.depot) then 
+        --interactChest(chests.yield .. "_chest", {"withdraw 1 category food"})
+        interactChest(chests.yield .. "_chest", {"deposit all any", "withdraw 1 category food"})
+        for k,v in pairs(crops) do
+            if itemCount("item ".. v.item,false) < 10 then
+                interactChest(chests.yield .. "_chest", {"withdraw 1 item " .. v.item})
+            end
+
+            --inventoryEnsureAtLeast(chests.yield, v.item, 10)
+        end
+
+    else
+        say("Can't find depot!")
+    end
+end
 --[[
 --TODO the bot checks the flood blocks in order, this is very inefficent
 --looks like a tsp, just do a nearest neighbor
@@ -36,6 +53,7 @@ function loop()
     --end
     if gotoLandmark(chests.farm) then
         local t = getFieldFlood(chests.farm, "farmland",3 )
+        print("before " .. #t)
         local crop_list = {}
         for _,f in ipairs(t) do
             local b = blockInfo(f)
@@ -43,6 +61,7 @@ function loop()
             local above_pos = f:add(Vec3:New(0,1,0))
             local above = blockInfo(above_pos)
             if b.name == "farmland" then
+                print(above.name, above.state.age)
                 if crops[above.name] ~= nil and crops[above.name].age == above.state.age then keep = true end
             end
             if keep then
@@ -72,10 +91,10 @@ function loop()
                 breakBlock(n)
                 placeBlock(n, crops[above.name].item)
                 sleepms(100);
-                local nearby_items = findNearbyItems(5)
+                local nearby_items = findNearbyItems(4)
                 for _, near in ipairs(nearby_items) do 
-                    gotoCoord(near,1) 
-                    sleepms(1000)
+                    _ = pcall( gotoCoord, near,0.7) 
+                    sleepms(500)
                 end
 
             end
@@ -89,32 +108,18 @@ function loop()
 end
 
 
-function depositHarvest()
-    if gotoLandmark(chests.depot) then 
-        --interactChest(chests.yield .. "_chest", {"withdraw 1 category food"})
-        for k,v in pairs(crops) do
-            if itemCount("item ".. v.crop ,false) > 0 then
-                interactChest(chests.yield .. "_chest", {"deposit all item " .. v.crop})
-            end
-            if itemCount("item " .. v.item,false) > 0 then
-                interactChest(chests.yield .. "_chest", {"deposit all item " .. v.item})
-            end
-            if itemCount("item ".. v.item,false) < 10 then
-                interactChest(chests.yield .. "_chest", {"withdraw 1 item " .. v.item})
-            end
-
-            --inventoryEnsureAtLeast(chests.yield, v.item, 10)
-        end
-
-    else
-        say("Can't find depot!")
-    end
-end
 
 function onYield()
     handleSleep()
-    handleHunger(chests.food)
-    if countFreeSlots() < 3 then 
+    handleHunger(chests.yield)
+    local should_depo = false
+    for _,v in pairs(crops) do
+        if itemCount("item ".. v.crop ,false) > 256 then
+            should_depo  = true
+            break
+        end
+    end
+    if countFreeSlots() < 4 or should_depo then 
         local pos = getPosition()
         depositHarvest()
         gotoCoord(pos, 0)

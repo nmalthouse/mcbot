@@ -259,7 +259,7 @@ pub const Block = struct {
         pub fn numValues(self: @This()) usize {
             return switch (self.type) {
                 .boolean => 2,
-                .int => |i| i.max - i.min,
+                .int => |i| i.max - i.min + 1,
                 .enum_ => |e| e.len,
             };
         }
