@@ -105,6 +105,10 @@ pub const Poi = struct {
 
 pub const McWorld = struct {
     const Self = @This();
+    const BotThread = struct {
+        handle: std.Thread,
+        bot: Bot,
+    };
     pub const Waypoint = struct {
         pos: vector.V3i,
         facing: Reg.Direction,
@@ -165,7 +169,8 @@ pub const McWorld = struct {
     reload_bot_id: ?i32 = null,
 
     /// Bot's have their own mutex, modifying the bots hash_map after init may cause issues
-    bots: std.AutoHashMap(i32, Bot),
+    bot_threads: [config.MAX_BOTS]?BotThread = [_]?BotThread{null} ** config.MAX_BOTS,
+    bots: std.AutoHashMap(i32, u32), //Maps fd's to bot index_ids
     reg: *const Reg.DataReg,
 
     //TODO what does this do again?
@@ -183,14 +188,21 @@ pub const McWorld = struct {
             .dimensions = std.AutoHashMap(i32, Dimension).init(alloc),
             .reg = reg,
             .packet_cache = .{},
-            //.chunk_data = mc.ChunkMap.init(alloc),
             .entities = std.AutoHashMap(i32, Entity).init(alloc),
-            .bots = std.AutoHashMap(i32, Bot).init(alloc),
+            .bots = std.AutoHashMap(i32, u32).init(alloc),
             .tag_table = mc.TagRegistry.init(alloc),
         };
     }
 
     pub fn deinit(self: *Self) void {
+        for (0..self.bot_threads.len) |i| {
+            const th = &(self.bot_threads[i] orelse continue);
+            if (th.bot.th_d.getStatus() == .running) {
+                th.bot.th_d.exit_mutex.unlock();
+                th.handle.join();
+            }
+            th.bot.deinit();
+        }
         var dim_it = self.dimension_map.iterator();
         while (dim_it.next()) |d| {
             self.alloc.free(d.key_ptr.*);
@@ -201,12 +213,7 @@ pub const McWorld = struct {
         }
         self.dimensions.deinit();
         self.dimension_map.deinit();
-        //self.chunk_data.deinit();
         self.entities.deinit();
-        var b_it = self.bots.valueIterator();
-        while (b_it.next()) |bot| {
-            bot.deinit();
-        }
         self.bots.deinit();
         self.tag_table.deinit();
     }
@@ -214,14 +221,30 @@ pub const McWorld = struct {
     pub fn addBot(self: *Self, bot: Bot, index_id: u32) !void {
         var bb = bot;
         bb.index_id = index_id;
-        try self.bots.put(bb.fd, bb);
+        try self.bots.put(bb.fd, index_id);
+        bb.th_d.exit_mutex.lock();
+        bb.th_d.reload_mutex.lock();
+        self.bot_threads[index_id] = .{ .handle = undefined, .bot = bb };
+    }
+
+    pub fn getBotFromFd(self: *Self, fd: i32) *Bot {
+        return &(self.bot_threads[self.bots.get(fd).?].?.bot);
+    }
+
+    pub fn removeBot(self: *Self, fd: i32) !void {
+        const bot_id = self.bots.get(fd).?;
+        var bot_t = self.bot_threads[bot_id].?;
+        try self.chunkdata(bot_t.bot.dimension_id).removeOwner(bot_t.bot.index_id);
+        try self.removeAllEntitiesOwned(bot_t.bot.index_id);
+        bot_t.bot.deinit();
+        _ = self.bots.remove(fd);
     }
 
     pub fn findBotFromName(self: *Self, name: []const u8) ?*Bot {
-        var b_it = self.bots.valueIterator();
-        while (b_it.next()) |b| {
-            if (std.ascii.eqlIgnoreCase(b.name, name)) {
-                return b;
+        for (0..self.bot_threads.len) |i| {
+            const th = &(self.bot_threads[i] orelse continue);
+            if (std.ascii.eqlIgnoreCase(th.bot.name, name)) {
+                return &th.bot;
             }
         }
         return null;
@@ -315,6 +338,27 @@ pub const McWorld = struct {
         }
         self.entities_mutex.unlock();
         return null;
+    }
+
+    pub fn removeAllEntitiesOwned(self: *Self, bot_index: u32) !void {
+        self.entities_mutex.lock();
+        defer self.entities_mutex.unlock();
+
+        var remove_list = std.ArrayList(i32).init(self.alloc);
+        defer remove_list.deinit();
+        var ent_it = self.entities.iterator();
+        while (ent_it.next()) |ent| {
+            ent.value_ptr.owners.unset(bot_index);
+            if (ent.value_ptr.owners.mask == 0) {
+                try remove_list.append(ent.key_ptr.*);
+                //self.entities.remove(ent_id)
+            }
+        }
+
+        for (remove_list.items) |r| {
+            _ = self.entities.remove(r);
+        }
+        log.info("Removed {d} entities owned by bot_id {d}", .{ remove_list.items.len, bot_index });
     }
 
     pub fn removeEntity(self: *Self, bot_index: u32, ent_id: i32) void {

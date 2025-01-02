@@ -196,7 +196,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             annotateManualParse("1.21.3");
             const cx = parse.int(i32);
             const cy = parse.int(i32);
-            if (!try world.chunkdata(bot1.dimension_id).tryOwn(cx, cy, bot1.uuid)) {
+            if (!try world.chunkdata(bot1.dimension_id).tryOwn(cx, cy, bot1.index_id)) {
                 //TODO keep track of owners better
                 return;
             }
@@ -211,7 +211,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             try parse.reader.readNoEof(raw_chunk.items);
 
             var chunk = try mc.Chunk.init(alloc, dim.info.section_count);
-            try chunk.owners.put(bot1.uuid, {});
+            chunk.owners.set(bot1.index_id);
             var chunk_i: u32 = 0;
             var chunk_fbs = std.io.FixedBufferStream([]const u8){ .buffer = raw_chunk.items, .pos = 0 };
             const cr = chunk_fbs.reader();
@@ -352,7 +352,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
         //Keep track of what bots have what chunks loaded and only unload chunks if none have it loaded
         .unload_chunk => {
             const d = try Ap(Penum, .unload_chunk, &parse);
-            try world.chunkdata(bot1.dimension_id).removeChunkColumn(d.chunkX, d.chunkZ, bot1.uuid);
+            try world.chunkdata(bot1.dimension_id).removeChunkColumn(d.chunkX, d.chunkZ, bot1.index_id);
         },
         //BOT specific packets
         .keep_alive => {

@@ -1252,335 +1252,310 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
             bo.th_d.reload_mutex.unlock();
             return;
         }
-        //else if (world.bot_reload_mutex.tryLock()) {
-        //    defer world.bot_reload_mutex.unlock();
-        //    if (world.reload_bot_id) |id| {
-        //        if (world.bots.get(id)) |b| {
-        //            for (bot_threads_data.items, 0..) |th_d, i| {
-        //                if (th_d.bot.fd == b.fd) {
-        //                    th_d.lockOrOwned(.bot_thread);
-        //                    th_d.u_status = .terminate_thread;
-        //                    th_d.unlock(.bot_thread);
-        //                    bot_threads.items[i].join();
-        //                    th_d.u_status = .actions_empty;
-
-        //                    std.debug.print("Spawning new\n", .{});
-        //                    bot_threads.items[i] = try std.Thread.spawn(.{}, luaBotScript, .{
-        //                        th_d.bot,
-        //                        alloc,
-        //                        th_d,
-        //                        world,
-        //                        b.script_filename.?,
-        //                    });
-        //                    world.reload_bot_id = null;
-        //                    break;
-        //                }
-        //            }
-        //        }
-        //    }
-        //}
 
         bo.modify_mutex.lock();
         bo.update(dt, 1);
         bo.modify_mutex.unlock();
         var bp = mc.PacketCtx{ .packet = try mc.Packet.init(arena_alloc, bo.compression_threshold), .server = (std.net.Stream{ .handle = bo.fd }).writer(), .mutex = &bo.fd_mutex };
-        bo.modify_mutex.lock();
-        defer bo.modify_mutex.unlock();
-        if (!bo.handshake_complete)
-            continue;
+        { // bot Mutex held within this block
+            bo.modify_mutex.lock();
+            defer bo.modify_mutex.unlock();
+            if (!bo.handshake_complete)
+                continue;
 
-        if (skip_ticks > 0) {
-            skip_ticks -= 1;
-        } else {
-            var bpos = bo.getPos();
-            const th_d = &bo.th_d;
-            if (th_d.action_index) |action| {
-                switch (th_d.actions.items[action]) {
-                    .chat => |ch| {
-                        if (ch.is_command) {
-                            try bp.sendCommand(ch.str.items);
-                        } else {
-                            try bp.sendChat(ch.str.items);
-                        }
-                        th_d.nextAction(0, bpos);
-                    },
-                    .movement => |move_| {
-                        const move = move_;
-                        const adt = dt;
-                        var grounded = true;
-                        var moved = false;
-                        const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0));
-                        while (true) {
-                            const move_vec = th_d.move_state.update(adt) catch |err| {
-                                log.err("move_state.update failed, canceling move {!}", .{err});
-                                try th_d.clearActions();
-                                th_d.setError(.{ .code = "invalidMove", .msg = "Error occured during move_state.update" });
-                                return;
-                                //th_d.unlock(.bot_thread);
-                                //TODO on teleport, also cancel move
-                                //break;
-                            };
-                            grounded = move_vec.grounded;
+            if (skip_ticks > 0) {
+                skip_ticks -= 1;
+            } else {
+                var bpos = bo.getPos();
+                const th_d = &bo.th_d;
+                if (th_d.action_index) |action| {
+                    switch (th_d.actions.items[action]) {
+                        .chat => |ch| {
+                            if (ch.is_command) {
+                                try bp.sendCommand(ch.str.items);
+                            } else {
+                                try bp.sendChat(ch.str.items);
+                            }
+                            th_d.nextAction(0, bpos);
+                        },
+                        .movement => |move_| {
+                            const move = move_;
+                            const adt = dt;
+                            var grounded = true;
+                            var moved = false;
+                            const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0));
+                            while (true) {
+                                const move_vec = th_d.move_state.update(adt) catch |err| {
+                                    log.err("move_state.update failed, canceling move {!}", .{err});
+                                    try th_d.clearActions();
+                                    th_d.setError(.{ .code = "invalidMove", .msg = "Error occured during move_state.update" });
+                                    return;
+                                    //th_d.unlock(.bot_thread);
+                                    //TODO on teleport, also cancel move
+                                    //break;
+                                };
+                                grounded = move_vec.grounded;
 
-                            bo.pos = move_vec.new_pos;
-                            bpos = bo.getPos();
-                            moved = true;
+                                bo.pos = move_vec.new_pos;
+                                bpos = bo.getPos();
+                                moved = true;
 
-                            if (move_vec.move_complete) {
-                                th_d.nextAction(move_vec.remaining_dt, bpos);
-                                if (th_d.action_index) |new_acc| {
-                                    if (th_d.actions.items[new_acc] != .movement) {
-                                        break;
-                                    } else if (th_d.actions.items[new_acc].movement.kind == .jump and move.kind == .jump) {
-                                        th_d.move_state.time = 0;
-                                        //skip_ticks = 100;
-                                        break;
+                                if (move_vec.move_complete) {
+                                    th_d.nextAction(move_vec.remaining_dt, bpos);
+                                    if (th_d.action_index) |new_acc| {
+                                        if (th_d.actions.items[new_acc] != .movement) {
+                                            break;
+                                        } else if (th_d.actions.items[new_acc].movement.kind == .jump and move.kind == .jump) {
+                                            th_d.move_state.time = 0;
+                                            //skip_ticks = 100;
+                                            break;
+                                        }
+                                    } else {
+                                        //th_d.unlock(.bot_thread); //We have no more left so notify
+                                        //break;
+                                        return;
                                     }
                                 } else {
-                                    //th_d.unlock(.bot_thread); //We have no more left so notify
-                                    //break;
-                                    return;
+                                    //TODO signal error
+                                    //should report to the bot
+                                    break;
                                 }
+                                //move_vec = //above switch statement
+                            }
+                            if (moved) {
+                                try bp.setPlayerPositionRot(bpos, pw.yaw, pw.pitch, grounded);
+                            }
+                        },
+                        .eat => {
+                            const EATING_TIME_S = 1.61;
+                            if (th_d.timer == null) {
+                                try bp.useItem(.main, 0, .{ .x = 0, .y = 0 });
+                                th_d.timer = dt;
                             } else {
-                                //TODO signal error
-                                //should report to the bot
-                                break;
-                            }
-                            //move_vec = //above switch statement
-                        }
-                        if (moved) {
-                            try bp.setPlayerPositionRot(bpos, pw.yaw, pw.pitch, grounded);
-                        }
-                    },
-                    .eat => {
-                        const EATING_TIME_S = 1.61;
-                        if (th_d.timer == null) {
-                            try bp.useItem(.main, 0, .{ .x = 0, .y = 0 });
-                            th_d.timer = dt;
-                        } else {
-                            th_d.timer.? += dt;
-                            if (th_d.timer.? >= EATING_TIME_S) {
-                                try bp.playerAction(.shoot_arrowEat, .{ .x = 0, .y = 0, .z = 0 });
-                                th_d.nextAction(0, bpos);
-                            }
-                        }
-                    },
-                    .wait_ms => |wms| {
-                        skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
-                        th_d.nextAction(0, bpos);
-                    },
-                    .hold_item_name => |in| {
-                        try bp.setHeldItem(0);
-                        if (bo.inventory.findItemFromId(in)) |found| {
-                            try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
-                        }
-                        th_d.nextAction(0, bpos);
-                    },
-                    .hold_item => |si| {
-                        try bp.setHeldItem(@intCast(si.hotbar_index));
-                        try bp.clickContainer(0, bo.container_state, si.slot_index, @intCast(si.hotbar_index), 2, &.{}, .{});
-                        th_d.nextAction(0, bpos);
-                    },
-                    .craft => |cr| {
-                        if (bo.interacted_inventory.win_id) |wid| {
-                            if (th_d.craft_item_counter == null) {
-                                th_d.craft_item_counter = cr.count;
-                            }
-                            const count = &th_d.craft_item_counter.?;
-                            if (count.* == 64) {
-                                //FIXME the recipe ids are no longer valid, they are send in recipe_book_add
-                                try bp.doRecipeBook(wid, cr.product_id, true);
-                                count.* = 0;
-                            } else {
-                                try bp.doRecipeBook(wid, cr.product_id, false);
-                                if (count.* >= 1)
-                                    count.* -= 1;
-                            }
-                            if (count.* == 0) {
-                                try bp.clickContainer(wid, bo.container_state, 0, 1, 1, &.{}, .{});
-                                th_d.nextAction(0, bpos);
-                            } else {
-                                skip_ticks = 1; //Throttle the packets we are sending
-                            }
-                        } else {
-                            th_d.nextAction(0, bpos);
-                        }
-                    },
-                    .inventory => |inv| {
-                        if (bo.interacted_inventory.win_id) |wid| {
-                            //std.debug.print("Inventory interact:  {any}\n", .{inv});
-                            var num_transfered: u8 = 0;
-                            const magic_num = 36; //should this be 36?
-                            const inv_len = bo.interacted_inventory.slots.items.len;
-                            const player_inv_start = inv_len - magic_num;
-                            const search_i = if (inv.direction == .deposit) player_inv_start else 0;
-                            const search_i_end = if (inv.direction == .deposit) inv_len else player_inv_start;
-                            for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
-                                const s = if (slot.count > 0) slot else continue;
-                                var should_move = false;
-                                switch (inv.match) {
-                                    .by_id => |match_id| {
-                                        if (s.item_id == match_id) {
-                                            should_move = true;
-                                        }
-                                    },
-                                    .tag_list => |tags| {
-                                        for (tags) |i_id| {
-                                            if (i_id == s.item_id) {
-                                                should_move = true;
-                                                break;
-                                            }
-                                        }
-                                    },
-                                    .match_any => should_move = true,
-                                    .category => |cat| {
-                                        if (world.reg.item_categories.map.get(s.item_id) orelse 0 == cat) {
-                                            should_move = true;
-                                        }
-                                    },
-                                }
-                                if (should_move) {
-                                    try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, .{});
-                                    num_transfered += 1;
-                                    if (num_transfered == inv.count)
-                                        break;
-                                }
-                            }
-                        }
-                        th_d.nextAction(0, bpos);
-                    },
-                    .place_block => |pb| {
-                        //TODO support placing block with orientation, slabs, stairs etc.
-                        const pw = mc.lookAtBlock(bpos, pb.pos.toF());
-                        if (pb.select_item_tag) |tag| {
-                            if (world.tag_table.getIdList("minecraft:item", tag)) |taglist| {
-                                for (taglist) |t| {
-                                    if (bo.inventory.findItemFromId(@intCast(t))) |found| {
-                                        try bp.setHeldItem(0);
-                                        try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                        try bp.useItemOn(.main, pb.pos, .north, 0, 0, 0, false, 0);
-                        th_d.nextAction(0, bpos);
-                    },
-                    .open_chest => |ii| {
-                        const pw = mc.lookAtBlock(bpos, ii.pos.toF());
-                        try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                        try bp.useItemOn(.main, ii.pos, .bottom, 0, 0, 0, false, 0);
-                        th_d.nextAction(0, bpos);
-                    },
-                    .close_chest => {
-                        if (bo.interacted_inventory.win_id) |win| {
-                            try bp.closeContainer(win);
-                        } else {
-                            log.warn("Close chest: no open inventory", .{});
-                        }
-                        //bo.interacted_inventory.win_id = null;
-                        th_d.nextAction(0, bpos);
-                    },
-                    .block_break_pos => |p| {
-                        //TODO catch error
-                        if (th_d.timer == null) {
-                            const pw = mc.lookAtBlock(bpos, p.pos.toF());
-                            th_d.timer = dt;
-                            const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
-                            const block = world.reg.getBlockFromState(sid);
-                            if (eql(u8, "lava", block.name) or eql(u8, "water", block.name)) {
-                                th_d.timer = null;
-                                th_d.nextAction(0, bpos);
-                            }
-                            if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
-                                const hardness = block.hardness.?;
-                                const btime = Reg.calculateBreakTime(match.mul, hardness, .{
-                                    .haste_level = bo.getEffect(.Haste),
-                                });
-                                th_d.break_timer_max = @as(f64, @floatFromInt(btime)) / 20.0;
-
-                                try bp.setHeldItem(0);
-                                try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, .{});
-                            } else {
-                                annotateManualParse("1.21.3"); //Not really but it break in future
-                                if (eql(u8, block.name, "snow") or eql(u8, block.name, "snow_block")) {
-                                    log.err("adequate_tool_level assumption is wrong for snow!", .{});
-                                }
-                                th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
-                                    .best_tool = false,
-                                    .haste_level = bo.getEffect(.Haste),
-                                    //This check is only wrong for snow blocks, every other block can be broken by hand. So if you mine those blocks without a tool the server might complain. As of 1.21.3
-                                    .adequate_tool_level = !std.mem.eql(u8, block.material, "mineable/pickaxe"),
-                                }))) / 20.0;
-                            }
-                            try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                            try bp.playerAction(.start_digging, p.pos);
-                        } else {
-                            th_d.timer.? += dt;
-                            if (th_d.timer.? >= th_d.break_timer_max) {
-                                try bp.playerAction(.finish_digging, p.pos);
-                                var reset = true;
-                                if (p.repeat_timeout) |t| {
-                                    reset = false;
-                                    const si = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
-                                    if (si != 0) {
-                                        skip_ticks = @intFromFloat(t);
-                                        th_d.timer = null;
-                                    } else {
-                                        reset = true;
-                                    }
-                                    //is there a block? repeat else end
-
-                                }
-                                if (reset) {
-                                    th_d.timer = null;
+                                th_d.timer.? += dt;
+                                if (th_d.timer.? >= EATING_TIME_S) {
+                                    try bp.playerAction(.shoot_arrowEat, .{ .x = 0, .y = 0, .z = 0 });
                                     th_d.nextAction(0, bpos);
                                 }
                             }
-                        }
-                    },
-                    .block_break => |bb| {
-                        if (th_d.timer == null) {
-                            const pw = mc.lookAtBlock(bpos, bb.pos.toF());
-                            try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                            try bp.playerAction(.start_digging, bb.pos);
-                            th_d.timer = dt;
-                        } else {
-                            if (th_d.timer.? >= bb.break_time) {
-                                th_d.timer = null;
-                                try bp.playerAction(.finish_digging, bb.pos);
+                        },
+                        .wait_ms => |wms| {
+                            skip_ticks = @intFromFloat(@as(f64, @floatFromInt(wms)) / 1000 / dt);
+                            th_d.nextAction(0, bpos);
+                        },
+                        .hold_item_name => |in| {
+                            try bp.setHeldItem(0);
+                            if (bo.inventory.findItemFromId(in)) |found| {
+                                try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
+                            }
+                            th_d.nextAction(0, bpos);
+                        },
+                        .hold_item => |si| {
+                            try bp.setHeldItem(@intCast(si.hotbar_index));
+                            try bp.clickContainer(0, bo.container_state, si.slot_index, @intCast(si.hotbar_index), 2, &.{}, .{});
+                            th_d.nextAction(0, bpos);
+                        },
+                        .craft => |cr| {
+                            if (bo.interacted_inventory.win_id) |wid| {
+                                if (th_d.craft_item_counter == null) {
+                                    th_d.craft_item_counter = cr.count;
+                                }
+                                const count = &th_d.craft_item_counter.?;
+                                if (count.* == 64) {
+                                    //FIXME the recipe ids are no longer valid, they are send in recipe_book_add
+                                    try bp.doRecipeBook(wid, cr.product_id, true);
+                                    count.* = 0;
+                                } else {
+                                    try bp.doRecipeBook(wid, cr.product_id, false);
+                                    if (count.* >= 1)
+                                        count.* -= 1;
+                                }
+                                if (count.* == 0) {
+                                    try bp.clickContainer(wid, bo.container_state, 0, 1, 1, &.{}, .{});
+                                    th_d.nextAction(0, bpos);
+                                } else {
+                                    skip_ticks = 1; //Throttle the packets we are sending
+                                }
+                            } else {
                                 th_d.nextAction(0, bpos);
                             }
-                            if (th_d.timer != null)
-                                th_d.timer.? += dt;
-                        }
-                    },
-                }
-            } else {
-                //TODO move this somewhere else, it will never get executed here
-                //Quick and dirty floati protection
-                {
-                    var dist_to_fall: f64 = -1;
-                    //Check the bot is standing on something
-                    if (world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
-                        var under: ?Reg.BlockId = under_o;
-
-                        if (under_o == 0 or @trunc(bpos.y) != 0) { //Bot is standing on air, make it fall
-                            while (under != null and under.? == 0) {
-                                dist_to_fall -= 1;
-                                under = world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
+                        },
+                        .inventory => |inv| {
+                            if (bo.interacted_inventory.win_id) |wid| {
+                                //std.debug.print("Inventory interact:  {any}\n", .{inv});
+                                var num_transfered: u8 = 0;
+                                const magic_num = 36; //should this be 36?
+                                const inv_len = bo.interacted_inventory.slots.items.len;
+                                const player_inv_start = inv_len - magic_num;
+                                const search_i = if (inv.direction == .deposit) player_inv_start else 0;
+                                const search_i_end = if (inv.direction == .deposit) inv_len else player_inv_start;
+                                for (bo.interacted_inventory.slots.items[search_i..search_i_end], search_i..) |slot, i| {
+                                    const s = if (slot.count > 0) slot else continue;
+                                    var should_move = false;
+                                    switch (inv.match) {
+                                        .by_id => |match_id| {
+                                            if (s.item_id == match_id) {
+                                                should_move = true;
+                                            }
+                                        },
+                                        .tag_list => |tags| {
+                                            for (tags) |i_id| {
+                                                if (i_id == s.item_id) {
+                                                    should_move = true;
+                                                    break;
+                                                }
+                                            }
+                                        },
+                                        .match_any => should_move = true,
+                                        .category => |cat| {
+                                            if (world.reg.item_categories.map.get(s.item_id) orelse 0 == cat) {
+                                                should_move = true;
+                                            }
+                                        },
+                                    }
+                                    if (should_move) {
+                                        try bp.clickContainer(wid, bo.container_state, @intCast(i), 0, 1, &.{}, .{});
+                                        num_transfered += 1;
+                                        if (num_transfered == inv.count)
+                                            break;
+                                    }
+                                }
                             }
-                            var actions = LuaApi.ActionListT.init(world.alloc);
-                            var pos = bpos;
-                            pos.y = @trunc(pos.y) + dist_to_fall + 1;
-                            try actions.append(.{ .movement = .{ .kind = .freemove, .pos = pos } });
-                            th_d.setActions(actions, bpos);
+                            th_d.nextAction(0, bpos);
+                        },
+                        .place_block => |pb| {
+                            //TODO support placing block with orientation, slabs, stairs etc.
+                            const pw = mc.lookAtBlock(bpos, pb.pos.toF());
+                            if (pb.select_item_tag) |tag| {
+                                if (world.tag_table.getIdList("minecraft:item", tag)) |taglist| {
+                                    for (taglist) |t| {
+                                        if (bo.inventory.findItemFromId(@intCast(t))) |found| {
+                                            try bp.setHeldItem(0);
+                                            try bp.clickContainer(0, bo.container_state, found.index, 0, 2, &.{}, .{});
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                            try bp.useItemOn(.main, pb.pos, .north, 0, 0, 0, false, 0);
+                            th_d.nextAction(0, bpos);
+                        },
+                        .open_chest => |ii| {
+                            const pw = mc.lookAtBlock(bpos, ii.pos.toF());
+                            try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                            try bp.useItemOn(.main, ii.pos, .bottom, 0, 0, 0, false, 0);
+                            th_d.nextAction(0, bpos);
+                        },
+                        .close_chest => {
+                            if (bo.interacted_inventory.win_id) |win| {
+                                try bp.closeContainer(win);
+                            } else {
+                                log.warn("Close chest: no open inventory", .{});
+                            }
+                            //bo.interacted_inventory.win_id = null;
+                            th_d.nextAction(0, bpos);
+                        },
+                        .block_break_pos => |p| {
+                            //TODO catch error
+                            if (th_d.timer == null) {
+                                const pw = mc.lookAtBlock(bpos, p.pos.toF());
+                                th_d.timer = dt;
+                                const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
+                                const block = world.reg.getBlockFromState(sid);
+                                if (eql(u8, "lava", block.name) or eql(u8, "water", block.name)) {
+                                    th_d.timer = null;
+                                    th_d.nextAction(0, bpos);
+                                }
+                                if (bo.inventory.findToolForMaterial(world.reg, block.material)) |match| {
+                                    const hardness = block.hardness.?;
+                                    const btime = Reg.calculateBreakTime(match.mul, hardness, .{
+                                        .haste_level = bo.getEffect(.Haste),
+                                    });
+                                    th_d.break_timer_max = @as(f64, @floatFromInt(btime)) / 20.0;
+
+                                    try bp.setHeldItem(0);
+                                    try bp.clickContainer(0, bo.container_state, match.slot_index, 0, 2, &.{}, .{});
+                                } else {
+                                    annotateManualParse("1.21.3"); //Not really but it break in future
+                                    if (eql(u8, block.name, "snow") or eql(u8, block.name, "snow_block")) {
+                                        log.err("adequate_tool_level assumption is wrong for snow!", .{});
+                                    }
+                                    th_d.break_timer_max = @as(f64, @floatFromInt(Reg.calculateBreakTime(1, block.hardness.?, .{
+                                        .best_tool = false,
+                                        .haste_level = bo.getEffect(.Haste),
+                                        //This check is only wrong for snow blocks, every other block can be broken by hand. So if you mine those blocks without a tool the server might complain. As of 1.21.3
+                                        .adequate_tool_level = !std.mem.eql(u8, block.material, "mineable/pickaxe"),
+                                    }))) / 20.0;
+                                }
+                                try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                try bp.playerAction(.start_digging, p.pos);
+                            } else {
+                                th_d.timer.? += dt;
+                                if (th_d.timer.? >= th_d.break_timer_max) {
+                                    try bp.playerAction(.finish_digging, p.pos);
+                                    var reset = true;
+                                    if (p.repeat_timeout) |t| {
+                                        reset = false;
+                                        const si = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
+                                        if (si != 0) {
+                                            skip_ticks = @intFromFloat(t);
+                                            th_d.timer = null;
+                                        } else {
+                                            reset = true;
+                                        }
+                                        //is there a block? repeat else end
+
+                                    }
+                                    if (reset) {
+                                        th_d.timer = null;
+                                        th_d.nextAction(0, bpos);
+                                    }
+                                }
+                            }
+                        },
+                        .block_break => |bb| {
+                            if (th_d.timer == null) {
+                                const pw = mc.lookAtBlock(bpos, bb.pos.toF());
+                                try bp.setPlayerRot(pw.yaw, pw.pitch, true);
+                                try bp.playerAction(.start_digging, bb.pos);
+                                th_d.timer = dt;
+                            } else {
+                                if (th_d.timer.? >= bb.break_time) {
+                                    th_d.timer = null;
+                                    try bp.playerAction(.finish_digging, bb.pos);
+                                    th_d.nextAction(0, bpos);
+                                }
+                                if (th_d.timer != null)
+                                    th_d.timer.? += dt;
+                            }
+                        },
+                    }
+                } else {
+                    //TODO move this somewhere else, it will never get executed here
+                    //Quick and dirty floati protection
+                    {
+                        var dist_to_fall: f64 = -1;
+                        //Check the bot is standing on something
+                        if (world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {
+                            var under: ?Reg.BlockId = under_o;
+
+                            if (under_o == 0 or @trunc(bpos.y) != 0) { //Bot is standing on air, make it fall
+                                while (under != null and under.? == 0) {
+                                    dist_to_fall -= 1;
+                                    under = world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor());
+                                }
+                                var actions = LuaApi.ActionListT.init(world.alloc);
+                                var pos = bpos;
+                                pos.y = @trunc(pos.y) + dist_to_fall + 1;
+                                try actions.append(.{ .movement = .{ .kind = .freemove, .pos = pos } });
+                                th_d.setActions(actions, bpos);
+                            }
                         }
                     }
+                    //th_d.unlock(.bot_thread); //No more actions, unlock
+                    return;
                 }
-                //th_d.unlock(.bot_thread); //No more actions, unlock
-                return;
             }
         }
 
@@ -1595,11 +1570,6 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
         //std.time.sleep(@as(u64, @intFromFloat(std.time.ns_per_s * dt)));
     }
 }
-
-const BotThread = struct {
-    handle: std.Thread,
-    ptr: *Bot,
-};
 
 pub fn basicPathfindThread(
     alloc: std.mem.Allocator,
@@ -1728,32 +1698,15 @@ pub fn main() !void {
     var stdin_event: std.os.linux.epoll_event = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = std.io.getStdIn().handle } };
     try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, std.io.getStdIn().handle, &stdin_event);
 
-    //TODO I want to be able to add and remove bots whenever not just at program init
-    var bot_threads: [config.MAX_BOTS]?BotThread = [_]?BotThread{null} ** config.MAX_BOTS;
     var bot_fd: i32 = 0;
     for (bot_names, 0..) |bn, i| {
         const mb = try botJoin(alloc, bn.name, bn.script_name, ip, port, dr.version_id, &world);
         event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
         try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
         try world.addBot(mb, @intCast(i));
+        //For draw thread
         if (bot_fd == 0)
             bot_fd = mb.fd;
-
-        const b = world.bots.getPtr(mb.fd).?;
-        b.th_d.exit_mutex.lock();
-        b.th_d.reload_mutex.lock();
-        bot_threads[i] = .{ .handle = undefined, .ptr = b };
-    }
-
-    defer {
-        for (bot_threads) |tho| {
-            if (tho) |*th| {
-                if (th.ptr.th_d.getStatus() == .running) {
-                    th.ptr.th_d.exit_mutex.unlock();
-                    th.handle.join();
-                }
-            }
-        }
     }
 
     var events: [256]std.os.linux.epoll_event = undefined;
@@ -1763,7 +1716,7 @@ pub fn main() !void {
     defer tb.buf.deinit();
 
     if (args.draw != null) {
-        const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
+        const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world });
         draw_thread.detach();
     }
 
@@ -1773,26 +1726,28 @@ pub fn main() !void {
         _ = arena_allocs.reset(.retain_capacity);
         {
             //Loop through threads and check status
-            for (0..bot_threads.len) |i| {
-                const bt = &(bot_threads[i] orelse continue);
+            for (0..world.bot_threads.len) |i| {
+                const bt = &(world.bot_threads[i] orelse continue);
 
-                const st = bt.ptr.th_d.getStatus();
+                const st = bt.bot.th_d.getStatus();
                 switch (st) {
                     .terminated => {
-                        const stream = std.net.Stream{ .handle = bot_threads[i].?.ptr.fd };
+                        const stream = std.net.Stream{ .handle = world.bot_threads[i].?.bot.fd };
                         //Remove fd from epoll and kill the connection
                         try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_DEL, stream.handle, &event_structs[i]);
+                        try world.removeBot(bt.bot.fd);
                         stream.close();
-                        bot_threads[i] = null;
+                        world.bot_threads[i] = null;
                     },
                     .terminated_waiting_for_restart, .waiting_for_ready => {
-                        if (bt.ptr.isReady()) {
+                        if (bt.bot.isReady()) {
+                            std.debug.print("Starting bot\n", .{});
                             if (st == .terminated_waiting_for_restart)
-                                bt.ptr.th_d.reload_mutex.lock();
-                            bt.ptr.th_d.setStatus(.running);
-                            if (bt.ptr.script_filename) |sn| {
+                                bt.bot.th_d.reload_mutex.lock();
+                            bt.bot.th_d.setStatus(.running);
+                            if (bt.bot.script_filename) |sn| {
                                 bt.handle = try std.Thread.spawn(.{}, luaBotScript, .{
-                                    bt.ptr,
+                                    &bt.bot,
                                     alloc,
                                     &world,
                                     sn,
@@ -1827,19 +1782,30 @@ pub fn main() !void {
                             run = false;
                         },
                         .add => {
-                            //const bname = itt.next() orelse continue;
-                            //const script_name = itt.next() orelse continue;
-                            //for(bot_threads, 0..)|b,i|{
-                            //    if(b == null){
-                            //        bot_threads[i] = .{
-                            //        }
-                            //        break;
-                            //    }
-                            //}
+                            const bname = itt.next() orelse {
+                                std.debug.print("Expected bot name\n", .{});
+                                continue;
+                            };
+                            const script_name = itt.next() orelse {
+                                std.debug.print("Expected script name\n", .{});
+                                continue;
+                            };
+                            var empty_slot = false;
+                            for (world.bot_threads, 0..) |b, i| {
+                                if (b == null) {
+                                    const mb = try botJoin(alloc, bname, script_name, ip, port, dr.version_id, &world);
+                                    event_structs[i] = .{ .events = std.os.linux.EPOLL.IN, .data = .{ .fd = mb.fd } };
+                                    try std.posix.epoll_ctl(epoll_fd, std.os.linux.EPOLL.CTL_ADD, mb.fd, &event_structs[i]);
+                                    try world.addBot(mb, @intCast(i));
+
+                                    empty_slot = true;
+                                    break;
+                                }
+                            }
+                            if (!empty_slot)
+                                std.debug.print("No bot slots available\n", .{});
                         },
                         .remove => {
-                            //TODO look up how to remove from existing epoll
-                            //TODO remove the bot from world
                             const bname = itt.next() orelse continue;
                             if (world.findBotFromName(bname)) |b| {
                                 std.debug.print("Removing bot: {s}\n", .{b.name});
@@ -1852,6 +1818,8 @@ pub fn main() !void {
                                     },
                                     .terminated => {},
                                 }
+                            } else {
+                                std.debug.print("Can't find bot {s}\n", .{bname});
                             }
                         },
                         .reload => {
@@ -1871,7 +1839,7 @@ pub fn main() !void {
                             }
                         },
                         .draw => {
-                            const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world, bot_fd });
+                            const draw_thread = try std.Thread.spawn(.{}, drawThread, .{ alloc, &world });
                             draw_thread.detach();
                         },
                         .query => { //query the tag table, "query ?namespace ?tag"
@@ -1964,7 +1932,7 @@ pub fn main() !void {
                             }
 
                             if (nr == num_left_to_read) {
-                                try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pp.buf.items, &world);
+                                try parseSwitch(alloc, world.getBotFromFd(eve.data.fd), pp.buf.items, &world);
                                 try pp.buf.resize(0);
                                 try pp.reset();
                                 break :local;
@@ -1980,7 +1948,7 @@ pub fn main() !void {
                             } //TODO properly support partial reads
 
                             if (nr == num_left_to_read) {
-                                try parseSwitch(alloc, world.bots.getPtr(eve.data.fd) orelse unreachable, pbuf[0 .. pp.data_len.? + pp.len_len.?], &world);
+                                try parseSwitch(alloc, world.getBotFromFd(eve.data.fd), pbuf[0 .. pp.data_len.? + pp.len_len.?], &world);
                                 bytes_read += pp.data_len.?;
                                 try pp.reset();
 

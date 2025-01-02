@@ -239,7 +239,7 @@ pub fn chunkRebuildThread(alloc: std.mem.Allocator, world: *McWorld, bot1: *Bot,
         }
     }
 }
-pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void {
+pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld) !void {
     const InvMap = struct {
         default: []const [2]f32,
         generic_9x3: []const [2]f32,
@@ -304,7 +304,7 @@ pub fn drawThread(alloc: std.mem.Allocator, world: *McWorld, bot_fd: i32) !void 
 
     var draw_nodes: bool = false;
 
-    const bot1 = world.bots.getPtr(bot_fd) orelse unreachable;
+    const bot1 = &(world.bot_threads[0].?.bot);
     //const grass_block_id = world.reg.getBlockFromName("grass_block");
 
     var gctx = graph.ImmediateDrawingContext.init(alloc, 123);

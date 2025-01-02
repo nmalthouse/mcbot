@@ -482,7 +482,7 @@ pub const Bot = struct {
             .inventory = inv,
             .effects = std.AutoHashMap(Proto.EffectEnum, Effect).init(alloc),
             .script_filename = if (script_name) |sn| try alloc.dupe(u8, sn) else null,
-            .name = name_,
+            .name = try alloc.dupe(u8, name_),
             .e_id = 0,
             .th_d = BotScriptThreadData.init(alloc),
             .action_list = std.ArrayList(astar.AStarContext.PlayerActionItem).init(alloc),
@@ -550,6 +550,7 @@ pub const Bot = struct {
         if (self.script_filename) |sn| {
             self.alloc.free(sn);
         }
+        self.alloc.free(self.name);
         for (self.action_list.items) |*item| {
             item.deinit();
         }

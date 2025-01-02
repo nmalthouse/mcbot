@@ -11,6 +11,7 @@ const Queue = std.atomic.Queue;
 
 const com = @import("common.zig");
 const MoveFlags = Proto.Play_Serverbound.packets.Type_MovementFlags;
+const config = @import("config");
 
 pub const Slot = struct {
     item_id: u16 = 0,
@@ -1089,9 +1090,11 @@ pub fn recvPacket(alloc: std.mem.Allocator, reader: std.net.Stream.Reader, comp_
     return buf;
 }
 
+const OwnersT = std.bit_set.IntegerBitSet(config.MAX_BOTS);
 pub const Chunk = struct {
     sections: std.ArrayList(ChunkSection),
-    owners: std.AutoHashMap(u128, void),
+    owners: OwnersT,
+    //owners: std.AutoHashMap(u128, void),
 
     pub fn init(alloc: std.mem.Allocator, section_count: u32) !@This() {
         var sec = std.ArrayList(ChunkSection).init(alloc);
@@ -1100,7 +1103,8 @@ pub const Chunk = struct {
         }
         return .{
             .sections = sec,
-            .owners = std.AutoHashMap(u128, void).init(alloc),
+            .owners = OwnersT.initEmpty(),
+            //.owners = std.AutoHashMap(u128, void).init(alloc),
         };
     }
 
@@ -1109,7 +1113,7 @@ pub const Chunk = struct {
             sec.deinit();
         }
         self.sections.deinit();
-        self.owners.deinit();
+        //self.owners.deinit();
     }
 };
 pub const ChunkMapCoord = std.AutoHashMap(i32, Chunk);
@@ -1164,12 +1168,30 @@ pub const ChunkMap = struct {
         self.x.deinit();
     }
 
-    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32, owner: u128) !void {
+    pub fn removeOwner(self: *Self, owner_id: u32) !void {
+        self.rw_lock.lock();
+        defer self.rw_lock.unlock();
+        var it = self.x.iterator();
+        while (it.next()) |zw_i| {
+            var zit = zw_i.value_ptr.iterator();
+            while (zit.next()) |cc| {
+                cc.value_ptr.owners.unset(owner_id);
+                if (cc.value_ptr.owners.mask == 0) {
+                    try self.addNotify(zw_i.key_ptr.*, cc.key_ptr.*);
+                    cc.value_ptr.deinit();
+                    _ = zw_i.value_ptr.remove(cc.key_ptr.*);
+                }
+            }
+        }
+    }
+
+    pub fn removeChunkColumn(self: *Self, cx: i32, cz: i32, owner_id: u32) !void {
         self.rw_lock.lock();
         if (self.x.getPtr(cx)) |zw| {
             if (zw.getPtr(cz)) |cc| {
-                _ = cc.owners.remove(owner);
-                if (cc.owners.count() == 0) {
+                cc.owners.unset(owner_id);
+                //_ = cc.owners.remove(owner);
+                if (cc.owners.mask == 0) {
                     try self.addNotify(cx, cz);
                     cc.deinit();
                     _ = zw.remove(cz);
@@ -1182,14 +1204,16 @@ pub const ChunkMap = struct {
     /// Tests if the current chunk is loaded and owned
     /// adds the "owner" to the chunk
     /// returns true if we own this chunk
-    pub fn tryOwn(self: *Self, cx: i32, cz: i32, owner: u128) !bool {
+    pub fn tryOwn(self: *Self, cx: i32, cz: i32, owner_id: u32) !bool {
         self.rw_lock.lockShared();
         defer self.rw_lock.unlockShared();
         if (self.getChunkColumnPtr(cx, cz)) |col| {
-            try col.owners.put(owner, {});
-            if (col.owners.count() == 1) //We are the only owner
-                return true;
-            return false;
+            if (col.owners.findFirstSet()) |first| {
+                if (owner_id == first) {
+                    return true;
+                }
+                return false;
+            }
         }
         return true;
     }
