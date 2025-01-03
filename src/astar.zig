@@ -15,6 +15,18 @@ pub const V2i = struct {
     y: i32,
 };
 
+pub const ColumnMatchArg = struct {
+    pub const Predicate = struct {
+        min: i32 = 1,
+        max: i32 = 0,
+        names: [][]const u8 = &.{}, //Atleast one name must match
+        tags: [][]const u8 = &.{}, //Atleast one tag must match
+    };
+
+    ground_offset: i32,
+    predicates: []Predicate,
+};
+
 const FACE_ADJ = [6]V3i{ //six faces of a cube
     .{ .x = -1, .y = 0, .z = 0 },
     .{ .x = 1, .y = 0, .z = 0 },
@@ -143,6 +155,7 @@ pub const AStarContext = struct {
             }
         }
     };
+    pub const ActionListT = std.ArrayList(PlayerActionItem);
 
     pub const BreakBlock = struct {
         pos: V3i,
@@ -152,6 +165,14 @@ pub const AStarContext = struct {
     pub const MoveItem = struct {
         kind: AStarContext.Node.Ntype = .walk,
         pos: V3f,
+    };
+
+    pub const PathfindOptions = struct {
+        max_iterations: usize = ITERATION_LIMIT,
+        geo_fence: ?struct {
+            center: V3f,
+            radius: f64,
+        } = null,
     };
 
     pub const ColumnHelper = struct {
@@ -292,10 +313,97 @@ pub const AStarContext = struct {
         return null;
     }
 
+    //flood fill for a matching column, walking to a block adjacent to column
+    pub fn findNearestMatchingColumn(self: *Self, start: V3f, dim_id: i32, actions: *ActionListT, column_match: ColumnMatchArg, opts: PathfindOptions) !?V3i {
+        try self.reset(dim_id);
+        try self.addOpen(.{
+            .x = @as(i32, @intFromFloat(@floor(start.x))),
+            .y = @as(i32, @intFromFloat(@floor(start.y))),
+            .z = @as(i32, @intFromFloat(@floor(start.z))),
+        });
+
+        var iter_count: usize = 0;
+        while (iter_count < opts.max_iterations) : (iter_count += 1) {
+            const current_n = self.popLowestFOpen() orelse break;
+            const pv = V3i.new(current_n.x, current_n.y, current_n.z);
+            //TODO geofence
+            const direct_adj = [_]u32{ 1, 3, 5, 7 };
+            for (direct_adj) |di| {
+                const avec = ADJ[di];
+                const ground_offset = column_match.ground_offset;
+                var matches: bool = true;
+                var col_index: i32 = ground_offset;
+                pred_loop: for (column_match.predicates) |pred| {
+                    var counter: usize = 0;
+                    while (true) {
+                        const coord = pv.add(V3i.new(avec.x, col_index, avec.y));
+                        if (pred.names.len > 0) {
+                            var has_name = false;
+                            for (pred.names) |n| {
+                                if (self.hasName(n, coord)) {
+                                    has_name = true;
+                                    break;
+                                }
+                            }
+                            matches = matches and has_name;
+                        }
+                        if (pred.tags.len > 0) {
+                            var has_tag = false;
+                            for (pred.tags) |tag| {
+                                if (self.hasBlockTag(tag, coord)) {
+                                    has_tag = true;
+                                    break;
+                                }
+                            }
+                            matches = matches and has_tag;
+                        }
+                        if (!matches and counter >= pred.min and counter <= pred.max) {
+                            matches = true;
+                            break;
+                        } //Increment counter and col_index after this check so if the block doesn't match we check with next pred
+                        col_index += 1;
+                        counter += 1;
+                        if (!matches)
+                            break :pred_loop;
+                        if (counter >= pred.max)
+                            break;
+                    }
+                }
+
+                if (matches) {
+                    //Get the name of the log
+
+                    var parent: ?*AStarContext.Node = current_n;
+                    //First add the tree backwards
+
+                    //if(did the jump)
+                    //undo the jump n times
+
+                    while (parent != null) : (parent = parent.?.parent) {
+                        //while (parent.?.parent != null) : (parent = parent.?.parent) {
+                        switch (parent.?.ntype) {
+                            .gap, .jump, .fall => try actions.append(.{ .wait_ms = 300 }),
+                            else => {},
+                        }
+                        try actions.append(.{ .movement = .{
+                            .kind = parent.?.ntype,
+                            .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(-0.5, 0, -0.5)),
+                        } });
+                    }
+                    return pv.add(V3i.new(avec.x, 0, avec.y));
+                }
+            }
+
+            try self.addAdjLadderNodes(current_n, V3i.new(0, 0, 0), 0);
+            try self.addAdjNodes(current_n, V3f.new(0, 0, 0), 0);
+        }
+        return null;
+    }
+
     //calling a lua predicate for every node is probably too slow
     //IF combined with a early filtering system in zig then a nice lua predicate is possible.
     //IF zig detects dirt with 2+wood on top call the predicate to determine if its a tree
-    pub fn findTree(self: *Self, start: V3f, dim_id: i32, actions: *std.ArrayList(PlayerActionItem)) !?struct {
+    pub fn findTree(self: *Self, start: V3f, dim_id: i32, actions: *ActionListT) !?struct {
         // String does not need to be freed
         tree_name: []const u8,
     } {
@@ -334,7 +442,6 @@ pub const AStarContext = struct {
                         }
                     }
                 }
-                //We seem to be missing a node at the beginning
                 if (is_tree) {
                     //Get the name of the log
                     const tree_name = blk: {
@@ -439,7 +546,6 @@ pub const AStarContext = struct {
             .y = @as(i32, @intFromFloat(@floor(start.y))),
             .z = @as(i32, @intFromFloat(@floor(start.z))),
         });
-        //Is there a reason this is round
         const gpx = @as(i32, @intFromFloat(@floor(goal.x)));
         const gpy = @as(i32, @intFromFloat(@floor(goal.y)));
         const gpz = @as(i32, @intFromFloat(@floor(goal.z)));
@@ -620,6 +726,8 @@ pub const AStarContext = struct {
     // If we can allow multiple nodes to be added this problem goes away. In the stone example this adds three nodes, dig straight, dig up one, dig down one
     // Or, to keep it simple breakable blocks cannot be considered walkable blocks, this makes the result of this function well defined
     ///z is the coordinate beneath players feet
+
+    //TODO exclude the tags minecraft:walls, minecraft:fences, minecraft:fence_gates
     pub fn catagorizeAdjColumn(self: *Self, x: i32, y: i32, z: i32, head_blocked: bool, max_fall_dist: u32, adj_i: u32) ColumnHelper.Category {
         const col = ColumnHelper{ .x = x, .z = z, .y = y, .ctx = self };
         if (col.walkable(0) and col.canEnter(1) and col.canEnter(2)) {
@@ -666,6 +774,10 @@ pub const AStarContext = struct {
 
     pub fn hasBlockTag(self: *const Self, tag: []const u8, pos: V3i) bool {
         return (self.world.tag_table.hasTag(self.world.reg.getBlockFromState(self.world.chunkdata(self.dim_id).getBlock(pos) orelse return false).id, "minecraft:block", tag));
+    }
+
+    pub fn hasName(self: *const Self, block_name: []const u8, pos: V3i) bool {
+        return std.mem.eql(u8, block_name, self.world.reg.getBlockFromState(self.world.chunkdata(self.dim_id).getBlock(pos) orelse return false).name);
     }
 
     //TODO check if it is transparent block

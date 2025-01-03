@@ -1355,8 +1355,8 @@ pub const ChunkMap = struct {
     }
 };
 
-pub fn lookAtBlock(pos: V3f, block: V3f) struct { yaw: f32, pitch: f32 } {
-    const vect = block.subtract((pos.add(V3f.new(0, 1.62, 0)))).add(V3f.new(0.5, 0.5, 0.5));
+pub fn lookAtBlock(pos: V3f, block: V3f, y_offset: f32) struct { yaw: f32, pitch: f32 } {
+    const vect = block.subtract((pos.add(V3f.new(0, 1.62 - y_offset, 0)))).add(V3f.new(0.5, 0.5, 0.5));
 
     const rads = std.math.radiansToDegrees;
     const asin = std.math.asin;

@@ -77,11 +77,12 @@ pub const MovementState = struct {
                 if (max_t < self.time + dt) {
                     const r = (self.time + dt) - max_t;
                     self.time = max_t;
-                    return MoveResult{ .remaining_dt = r, .move_complete = true, .new_pos = self.final_pos };
+                    return MoveResult{ .remaining_dt = r, .move_complete = true, .new_pos = self.final_pos, .grounded = false };
                 }
                 self.time += dt;
                 return MoveResult{
                     .remaining_dt = 0,
+                    .grounded = false,
                     .move_complete = false,
                     .new_pos = self.init_pos.add(iv.getUnitVec().smul(speed * self.time)),
                 };
@@ -396,6 +397,8 @@ pub const BotScriptThreadData = struct {
 
     pub fn clearActions(self: *Self) !void {
         self.action_index = null;
+        for (self.actions.items) |*item|
+            item.deinit();
         try self.actions.resize(0);
     }
 

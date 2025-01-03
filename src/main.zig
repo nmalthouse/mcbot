@@ -115,6 +115,8 @@ pub const LuaApi = struct {
     in_yield: bool = false,
     has_yield_fn: bool = false,
 
+    allow_yield: bool = true, //User can disable yielding from script
+
     alloc: std.mem.Allocator,
 
     pub fn registerAllStruct(self: *Lua, comptime api_struct: type) void {
@@ -180,7 +182,7 @@ pub const LuaApi = struct {
     }
 
     pub fn beginHalt(self: *Self) *ActionListT {
-        if (!self.in_yield and self.has_yield_fn) {
+        if (!self.in_yield and self.has_yield_fn and self.allow_yield) {
             self.in_yield = true;
             self.vm.callLuaFunction("onYield") catch {};
             self.in_yield = false;
@@ -188,7 +190,7 @@ pub const LuaApi = struct {
 
         self.checkExit(); //No return
 
-        self.thread_data.actions.resize(0) catch unreachable;
+        self.thread_data.clearActions() catch unreachable;
         return &self.thread_data.actions;
     }
     pub fn endHalt(self: *Self) ?ErrorMsg {
@@ -214,6 +216,12 @@ pub const LuaApi = struct {
     pub fn endHaltReturnErr(self: *Self, L: Lua.Ls, err: ErrorMsg) noreturn {
         _ = self.endHalt();
         returnError(L, err);
+        unreachable;
+    }
+
+    pub fn endHaltReturnErrL(self: *Self, comptime err: []const u8, fmt: anytype) noreturn {
+        _ = self.endHalt();
+        self.vm.putErrorFmt(err, fmt);
         unreachable;
     }
 
@@ -329,6 +337,10 @@ pub const LuaApi = struct {
     //interactInv should have per item control rather than stack
 
     /// Everything inside this Api struct is exported to lua using the given name
+    ///
+    /// Be very careful about using defer with Lua putError as it longjmps and defer are not evaluated
+    /// Also be very carefull with clearAlloc / beginHalt, beginHalt may call yield which may call a function with clearalloc clobering any allocs.
+    /// Call beginHalt before any local allocations / clearAlloc
     pub const Api = struct {
         pub const LUA_PATH: []const u8 = "?;?.lua;scripts/?.lua;scripts/?";
         //pub export const LUA_PATH = "?;?.lua;scripts/?.lua;scripts/?";
@@ -347,6 +359,14 @@ pub const LuaApi = struct {
             \\"deposit all any" --deposit all items
             \\"deposit all category dye" --deposit any items defined as dye in item_sort.json
         ;
+
+        pub export fn allowYield(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            self.allow_yield = self.vm.getArg(L, bool, 1);
+
+            return 0;
+        }
 
         pub export fn reverseDirection(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
@@ -579,11 +599,10 @@ pub const LuaApi = struct {
         pub export fn blockInfo(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             const vm = self.vm;
+            self.vm.clearAlloc();
             Lua.c.lua_settop(L, 1);
             const p = vm.getArg(L, V3f, 1).toIFloor();
 
-            self.bo.modify_mutex.lock();
-            defer self.bo.modify_mutex.unlock();
             if (self.world.chunkdata(self.bo.dimension_id).getBlock(p)) |id| {
                 const block = self.world.reg.getBlockFromState(id);
                 var buf: [6]Reg.Block.State.KV = undefined;
@@ -649,19 +668,64 @@ pub const LuaApi = struct {
                 self.bo.modify_mutex.unlock();
                 const wp = self.world.getNearestSignWaypoint(did, str, pos.toI()) orelse {
                     log.warn("Can't find waypoint: {s}", .{str});
-                    returnError(L, errWpNotFound);
+                    self.endHaltReturnErr(L, errWpNotFound);
                 };
                 const found = self.pathctx.pathfind(did, pos, wp.pos.toF(), actions, .{}) catch |E| break :B E;
 
                 if (!found) {
                     log.warn("Can't path to waypoint: {any}", .{wp.pos});
-                    returnError(L, .{ .code = "noPath", .msg = "" });
+                    self.endHaltReturnErr(L, .{ .code = "noPath", .msg = "" });
                 }
                 Lua.pushV(L, wp);
             } catch {
-                returnError(L, .{ .code = "zigError", .msg = "" });
+                self.endHaltReturnErr(L, .{ .code = "zigError", .msg = "" });
             };
 
+            return 1;
+        }
+
+        pub export fn pathfindColumnMatch(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            const actions = self.beginHalt();
+            defer _ = self.endHalt();
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const match_list = self.vm.getArg(L, astar.ColumnMatchArg, 1);
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.getPos();
+            const did = self.bo.dimension_id;
+            self.bo.modify_mutex.unlock();
+            const found = self.pathctx.findNearestMatchingColumn(pos, did, actions, match_list, .{ .max_iterations = 10000 }) catch unreachable;
+            if (found == null) {
+                std.debug.print("COULDNT FIND\n", .{});
+                return 0;
+            }
+            Lua.pushV(L, found.?);
+            return 1;
+        }
+
+        pub export fn getBreakableSlice(L: Lua.Ls) c_int {
+            //return a list of blocks from coord -4 +4 in xz excluding corners
+            const self = lss orelse return 0;
+            _ = self.beginHalt();
+            defer _ = self.endHalt();
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const head_block = self.vm.getArg(L, V3i, 1);
+
+            var list = std.ArrayList(V3i).init(self.vm.fba.allocator());
+            for (0..9) |y| {
+                for (0..9) |x| {
+                    const fx: i32 = @intCast(x);
+                    const fy: i32 = @intCast(y);
+
+                    if ((x == 0 or x == 8) and (y == 0 or y == 8)) //Omit corners, player can't reach
+                        continue;
+                    list.append(head_block.add(.{ .x = fx - 4, .y = 0, .z = fy - 4 })) catch unreachable;
+                }
+            }
+
+            Lua.pushV(L, list.items);
             return 1;
         }
 
@@ -740,6 +804,7 @@ pub const LuaApi = struct {
                 errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
                 errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(found.index)) } })) orelse return 0;
             } else {
+                std.debug.print("ITEM NOT FOUND {s}\n", .{item_name});
                 if (eql(u8, "use", item_name)) {
                     errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
                 }
@@ -786,7 +851,6 @@ pub const LuaApi = struct {
             defer _ = self.endHalt();
             self.bo.modify_mutex.lock();
             const did = self.bo.dimension_id;
-            errc(self.pathctx.reset(did)) orelse return 0;
             const pos = self.bo.getPos();
             self.bo.modify_mutex.unlock();
             const found = errc(self.pathctx.pathfind(did, pos, p, actions, .{ .min_distance = opt_dist })) orelse return 0;
@@ -840,6 +904,33 @@ pub const LuaApi = struct {
             const name = self.vm.getArg(L, []const u8, 1);
             const id = self.world.reg.getBlockFromNameI(name);
             Lua.pushV(L, id);
+            return 1;
+        }
+
+        pub export fn blockHasTag(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 2);
+            const coord = self.vm.getArg(L, V3i, 1);
+            const tag = self.vm.getArg(L, []const u8, 2);
+
+            self.bo.modify_mutex.lock();
+            const did = self.bo.dimension_id;
+            self.bo.modify_mutex.unlock();
+            const has = blk: {
+                break :blk (self.world.tag_table.hasTag(self.world.reg.getBlockFromState(self.world.chunkdata(did).getBlock(coord) orelse break :blk false).id, "minecraft:block", tag));
+            };
+            Lua.pushV(L, has);
+            return 1;
+        }
+
+        // block name, tag name
+        pub export fn hasBlockTag(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 2);
+            const bname = self.vm.getArg(L, []const u8, 1);
+            const tag = self.vm.getArg(L, []const u8, 2);
+            const bid = self.world.reg.getBlockFromName(bname).?;
+            Lua.pushV(L, self.world.tag_table.hasTag(bid, "minecraft:block", tag));
             return 1;
         }
 
@@ -1064,17 +1155,13 @@ pub const LuaApi = struct {
             const interacted = interactedO != null and interactedO.?;
             _ = self.beginHalt();
             defer _ = self.endHalt();
-            self.bo.modify_mutex.lock();
-            defer self.bo.modify_mutex.unlock();
             var it = std.mem.tokenizeScalar(u8, query, ' ');
             //MATCH_TYPE MATCH_PARAM
             const match_str = it.next() orelse {
-                self.vm.putErrorFmt("expected string", .{});
-                return 0;
+                self.endHaltReturnErrL("expected_string", .{});
             };
             const match = sToE(enum { item, any, category, tag }, match_str) orelse {
-                self.vm.putErrorFmt("invalid match predicate: {s}", .{match_str});
-                return 0;
+                self.endHaltReturnErrL("invalid match predicate: {s}", .{match_str});
             };
             var item_id: Reg.Item = undefined;
             var tag_list: ?[]const u32 = null;
@@ -1082,36 +1169,32 @@ pub const LuaApi = struct {
             switch (match) {
                 .tag => {
                     const tag_name = it.next() orelse {
-                        self.vm.putError("expected tag name");
-                        return 0;
+                        self.endHaltReturnErrL("expected tag name", .{});
                     };
                     tag_list = self.world.tag_table.getIdList("minecraft:item", tag_name) orelse {
-                        self.vm.putErrorFmt("invalid tag {s} for minecraft:item", .{tag_name});
-                        return 0;
+                        self.endHaltReturnErrL("invalid tag {s} for minecraft:item", .{tag_name});
                     };
                 },
                 .item => {
                     const item_name = it.next() orelse {
-                        self.vm.putError("expected item name");
-                        return 0;
+                        self.endHaltReturnErrL("expected item name", .{});
                     };
                     item_id = self.world.reg.getItemFromName(item_name) orelse {
-                        self.vm.putErrorFmt("invalid item name: {s}", .{item_name});
-                        return 0;
+                        self.endHaltReturnErrL("invalid item name: {s}", .{item_name});
                     };
                 },
                 .category => {
                     const cat_str = it.next() orelse {
-                        self.vm.putError("expected category name");
-                        return 0;
+                        self.endHaltReturnErrL("expected category name", .{});
                     };
                     cat = sToE(PlayerActionItem.Inv.ItemCategory, cat_str) orelse {
-                        self.vm.putErrorFmt("unknown category: {s}", .{cat_str});
-                        return 0;
+                        self.endHaltReturnErrL("unknown category: {s}", .{cat_str});
                     };
                 },
                 else => {},
             }
+            self.bo.modify_mutex.lock();
+            defer self.bo.modify_mutex.unlock();
             var item_count: usize = 0;
             const inventory = if (interacted) &self.bo.interacted_inventory else &self.bo.inventory;
             const upper_index = if (interacted) inventory.slots.items.len - 36 else inventory.slots.items.len;
@@ -1283,7 +1366,7 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                             const adt = dt;
                             var grounded = true;
                             var moved = false;
-                            const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0));
+                            const pw = mc.lookAtBlock(bpos, V3f.new(0, 0, 0), 0);
                             while (true) {
                                 const move_vec = th_d.move_state.update(adt) catch |err| {
                                     log.err("move_state.update failed, canceling move {!}", .{err});
@@ -1311,9 +1394,10 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                                             break;
                                         }
                                     } else {
+                                        break;
                                         //th_d.unlock(.bot_thread); //We have no more left so notify
                                         //break;
-                                        return;
+                                        //return;
                                     }
                                 } else {
                                     //TODO signal error
@@ -1425,7 +1509,7 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                         },
                         .place_block => |pb| {
                             //TODO support placing block with orientation, slabs, stairs etc.
-                            const pw = mc.lookAtBlock(bpos, pb.pos.toF());
+                            const pw = mc.lookAtBlock(bpos, pb.pos.toF(), 0);
                             if (pb.select_item_tag) |tag| {
                                 if (world.tag_table.getIdList("minecraft:item", tag)) |taglist| {
                                     for (taglist) |t| {
@@ -1442,9 +1526,9 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                             th_d.nextAction(0, bpos);
                         },
                         .open_chest => |ii| {
-                            const pw = mc.lookAtBlock(bpos, ii.pos.toF());
+                            const pw = mc.lookAtBlock(bpos, ii.pos.toF(), 0.5); //look at Top face of block
                             try bp.setPlayerRot(pw.yaw, pw.pitch, true);
-                            try bp.useItemOn(.main, ii.pos, .bottom, 0, 0, 0, false, 0);
+                            try bp.useItemOn(.main, ii.pos, .top, 0, 0, 0, false, 0);
                             th_d.nextAction(0, bpos);
                         },
                         .close_chest => {
@@ -1459,7 +1543,7 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                         .block_break_pos => |p| {
                             //TODO catch error
                             if (th_d.timer == null) {
-                                const pw = mc.lookAtBlock(bpos, p.pos.toF());
+                                const pw = mc.lookAtBlock(bpos, p.pos.toF(), 0);
                                 th_d.timer = dt;
                                 const sid = world.chunkdata(bo.dimension_id).getBlock(p.pos).?;
                                 const block = world.reg.getBlockFromState(sid);
@@ -1516,7 +1600,7 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                         },
                         .block_break => |bb| {
                             if (th_d.timer == null) {
-                                const pw = mc.lookAtBlock(bpos, bb.pos.toF());
+                                const pw = mc.lookAtBlock(bpos, bb.pos.toF(), 0);
                                 try bp.setPlayerRot(pw.yaw, pw.pitch, true);
                                 try bp.playerAction(.start_digging, bb.pos);
                                 th_d.timer = dt;
@@ -1534,7 +1618,7 @@ pub fn updateLoop(exit_mutex: *std.Thread.Mutex, bo: *Bot, arena_alloc: std.mem.
                 } else {
                     //TODO move this somewhere else, it will never get executed here
                     //Quick and dirty floati protection
-                    {
+                    if (false) {
                         var dist_to_fall: f64 = -1;
                         //Check the bot is standing on something
                         if (world.chunkdata(bo.dimension_id).getBlock(bpos.add(V3f.new(0, dist_to_fall, 0)).toIFloor())) |under_o| {

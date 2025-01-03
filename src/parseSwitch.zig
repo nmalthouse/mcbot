@@ -106,6 +106,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.pitch = data.pitch;
                 e.yaw = data.yaw;
                 world.entities_mutex.unlock();
+            } else {
+                std.debug.print("REL MOVELOOK IGNr\n", .{});
             }
         },
         .remove_entity_effect => {
@@ -128,11 +130,17 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             defer world.modify_mutex.unlock();
             world.time = d.time;
         },
+        .entity_velocity => {
+            const d = try Ap(Penum, .entity_velocity, &parse);
+            _ = d;
+        },
         .rel_entity_move => {
             const d = try Ap(Penum, .rel_entity_move, &parse);
             if (world.modifyEntityLocal(bot1.index_id, d.entityId)) |e| {
                 e.pos = vector.deltaPosToV3f(e.pos, shortV3i.new(d.dX, d.dY, d.dZ));
                 world.entities_mutex.unlock();
+            } else {
+                std.debug.print("REL ENT MOVE IGNOR\n", .{});
             }
         },
         .tile_entity_data => {
@@ -158,6 +166,19 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 world.entities_mutex.unlock();
             }
         },
+        .sync_entity_position => {
+            annotateManualParse("1.21.3");
+            // pitch and yaw might be corrupt, protocol.json and wiki.vg disagree
+            // not an issue for pos, the pitch and yaw fields occur after
+            const data = try CB.Type_packet_sync_entity_position.parse(&parse);
+            if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
+                e.pos = V3f.new(data.x, data.y, data.z);
+
+                //e.pitch = data.pitch;
+                //e.yaw = data.yaw;
+                world.entities_mutex.unlock();
+            }
+        },
         .entity_metadata => {
             const e_id = parse.varInt();
             _ = e_id;
@@ -175,6 +196,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 const ly = @as(i32, @intCast(bd & 15));
                 try world.chunkdata(bot1.dimension_id).setBlockChunk(chunk_pos, V3i.new(lx, ly, lz), bid);
             }
+        },
+        .acknowledge_player_digging => {
+            const d = try Ap(Penum, .acknowledge_player_digging, &parse);
+            std.debug.print("Block change ack {d}\n", .{d.sequenceId});
         },
         .block_change => {
             const d = try Ap(Penum, .block_change, &parse);
@@ -460,10 +485,6 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 bot1.handshake_complete = true;
                 try pctx.completeLogin();
             }
-        },
-        .acknowledge_player_digging => {
-
-            //TODO use this to advance to next break_block item
         },
         .update_health => {
             const d = try Ap(Penum, .update_health, &parse);

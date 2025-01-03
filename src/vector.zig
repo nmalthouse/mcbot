@@ -43,10 +43,15 @@ pub const shortV3i = Ivec(i16);
 pub fn deltaPosToV3f(x0: V3f, del: shortV3i) V3f {
     const d = del.toF();
     return .{
-        .x = (((d.x / 128) + (32 * x0.x)) / 32),
-        .y = (((d.y / 128) + (32 * x0.y)) / 32),
-        .z = (((d.z / 128) + (32 * x0.z)) / 32),
+        .x = d.x / 4096 + x0.x,
+        .y = d.y / 4096 + x0.y,
+        .z = d.z / 4096 + x0.z,
     };
+    //return .{ //Old 1.19.4
+    //    .x = (((d.x / 128) + (32 * x0.x)) / 32),
+    //    .y = (((d.y / 128) + (32 * x0.y)) / 32),
+    //    .z = (((d.z / 128) + (32 * x0.z)) / 32),
+    //};
 }
 
 pub const V2i = struct {
