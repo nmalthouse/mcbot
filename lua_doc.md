@@ -18,6 +18,7 @@ Mandatory:
 `loop()`, called in a loop.
 
 Optional:
+TODO onYield should be removed
 `onYield()`, this is called whenever a blocking call into the lua api is made. 
 The main purpose is to allow for periodically checking food, inventory etc without cluttering your script. 
 See the `handleHunger()` function in `scripts/common.lua`.
