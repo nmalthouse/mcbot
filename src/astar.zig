@@ -400,132 +400,6 @@ pub const AStarContext = struct {
         return null;
     }
 
-    //calling a lua predicate for every node is probably too slow
-    //IF combined with a early filtering system in zig then a nice lua predicate is possible.
-    //IF zig detects dirt with 2+wood on top call the predicate to determine if its a tree
-    pub fn findTree(self: *Self, start: V3f, dim_id: i32, actions: *ActionListT) !?struct {
-        // String does not need to be freed
-        tree_name: []const u8,
-    } {
-        try self.reset(dim_id);
-        try self.addOpen(.{
-            .x = @as(i32, @intFromFloat(@floor(start.x))),
-            .y = @as(i32, @intFromFloat(@floor(start.y))),
-            .z = @as(i32, @intFromFloat(@floor(start.z))),
-        });
-
-        var iter_count: usize = 0;
-        while (iter_count < ITERATION_LIMIT) : (iter_count += 1) {
-            const current_n = self.popLowestFOpen() orelse break;
-            const pv = V3i.new(current_n.x, current_n.y, current_n.z);
-            const direct_adj = [_]u32{ 1, 3, 5, 7 };
-            const MAX_HEIGHT = 64;
-            for (direct_adj) |di| {
-                const avec = ADJ[di];
-                var is_tree = false;
-                var n_logs: i32 = 0;
-                if (self.hasBlockTag("minecraft:dirt", pv.add(V3i.new(avec.x, -1, avec.y)))) {
-                    while (self.hasBlockTag("minecraft:logs", pv.add(V3i.new(avec.x, n_logs, avec.y)))) : (n_logs += 1) {}
-                    if (n_logs > 0 and self.hasBlockTag("minecraft:leaves", pv.add(V3i.new(avec.x, n_logs, avec.y))) and n_logs < MAX_HEIGHT) {
-                        is_tree = true;
-                    }
-                }
-                if (is_tree) { // If it is a tree, do a check for logs around it to discard any trees with branches
-                    const stump = pv.add(V3i.new(avec.x, 0, avec.y));
-                    outer: for (0..@intCast(n_logs)) |li| {
-                        for (ADJ) |a| {
-                            if (self.hasBlockTag("minecraft:logs", stump.add(V3i.new(a.x, @intCast(li), a.y)))) {
-                                is_tree = false;
-                                std.debug.print("Discarding tree with branch\n", .{});
-                                break :outer;
-                            }
-                        }
-                    }
-                }
-                if (is_tree) {
-                    //Get the name of the log
-                    const tree_name = blk: {
-                        const log_block = self.world.reg.getBlockFromState(self.world.chunkdata(self.dim_id).getBlock(pv.add(V3i.new(avec.x, 0, avec.y))) orelse return null);
-                        if (std.mem.lastIndexOfScalar(u8, log_block.name, '_')) |ind| {
-                            if (std.mem.startsWith(u8, log_block.name, "stripped")) {
-                                break :blk log_block.name["stripped_".len..ind];
-                            }
-                            break :blk log_block.name[0..ind];
-                        }
-                        break :blk "unknown";
-                    };
-
-                    var parent: ?*AStarContext.Node = current_n;
-                    //First add the tree backwards
-                    n_logs -= 1;
-                    const total_logs = n_logs;
-                    if (total_logs > 7) {
-                        //descend down
-                        var i: i32 = 0;
-                        //first dig then move down starting at the highest
-                        while (i < total_logs - 7) : (i += 1) {
-                            try actions.append(.{ .movement = .{
-                                .kind = .freemove,
-                                .pos = pv.add(V3i.new(avec.x, i, avec.y)).toF().subtract(V3f.new(-0.5, 0, -0.5)),
-                            } });
-                            try actions.append(.{ .block_break_pos = .{ .pos = pv.add(V3i.new(avec.x, i, avec.y)) } });
-                        }
-                    }
-                    while (n_logs >= 0) : (n_logs -= 1) {
-                        const jumper = n_logs > 7;
-                        try actions.append(.{
-                            .block_break_pos = .{ .pos = pv.add(V3i.new(avec.x, n_logs, avec.y)) },
-                        });
-                        if (jumper) { //First place the block,jump, then mine
-                            try actions.append(.{
-                                .place_block = .{
-                                    .pos = pv.add(V3i.new(avec.x, n_logs - 8, avec.y)),
-                                    .select_item_tag = "minecraft:logs",
-                                },
-                            });
-                            try actions.append(.{ .wait_ms = 100 });
-                            try actions.append(.{ .movement = .{
-                                .kind = .freemove,
-                                .pos = pv.add(V3i.new(avec.x, n_logs - 7, avec.y)).toF().subtract(V3f.new(-0.5, 0, -0.5)),
-                            } });
-                        }
-                        if (n_logs == 2) { //Walk under the tree after breaking the first 2 blocks
-                            try actions.append(.{ .movement = .{
-                                .kind = .walk,
-                                .pos = pv.add(V3i.new(avec.x, 0, avec.y)).toF().subtract(V3f.new(-0.5, 0, -0.5)),
-                            } });
-                        }
-                    }
-
-                    //if(did the jump)
-                    //undo the jump n times
-
-                    while (parent != null) : (parent = parent.?.parent) {
-                        //while (parent.?.parent != null) : (parent = parent.?.parent) {
-                        switch (parent.?.ntype) {
-                            .gap, .jump, .fall => try actions.append(.{ .wait_ms = 300 }),
-                            else => {},
-                        }
-                        try actions.append(.{ .movement = .{
-                            .kind = parent.?.ntype,
-                            .pos = V3f.newi(parent.?.x, parent.?.y, parent.?.z).subtract(V3f.new(-0.5, 0, -0.5)),
-                        } });
-                    }
-                    //return pv.add(V3i.new(avec.x, 0, avec.y));
-                    return .{ .tree_name = tree_name };
-                }
-            }
-
-            try self.addAdjLadderNodes(current_n, V3i.new(0, 0, 0), 0);
-            try self.addAdjNodes(current_n, V3f.new(0, 0, 0), 0);
-        }
-
-        return null;
-    }
-
-    //TODO Prevent attempting to path outside of currently loaded chunks
-    //Starting with simplest, check if goal is outside of loaded chunks.
-    //Full implementation will need to check range on each node xz
     pub fn pathfind(
         self: *Self,
         dimension_id: i32,
@@ -533,6 +407,7 @@ pub const AStarContext = struct {
         goal: V3f,
         actions: *std.ArrayList(PlayerActionItem),
         params: struct {
+            max_iterations: usize = ITERATION_LIMIT,
             min_distance: ?f32 = null, //if set, a node within this distance from goal is a match
         },
     ) !bool {
@@ -552,7 +427,7 @@ pub const AStarContext = struct {
 
         var i: u32 = 0;
         //TODO make iteration limit change depending on the distance between position and goal
-        while (i < ITERATION_LIMIT) : (i += 1) {
+        while (i < params.max_iterations) : (i += 1) {
             const current_n = self.popLowestFOpen() orelse break;
             const is_goal = current_n.x == gpx and current_n.z == gpz and current_n.y == gpy;
             const is_near = blk: {

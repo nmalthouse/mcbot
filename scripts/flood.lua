@@ -91,11 +91,14 @@ function loop()
                 breakBlock(n)
                 placeBlock(n, crops[above.name].item)
                 sleepms(100);
-                local nearby_items = findNearbyItems(4)
-                for _, near in ipairs(nearby_items) do 
-                    _ = pcall( gotoCoord, near,0.7) 
-                    sleepms(500)
-                end
+        local nearby_items = findNearbyItemsId(3)
+        for _, near_id in ipairs(nearby_items) do
+            if doesEntityExist(near_id) then
+                _ = pcall(gotoCoord, getEntityPos(near_id), 1.2)
+            end
+            sleepms(500)
+        end
+
 
             end
             table.remove(crop_list, nearest_index)

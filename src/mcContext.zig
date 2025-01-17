@@ -300,6 +300,12 @@ pub const McWorld = struct {
         return (self.dimensions.getPtr(dim_id) orelse unreachable);
     }
 
+    pub fn getEntity(self: *Self, ent_id: i32) ?Entity {
+        self.entities_mutex.lock();
+        defer self.entities_mutex.unlock();
+        return self.entities.get(ent_id);
+    }
+
     pub fn putEntity(self: *Self, bot: *Bot, data: anytype, uuid: u128, etype: Proto.EntityEnum) !void {
         self.entities_mutex.lock();
         defer self.entities_mutex.unlock();

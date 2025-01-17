@@ -230,13 +230,6 @@ pub const Inventory = struct {
     alloc: std.mem.Allocator,
 
     pub fn setSize(self: *Self, size: u32) !void {
-        //TODO Don't leak the memory!
-        //for (self.slots.items) |optslot| {
-        //    if(optslot == .true)|
-        //        if (slot.nbt_buffer) |buf| {
-        //            self.alloc.free(buf);
-        //        }
-        //}
         try self.slots.resize(size);
         for (self.slots.items) |*item| {
             item.count = 0; //Mark as empty slot
@@ -254,12 +247,6 @@ pub const Inventory = struct {
 
     pub fn setSlot(self: *Self, index: u32, slot: mc.Slot) !void {
         self.slots.items[index] = slot;
-        //TODO DEAL with allocated memory
-        //if (slot) |*s| {
-        //    if (s.nbt_buffer) |buf| {
-        //        self.slots.items[index].?.nbt_buffer = try self.alloc.dupe(u8, buf);
-        //    }
-        //}
     }
 
     pub fn findItem(self: *Self, reg: *const Reg, item_name: []const u8) ?FoundSlot {
@@ -285,6 +272,16 @@ pub const Inventory = struct {
                     if (slot.item_id == id)
                         return .{ .slot = slot, .index = @intCast(si) };
                 }
+            }
+        }
+        return null;
+    }
+
+    pub fn findItemWithTag(self: *Self, tag_table: *const mc.TagRegistry, item_tag: []const u8) ?FoundSlot {
+        for (self.slots.items, 0..) |slot, si| {
+            if (slot.count > 0) {
+                if (tag_table.hasTag(slot.item_id, "minecraft:item", item_tag))
+                    return .{ .slot = slot, .index = @intCast(si) };
             }
         }
         return null;
@@ -329,7 +326,6 @@ pub const BotScriptThreadData = struct {
         running,
     };
     //TODO put a mutex for status
-    //this is written by updateBotsThread and read by scriptThread
     error_: ?ErrorMsg = null, //not allocated
     status: ThreadStatus = .waiting_for_ready,
     status_mutex: std.Thread.Mutex,
@@ -503,20 +499,6 @@ pub const Bot = struct {
     }
 
     //TODO Remove this duplicate
-    pub fn nextAction(self: *Self, init_dt: f64) void {
-        if (self.action_index == null)
-            return;
-        self.action_list.items[self.action_index.?].deinit();
-        self.action_index = if (self.action_index.? == 0) null else self.action_index.? - 1;
-        if (self.action_index) |act| {
-            switch (self.action_list.items[act]) {
-                .movement => |mov| {
-                    self.move_state = MovementState.init(self.pos.?, mov.pos, init_dt, mov.kind);
-                },
-                else => {},
-            }
-        }
-    }
 
     pub fn isReady(self: *Self) bool {
         const i = self.init_status;

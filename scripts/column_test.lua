@@ -3,8 +3,10 @@ local landmarks = {
     sapling = "sapling",
     wood = "wood",
     axe = "axes",
+    junk = "junk",
     food = "$food",
 }
+local item_range = 12
 local log_map = {
     dark_oak_log = "dark_oak_sapling",
     cherry_log = "cherry_sapling",
@@ -18,8 +20,11 @@ local supplies = {--Map item names to minimum quantities bot has
 }
 
 for _,v in pairs(log_map) do
-    supplies[v] = 10
+    supplies[v] = 4
 end
+
+
+chopped_list = {}
 
 function findTreeAndChop()
     --local binf = blockInfo(Vec3:New(-372, 77, 210))
@@ -91,7 +96,7 @@ function findTreeAndChop()
                         breakBlock(pos:add(Vec3:New(0,2,0))) -- break Block above in case of leaf block
                         freemovetest(Vec3:New(0,1,0))
                         print(pos.x, pos.y, pos.z)
-                        placeBlock(tree:add(Vec3:New(0,pillar_count - 1,0)), bi.name)
+                        placeBlockTag(tree:add(Vec3:New(0,pillar_count - 1,0)), "minecraft:logs")
                         sleepms(1000)
                     end
                     --if dist greater than 4, build a pillar
@@ -114,11 +119,14 @@ function findTreeAndChop()
             placeBlock(v.pos, v.name)
             sleepms(200)
         end
-        local nearby_items = findNearbyItems(8)
-        for _, near in ipairs(nearby_items) do
-            _ = pcall(gotoCoord, near, 0.6)
+        local nearby_items = findNearbyItemsId(item_range)
+        for _, near_id in ipairs(nearby_items) do
+            if doesEntityExist(near_id) then
+                _ = pcall(gotoCoord, getEntityPos(near_id), 1.2)
+            end
             sleepms(500)
         end
+        table.insert(chopped_list, {time = timestamp(), pos = tree})
         allowYield(true) --Reenable yielding
     end
 
@@ -143,10 +151,7 @@ end
 --Script TODO
 --
 --support any axe kinds
---write a manangeInventory function that goes in onYield and ensures proper.
---put landmarks in config table
 --have flags to disable sleep, hunger, etc
---store chopped trees in list to revist
 --Write the geofencing thing to prevent bot from pathing too far
 --]]
 
@@ -189,11 +194,14 @@ function manageInventory()
             interactChest(landmarks.wood .. "_chest", {"deposit all tag minecraft:logs"})
             for _,v in pairs(log_map) do
                 interactChest(landmarks.sapling .. "_chest", {"deposit all item " .. v, "withdraw 2 item " .. v})
-                if itemCount("item " .. v) < 10 then
+                if itemCount("item " .. v) < 4 then
                     say("Chest doesn't have enough " .. v)
                 end
             end
-            interactChest(landmarks.axe .. "_chest", {"deposit all item stone_axe", "withdraw 2 item stone_axe" })
+            if itemCount("item stone_axe") < 2 then
+                interactChest(landmarks.axe .. "_chest", {"withdraw 2 item stone_axe" })
+            end
+            interactChest(landmarks.junk .. "_chest", {"deposit all tag minecraft:leaves", "deposit all item stick"})
         else
             say("Can't find depot " .. landmarks.depot)
         end
@@ -203,11 +211,33 @@ end
 
 function onYield()
     --TODO restore position
+    handleSleep()
     manageInventory()
+    handleHunger(landmarks.food)
 end
 
 function loop()
     sleepms(1000)
     findTreeAndChop()
     leafQuell()
+
+    local time = timestamp()
+    for i, ch in ipairs(chopped_list) do
+        local DECAY_TIME_S = 60 * 2
+        if time - ch.time > DECAY_TIME_S then
+            print("Returing to tree at ", ch.pos.x, ch.pos.z)
+            gotoCoord(ch.pos, 3)
+            local nearby_items = findNearbyItemsId(item_range)
+            for _, near_id in ipairs(nearby_items) do
+                if doesEntityExist(near_id) then _ = pcall(gotoCoord, getEntityPos(near_id), 1.3) end
+                sleepms(500)
+            end
+
+            table.remove(chopped_list,i)
+            sleepms(100)
+            break
+
+        end
+    end
+
 end

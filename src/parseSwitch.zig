@@ -107,7 +107,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.yaw = data.yaw;
                 world.entities_mutex.unlock();
             } else {
-                std.debug.print("REL MOVELOOK IGNr\n", .{});
+                //std.debug.print("REL MOVELOOK IGNr\n", .{});
             }
         },
         .remove_entity_effect => {
@@ -140,7 +140,7 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
                 e.pos = vector.deltaPosToV3f(e.pos, shortV3i.new(d.dX, d.dY, d.dZ));
                 world.entities_mutex.unlock();
             } else {
-                std.debug.print("REL ENT MOVE IGNOR\n", .{});
+                //std.debug.print("REL ENT MOVE IGNOR\n", .{});
             }
         },
         .tile_entity_data => {
@@ -161,8 +161,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             const data = try CB.Type_packet_entity_teleport.parse(&parse);
             if (world.modifyEntityLocal(bot1.index_id, data.entityId)) |e| {
                 e.pos = V3f.new(data.x, data.y, data.z);
-                e.pitch = data.pitch;
-                e.yaw = data.yaw;
+                //e.pitch = data.pitch;
+                //e.yaw = data.yaw;
                 world.entities_mutex.unlock();
             }
         },
@@ -198,8 +198,8 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             }
         },
         .acknowledge_player_digging => {
-            const d = try Ap(Penum, .acknowledge_player_digging, &parse);
-            std.debug.print("Block change ack {d}\n", .{d.sequenceId});
+            // const d = try Ap(Penum, .acknowledge_player_digging, &parse);
+            // std.debug.print("Block change ack {d}\n", .{d.sequenceId});
         },
         .block_change => {
             const d = try Ap(Penum, .block_change, &parse);
@@ -415,6 +415,10 @@ pub fn parseSwitch(alloc: std.mem.Allocator, bot1: *Bot, packet_buf: []const u8,
             bot1.selected_slot = @intCast(d.slot);
             try pctx.setHeldItem(bot1.selected_slot);
         },
+        //.set_cursor_item, .set_player_inventory => {
+        //    //TODO  write these
+        //    unreachable;
+        //},
         .set_slot => {
             const d = try Ap(Penum, .set_slot, &parse);
             inv_log.info("set_slot: win_id: data: {any}", .{d});

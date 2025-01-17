@@ -432,6 +432,8 @@ pub const LuaApi = struct {
             return 0;
         }
 
+        //TODO function that takes a table mapping chests to the items they provide or request
+
         pub const fn_applySlice = Doc{
             .errors = &.{},
             .desc = "Build a 2d slice in the world",
@@ -729,6 +731,53 @@ pub const LuaApi = struct {
             return 1;
         }
 
+        pub export fn doesEntityExist(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const ent_id = self.vm.getArg(L, i32, 1);
+
+            Lua.pushV(L, self.world.getEntity(ent_id) != null);
+            return 1;
+        }
+
+        pub export fn getEntityPos(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 1);
+            const ent_id = self.vm.getArg(L, i32, 1);
+
+            Lua.pushV(L, self.world.getEntity(ent_id).?.pos);
+            return 1;
+        }
+
+        pub export fn findNearbyItemsId(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            _ = self.beginHalt();
+            defer _ = self.endHalt();
+            self.vm.clearAlloc();
+            Lua.c.lua_settop(L, 1);
+            const max_dist = self.vm.getArg(L, f64, 1);
+
+            self.bo.modify_mutex.lock();
+            const pos = self.bo.getPos();
+            defer self.bo.modify_mutex.unlock();
+
+            var list = std.ArrayList(i32).init(self.vm.fba.allocator());
+
+            self.world.entities_mutex.lock();
+            defer self.world.entities_mutex.unlock();
+            var e_it = self.world.entities.iterator();
+            while (e_it.next()) |e| {
+                if (e.value_ptr.kind == .item) {
+                    if (e.value_ptr.pos.subtract(pos).magnitude() < max_dist) {
+                        list.append(e.key_ptr.*) catch return 0;
+                    }
+                }
+            }
+
+            Lua.pushV(L, list.items);
+            return 1;
+        }
+
         pub export fn findNearbyItems(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
             self.vm.clearAlloc();
@@ -765,10 +814,10 @@ pub const LuaApi = struct {
 
         pub export fn getLandmark(L: Lua.Ls) c_int {
             const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 1);
-            const str = self.vm.getArg(L, []const u8, 1);
             _ = self.beginHalt();
             defer _ = self.endHalt();
+            Lua.c.lua_settop(L, 1);
+            const str = self.vm.getArg(L, []const u8, 1);
             self.bo.modify_mutex.lock();
             const pos = self.bo.getPos();
             const did = self.bo.dimension_id;
@@ -801,6 +850,33 @@ pub const LuaApi = struct {
             const actions = self.beginHalt();
             defer _ = self.endHalt();
             if (self.bo.inventory.findItem(self.world.reg, item_name)) |found| {
+                errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
+                errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(found.index)) } })) orelse return 0;
+            } else {
+                std.debug.print("ITEM NOT FOUND {s}\n", .{item_name});
+                if (eql(u8, "use", item_name)) {
+                    errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
+                }
+            }
+            return 0;
+        }
+
+        pub export fn placeBlockTag(L: Lua.Ls) c_int {
+            const self = lss orelse return 0;
+            Lua.c.lua_settop(L, 3);
+            const bposf = self.vm.getArg(L, V3f, 1);
+            const bpos = V3i.new(
+                @intFromFloat(@floor(bposf.x)),
+                @intFromFloat(@floor(bposf.y)),
+                @intFromFloat(@floor(bposf.z)),
+            );
+            const item_name = self.vm.getArg(L, []const u8, 2);
+
+            const face = self.vm.getArg(L, ?Reg.Direction, 3);
+            _ = face;
+            const actions = self.beginHalt();
+            defer _ = self.endHalt();
+            if (self.bo.inventory.findItemWithTag(&self.world.tag_table, item_name)) |found| {
                 errc(actions.append(.{ .place_block = .{ .pos = bpos } })) orelse return 0;
                 errc(actions.append(.{ .hold_item = .{ .slot_index = @as(u16, @intCast(found.index)) } })) orelse return 0;
             } else {
@@ -860,28 +936,6 @@ pub const LuaApi = struct {
             }
 
             returnError(L, .{ .code = "noPath", .msg = "" });
-        }
-
-        pub export fn chopNearestTree(L: Lua.Ls) c_int {
-            const self = lss orelse return 0;
-            Lua.c.lua_settop(L, 1);
-            const actions = self.beginHalt();
-            defer _ = self.endHalt();
-            self.bo.modify_mutex.lock();
-            const did = self.bo.dimension_id;
-            errc(self.pathctx.reset(did)) orelse return 0;
-            const pos = self.bo.getPos();
-            //block hardness
-            //tool_multiplier
-            self.bo.modify_mutex.unlock();
-            const tree_o = errc(self.pathctx.findTree(pos, did, actions)) orelse return 0;
-            if (tree_o) |*tree| {
-                Lua.pushV(L, tree.tree_name);
-                return 1;
-            }
-            //Not finding a tree is not an error condition
-            Lua.pushV(L, false);
-            return 1;
         }
 
         pub export fn getBlockId(L: Lua.Ls) c_int {
@@ -1705,7 +1759,7 @@ pub const ConsoleCommands = enum {
 
 //TODO epoll layer. So bot can run on Windows
 //Maybe just use libevent?
-//Or multibot is only supported on linux and windows defalts to a single tcpconnect
+//Or multibot is only supported on linux and windows defalts to a single tcpconnect.
 
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{ .stack_trace_frames = 16 }){};
